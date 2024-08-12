@@ -21,7 +21,7 @@ cron.schedule(`0 0 0 * * *`, async() => {
 });
 
 const controller = new Controller();
-let traders = [{symbol: "BTCUSDT", baseAmountIn: 0.002}, {symbol: "ETHUSDT", baseAmountIn: 0.3}, {symbol: "UNIUSDT", baseAmountIn: 10}];
+let traders = [{symbol: "BTCUSDT", baseAmountIn: 0.002}, {symbol: "ETHUSDT", baseAmountIn: 0.05}, {symbol: "UNIUSDT", baseAmountIn: 10}];
 
 (async() => {
     try {
@@ -38,7 +38,7 @@ let traders = [{symbol: "BTCUSDT", baseAmountIn: 0.002}, {symbol: "ETHUSDT", bas
     }
 })();
 
-app.use(cors())
+app.use(cors());
 
 app.get('/api', (req, res) => {
     res.status(200).json(controller.traders.map(obj => {
