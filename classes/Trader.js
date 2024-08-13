@@ -35,7 +35,7 @@ class Trader {
         this.fee = 0.001;
         this.acceptableProfit = 0;
         this.acceptableLoss = 0;
-        this.profitMultiplier = 10;
+        this.profitMultiplier = 5;
         this.maxTransactions = maxTransactions;
         this.status = "ACTIVE";
         this.startedAt = new Date();
