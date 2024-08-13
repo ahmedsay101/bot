@@ -14,7 +14,7 @@ class Trader {
         mode = "TESTING", 
         leverage = 10,
         maxTransactions = 10, 
-        maxShifts = 10
+        maxShifts = 0
     }) {
         this._id = null;
         this.id = uuidv4();
@@ -44,6 +44,8 @@ class Trader {
         this.status = "ACTIVE";
         this.startedAt = new Date();
         this.updatedAt = new Date();
+
+        this.offGrid = false;
 
         if(this.mode === "LIVE") this.setLeverage();
         this.ticker = new Ticker(this);
@@ -168,8 +170,8 @@ class Trader {
     }
 
     getFirstTransaction(side) {
-        const transaction = side === "LONG" ? this.transactions.sort((a, b) => b.price - a.price)[0] 
-        : side === "SHORT" ? this.transactions.sort((a, b) => a.price - b.price)[0] 
+        const transaction = side === "LONG" ? this.transactions.filter(obj => obj.side === "LONG").sort((a, b) => b.price - a.price)[0] 
+        : side === "SHORT" ? this.transactions.filter(obj => obj.side === "SHORT").sort((a, b) => a.price - b.price)[0] 
         : this.transactions.sort((a, b) => Math.abs(b.profit) - Math.abs(a.profit))[0];
         return transaction;
     }
@@ -190,13 +192,12 @@ class Trader {
     async shift() {
         try {
             if(this.status === "STOPPED") return;
-            const offGrid = this.transactions.every(one => one.price < this.ticker.currentPrice) ? "LONG" : this.transactions.every(one => one.price > this.ticker.currentPrice) ? "SHORT" : false;
-            if(this.maxTransactions - this.transactions.length < 2 && offGrid) {
+            if(this.maxTransactions - this.transactions.length < 2 && this.offGrid) {
                 if(this.shifts >= this.maxShifts || this.realizedProfit > 0) {
                     await this.controller.revive(this);
                     return;
                 }
-                const transaction = this.getFirstTransaction(offGrid === "LONG" ? "SHORT" : offGrid === "SHORT" ? "LONG" : null);
+                const transaction = this.getFirstTransaction(this.offGrid === "LONG" ? "SHORT" : this.offGrid === "SHORT" ? "LONG" : null);
                 if(transaction) {
                     transaction.shifted = true;
                     await transaction.close();
@@ -363,8 +364,11 @@ class Trader {
             if(this.status === "STOPPED") return;
             if(this.baseAmountIn === 0 || !this.baseAmountIn) this.baseAmountIn = this.quoteAmountIn / this.ticker.currentPrice;
             if(this.quoteAmountIn === 0 || !this.quoteAmountIn) this.quoteAmountIn = this.baseAmountIn * this.ticker.currentPrice;
+
+            this.offGrid = this.transactions.every(one => one.price < this.ticker.currentPrice) ? "LONG" 
+            : this.transactions.every(one => one.price > this.ticker.currentPrice) ? "SHORT" : false;
             
-            this.acceptableProfit = (this.quoteAmountIn * this.fee) * (this.profitMultiplier + this.transactions.length);
+            this.acceptableProfit = (this.quoteAmountIn * this.fee) * (this.profitMultiplier);
             this.acceptableLoss = this.acceptableProfit;
 
             if(this.transactions.length < 1) await this.setTransactions(this);
