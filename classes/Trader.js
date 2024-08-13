@@ -4,6 +4,7 @@ const { Transactions } = require("../schema/transaction.schema");
 const { Ticker } = require("./Ticker");
 const { Transaction } = require("./Transaction");
 const { Traders } = require("../schema/trader.schema");
+const { hoursPassed } = require("../lib/utils");
 
 class Trader {
     constructor({
@@ -36,6 +37,7 @@ class Trader {
         this.acceptableProfit = 0;
         this.acceptableLoss = 0;
         this.profitMultiplier = 5;
+        this.ttl = Math.floor(this.profitMultiplier / 2);
         this.maxTransactions = maxTransactions;
         this.status = "ACTIVE";
         this.startedAt = new Date();
@@ -63,6 +65,7 @@ class Trader {
                 if(this.leverage) data["leverage"] = this.leverage;
                 if(this.maxTransactions) data["maxTransactions"] = this.maxTransactions;
                 if(this.fee) data["fee"] = this.fee;
+                if(this.ttl) data["ttl"] = this.ttl;
                 if(this.profit) data["profit"] = this.profit;
                 if(this.shifts) data["shifts"] = this.shifts;
                 if(this.maxShifts) data["maxShifts"] = this.maxShifts;
@@ -86,6 +89,7 @@ class Trader {
                 fee: this.fee,
                 profit: this.profit ? this.profit : 0, 
                 status: this.status,
+                ttl: this.ttl,
                 createdAt: this.createdAt,
                 updatedAt: this.updatedAt,
             };
@@ -115,6 +119,7 @@ class Trader {
             this.fee = Number(trader.fee);
             this.profit = Number(trader.profit);
             this.shifts = Number(trader.shifts);
+            this.ttl = Number(trader.ttl);
             this.maxShifts = trader.maxShifts;
             this.status = trader.status;
             this.createdAt = new Date(trader.createdAt);
@@ -176,33 +181,12 @@ class Trader {
         try {
             let isFirstTransaction = this.getFirstTransaction(transaction.side).id === this.id; 
             this.transactions = this.transactions.filter(obj => obj.id !== transaction.id);
-            await this.shift();
             if(!isFirstTransaction) await this.hedge();
         }
         catch(error) {
             console.log(error);
         }
 
-    }
-
-    async shift() {
-        try {
-            if(this.status === "STOPPED") return;
-            if(this.maxTransactions - this.transactions.length < 2 && this.offGrid) {
-                if(this.shifts >= this.maxShifts || this.realizedProfit > 0) {
-                    await this.controller.revive(this);
-                    return;
-                }
-                const transaction = this.getFirstTransaction(this.offGrid === "LONG" ? "SHORT" : this.offGrid === "SHORT" ? "LONG" : null);
-                if(transaction) {
-                    transaction.shifted = true;
-                    await transaction.close();
-                }
-            }
-        }
-        catch(error) {
-            console.log(error);
-        }
     }
 
     async newTransaction(side = "LONG") {
@@ -333,6 +317,11 @@ class Trader {
             if(this.status === "STOPPED") return;
             if(this.baseAmountIn === 0 || !this.baseAmountIn) this.baseAmountIn = this.quoteAmountIn / this.ticker.currentPrice;
             if(this.quoteAmountIn === 0 || !this.quoteAmountIn) this.quoteAmountIn = this.baseAmountIn * this.ticker.currentPrice;
+            if(hoursPassed(this.startedAt) >= this.ttl) {
+                this.stop();
+                await this.controller.revive(this);
+                return;
+            }
 
             this.offGrid = this.transactions.every(one => one.price < this.ticker.currentPrice) ? "LONG" 
             : this.transactions.every(one => one.price > this.ticker.currentPrice) ? "SHORT" : false;

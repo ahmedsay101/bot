@@ -13,6 +13,7 @@ const traderSchema = new mongoose.Schema(
     maxTransactions: { type: Number, required: false, default: 10},
     profit: { type: mongoose.Types.Decimal128, required: false, default: 0},
     fee: { type: mongoose.Types.Decimal128, required: false, default: 0},
+    ttl: { type: mongoose.Types.Decimal128, required: false, default: 0},
     status: { type: String, enum: ["ACTIVE", "STOPPED"], default: "ACTIVE"},
     mode: { type: String, enum: ["TESTING", "LIVE"], default: "TESTING"},
     createdAt: { type: Date, default: Date.now },
