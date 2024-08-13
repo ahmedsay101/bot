@@ -28,12 +28,8 @@ class Trader {
         this.quoteAmountIn = quoteAmountIn; 
         this.transactions = [];
         this.moneyIn = 0;
-        this.earnings = 0;
         this.totalProfit = 0;
         this.profit = 0;
-        this.realizedProfit = 0;
-        this.losses = 0;
-        this.currentLosses = 0;
         this.shifts = 0;
         this.maxShifts = maxShifts;
         this.fee = 0.001;
@@ -261,61 +257,34 @@ class Trader {
         }
     }
 
-    async calculateTotalProfit(status = "CLOSED") {
+    async calculateTotalProfit() {
         try {
             const results = await Transactions.aggregate([
-                {$match: {symbol: this.symbol, profit: {$gt: 0}, status}},
+                {$match: {symbol: this.symbol}},
                 {$group: {
                   _id: null,
-                  totalEarnings: { $sum: "$profit" },
+                  totalProfit: { $sum: "$profit" },
                 }}
             ]).exec();
-            const earnings = results && results.length > 0 ? Number(results[0].totalEarnings) : 0;
-            const lossesResults = await Transactions.aggregate([
-                {$match: {symbol: this.symbol, profit: {$lt: 0}, status}},
-                {$group: {
-                  _id: null,
-                  totalLosses: { $sum: "$profit" },
-                }}
-            ]).exec();
-            const losses = lossesResults && lossesResults.length > 0 ? Number(lossesResults[0].totalLosses) : 0;
-            this.totalProfit = earnings - losses;
+            const profit = results && results.length > 0 ? Number(results[0].totalProfit) : 0;
+            this.totalProfit = profit;
         }
         catch(error) {
             console.log(error);
         }
     }
 
-    async calculateEarnings(status = "CLOSED") {
+    async calculateProfit() {
         try {
             const results = await Transactions.aggregate([
-                {$match: {traderId: this._id, symbol: this.symbol, profit: {$gt: 0}, status}},
+                {$match: {traderId: this._id, symbol: this.symbol}},
                 {$group: {
                   _id: null,
-                  totalEarnings: { $sum: "$profit" },
+                  totalProfit: { $sum: "$profit" },
                 }}
             ]).exec();
-            const earnings = results && results.length > 0 ? Number(results[0].totalEarnings) : 0;
-            this.earnings = earnings;
-            this.profit = this.earnings - this.losses;
-        }
-        catch(error) {
-            console.log(error);
-        }
-    }
-
-    async calculateLosses(status = "CLOSED") {
-        try {
-            const results = await Transactions.aggregate([
-                {$match: {traderId: this._id, symbol: this.symbol, profit: {$lt: 0}, status}},
-                {$group: {
-                  _id: null,
-                  totalLosses: { $sum: "$profit" },
-                }}
-            ]).exec();
-            const loss = results && results.length > 0 ? Number(results[0].totalLosses) : 0;
-            if (status === "CLOSED") this.losses = Math.abs(loss);
-            else if (status === "FILLED") this.currentLosses = Math.abs(loss);
+            const profit = results && results.length > 0 ? Number(results[0].totalProfit) : 0;
+            this.profit = profit;
         }
         catch(error) {
             console.log(error);
@@ -375,16 +344,12 @@ class Trader {
             if(this.transactions.length < 1) await this.hedge();
 
             await this.updateTransactions();
-            await this.calculateEarnings();
-            await this.calculateLosses();
-            await this.calculateLosses("FILLED");
             await this.calculateMoneyIn();
             await this.calculateShifts();
+            await this.calculateProfit();
             await this.calculateTotalProfit();
             this.update();
         
-            this.realizedProfit = this.profit - (this.losses + this.currentLosses);
-
             console.log(`-------------------------${this.symbol}------------------------------`);
             console.log("CURRENT_PRICE:", this.ticker.currentPrice);    
             console.log("ACCEPTABLE PROFIT:", this.acceptableProfit);    
@@ -395,12 +360,10 @@ class Trader {
                 acceptableLoss: obj.acceptableLoss
             })));
             console.log("MONEY_IN:", this.moneyIn);            
-            console.log("EARNINGS:", this.earnings);            
-            console.log("LOSSES:", this.losses);
-            console.log("CURRENT LOSSES:", this.currentLosses);
             console.log("PROFIT:", this.profit);
         }
         catch(error) {
+            console.log(error);
             throw(error);
         }
     }
