@@ -38,7 +38,7 @@ app.get('/api', (req, res) => {
             currentPrice: obj.ticker.currentPrice,
             baseAmountIn: obj._baseAmountIn,
             quoteAmountIn: obj._quoteAmountIn,
-            moneyIn: obj.moneyIn,
+            moneyIn: obj._moneyIn,
             profit: obj._profit,
             profitTaken: obj._profitTaken,
             fee: obj._fee,
