@@ -20,23 +20,11 @@ cron.schedule(`0 0 0 * * *`, async() => {
     fs.writeFileSync("./symbols.json", JSON.stringify(filter));
 });
 
-const controller = new Controller();
-let traders = [{symbol: "BTCUSDT", baseAmountIn: 0.002}, {symbol: "ETHUSDT", baseAmountIn: 0.05}, {symbol: "UNIUSDT", baseAmountIn: 10}];
-
-(async() => {
-    try {
-        await controller.setTraders();
-        if(controller.traders.length < 1) {
-            console.log(controller.traders.map(obj => obj._id));
-            for(let trader of traders) {
-                controller.createTrader(trader);
-            }
-        }
-    }
-    catch(error) {
-        console.log(error);
-    }
-})();
+let traders = [{
+    symbol: "BTCUSDT", 
+    baseAmountIn: 0.002,
+}]
+const controller = new Controller(traders);
 
 app.use(cors());
 
@@ -44,40 +32,38 @@ app.get('/api', (req, res) => {
     res.status(200).json(controller.traders.map(obj => {
         return {
             id: obj.id,
-            symbol: obj.symbol,
-            mode: obj.mode,
-            leverage: obj.leverage,
+            symbol: obj._symbol,
+            mode: obj._mode,
+            leverage: obj._leverage,
             currentPrice: obj.ticker.currentPrice,
-            baseAmountIn: obj.baseAmountIn,
-            quoteAmountIn: obj.quoteAmountIn,
+            baseAmountIn: obj._baseAmountIn,
+            quoteAmountIn: obj._quoteAmountIn,
             moneyIn: obj.moneyIn,
-            totalProfit: obj.totalProfit,
-            profit: obj.profit,
-            shifts: obj.shifts,
-            maxShifts: obj.maxShifts,
-            fee: obj.fee,
-            acceptableProfit: obj.acceptableProfit,
-            acceptableLoss: obj.acceptableLoss,
-            profitMultiplier: obj.profitMultiplier,
-            maxPositions: obj.maxPositions,
-            startedAt: obj.startedAt,
-            updatedAt: obj.startedAt,
+            profit: obj._profit,
+            profitTaken: obj._profitTaken,
+            fee: obj._fee,
+            levels: [{type: "PRICE", price: obj.ticker.currentPrice}, ...obj._prices.map(p => ({type: "LEVEL", price: p}))].sort((a, b) => b.price - a.price),
+            takeProfit: obj._takeProfit,
+            stopLoss: obj._stopLoss,
+            stepSize: obj._stepSize,
+            createdAt: obj._createdAt,
+            updatedAt: obj._updatedAt,
             transactions: obj.transactions.map(transaction => ({
                 _id: transaction._id,
-                side: transaction.side,
-                price: transaction.price,
-                orderId: transaction.orderId,
-                baseAmountIn: transaction.baseAmountIn,
-                baseAmountOut: transaction.baseAmountOut,
-                quoteAmountIn: transaction.quoteAmountIn,
-                quoteAmountOut: transaction.quoteAmountOut,
-                profit: transaction.profit,
-                status: transaction.status,
-                acceptableProfit: transaction.acceptableProfit,
-                acceptableLoss: transaction.acceptableLoss,
-                isProfitable: transaction.isProfitable,
-                createdAt: transaction.createdAt,
-                updatedAt: transaction.createdAt,
+                side: transaction._side,
+                price: transaction._price,
+                orderId: transaction._orderId,
+                baseAmountIn: transaction._baseAmountIn,
+                baseAmountOut: transaction._baseAmountOut,
+                quoteAmountIn: transaction._quoteAmountIn,
+                quoteAmountOut: transaction._quoteAmountOut,
+                profit: transaction._profit,
+                status: transaction._status,
+                takeProfit: transaction._takeProfit,
+                stopLoss: transaction._stopLoss,
+                isProfitable: transaction._isProfitable,
+                createdAt: transaction._createdAt,
+                updatedAt: transaction._createdAt,
             }))
         }
     }));

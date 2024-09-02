@@ -1,39 +1,26 @@
 const { v4: uuidv4 } = require('uuid');
 const { Trader } = require("./Trader");
+const { Traders } = require('../schema/trader.schema');
 
 class Controller {
-    constructor() {
+    constructor(data) {
         this.id = uuidv4();
+        this.baseData = data;
         this.traders = [];
+        this.run();
     }
 
-    async setTraders() {
-        try {
-            const data = await Trader.getOpenTraders();
-            if(data.length > 0) {
-                const traders = await Promise.all(data.map(async(obj) => {
-                    const trader = new Trader({symbol: obj.symbol});
-                    await trader.fromId(obj._id);
-                    return trader;
-                }));
-    
-                this.traders = traders;
-            }
-
-            console.log(this.traders.map(obj => obj._id));
-            return;
-        }
-        catch(error) {
-            console.log(error);
-        }
-    }
-
-    createTrader(data) {
-        return new Trader({controller: this, ...data});
+    async createTrader(data) {
+        const trader = new Trader(this);
+        trader._symbol = data.symbol;
+        if(data.baseAmountIn) trader._baseAmountIn = data.baseAmountIn;
+        if(data.quoteAmountIn) trader._quoteAmountIn = data.quoteAmountIn;
+        await trader.sync();
+        return trader;
     }
 
     addTrader(trader) {
-        if(this.traders.filter(one => one.id === trader.id).length < 1 && trader.status !== "STOPPED") {
+        if(this.traders.filter(one => one.id === trader.id).length < 1) {
             this.traders = [...this.traders, trader];
         }
     }
@@ -42,34 +29,33 @@ class Controller {
         this.traders = this.traders.filter(one => one.id !== trader.id);
     }
 
-    async revive(trader) {
+    async sync() {
         try {
-            const {symbol, baseAmountIn, quoteAmountIn, leverage, maxTransactions, maxShifts, mode} = trader;
-            await this.destroy(trader);
-            return this.createTrader({
-                symbol, 
-                baseAmountIn, 
-                quoteAmountIn, 
-                leverage, 
-                maxTransactions, 
-                maxShifts, 
-                mode
-            });
-        }
+            const traderIds = await Traders.aggregate([
+                {$project: {_id: 1}}
+            ]);
+
+            for(let obj of traderIds) {
+                const trader = new Trader(this);
+                await trader.fromId(obj._id);
+            }
+        } 
         catch(error) {
             console.log(error);
-            throw error;
         }
     }
 
-    async destroy(trader) {
+    async run() {
         try {
-            await trader.destroy();
-            this.removeTrader(trader);
-        }
+            await this.sync();
+            if(this.traders.length < 1) {
+                for(let trader of this.baseData) {
+                    await this.createTrader(trader);
+                }
+            }
+        } 
         catch(error) {
-            console.log(error);
-            throw error;
+          console.log(error);
         }
     }
 }
