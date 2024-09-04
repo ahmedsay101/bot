@@ -98,13 +98,13 @@ class Transaction extends DB {
           (this._side === "SHORT" && this.ticker.currentPrice <= this._price)
         ) this._status = "FILLED";
         if(
-          (this._side === "LONG" && this.ticker.currentPrice >= this._takeProfit)
+          (this._side === "LONG" && this.ticker.currentPrice >= this._takeProfit && this._takeProfit !== 0 && this.status === "FILLED")
           ||
-          (this._side === "SHORT" && this.ticker.currentPrice <= this._takeProfit)
+          (this._side === "SHORT" && this.ticker.currentPrice <= this._takeProfit && this._takeProfit !== 0 && this.status === "FILLED")
           ||
-          (this._side === "SHORT" && this.ticker.currentPrice >= this._stopLoss && this._stopLoss !== 0)
+          (this._side === "SHORT" && this.ticker.currentPrice >= this._stopLoss && this._stopLoss !== 0 && this.status === "FILLED")
           ||
-          (this._side === "LONG" && this.ticker.currentPrice <= this._stopLoss && this._stopLoss !== 0)
+          (this._side === "LONG" && this.ticker.currentPrice <= this._stopLoss && this._stopLoss !== 0 && this.status === "FILLED")
         ) await this.close();
       }
           
