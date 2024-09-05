@@ -141,7 +141,7 @@ class Trader extends DB {
             for(let price of this._prices) {
                 const hasTransaction = await Transaction.doesExist(this._id, price);
                 if(!hasTransaction) {
-                    await this.newTransaction({side: this.ticker.currentPrice > price ? "SHORT" : "LONG", price});
+                    await this.newTransaction({side: this.ticker.currentPrice < price ? "SHORT" : "LONG", price});
                 }
             }
             await this.updateTransactions();
