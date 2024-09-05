@@ -15,11 +15,9 @@ class Controller {
         trader._symbol = data.symbol;
         if(data.baseAmountIn) trader._baseAmountIn = data.baseAmountIn;
         if(data.quoteAmountIn) trader._quoteAmountIn = data.quoteAmountIn;
-        if(data.takeProfit) {
-            trader._takeProfit = data.takeProfit;
-            trader._stepSize = data.takeProfit;
-        }
-        if(data.stopLoss) trader._stopLoss = data.stopLoss;
+        trader._takeProfit = data.takeProfit;
+        trader._stepSize = data.takeProfit;
+        trader._stopLoss = data.stopLoss;
         await trader.sync();
         return trader;
     }

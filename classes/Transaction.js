@@ -27,6 +27,7 @@ class Transaction extends DB {
     this._profitable = false;
     this._status = null;
     this._type = "LIMIT";
+    this.position = null;
     this._createdAt = new Date();
     this._updatedAt = new Date();
   }
@@ -88,14 +89,15 @@ class Transaction extends DB {
     try {
       if(!this._price && this._type === "MARKET") this._price = this.ticker.currentPrice;
       if(!this._price || !this._baseAmountIn || !this.ticker.currentPrice || this._status === "CLOSED") return;
+      if(this.position === null) this.position = this.ticker.currentPrice > this._price ? "LOWER" : "HIGHER";
       this._takeProfit = this._side === "LONG" ? this._price + this.trader._takeProfit : this._price  - this.trader._takeProfit;
       this._stopLoss = this.trader._stopLoss > 0 ? this._side === "LONG" ? this._price - this.trader._stopLoss : this._price + this.trader._stopLoss : 0;
 
-      if(this._mode === "TESTING") {
+      if(this._mode === "TESTING" && this._status !== "CLOSED") {
         if(
-          (this._side === "LONG" && this.ticker.currentPrice >= this._price)
+          (this.position === "HIGHER" && this.ticker.currentPrice >= this._price)
           ||
-          (this._side === "SHORT" && this.ticker.currentPrice <= this._price)
+          (this.position === "LOWER" && this.ticker.currentPrice <= this._price)
         ) this._status = "FILLED";
         if(
           (this._side === "LONG" && this.ticker.currentPrice >= this._takeProfit && this._takeProfit !== 0 && this._status === "FILLED")

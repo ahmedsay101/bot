@@ -143,7 +143,7 @@ class Trader extends DB {
                 if(levelTransactions.length < 2) {
                     const long = levelTransactions.find(obj => obj.side === "LONG");
                     if(!long) await this.newTransaction({side: "LONG", price});
-                    const short = levelTransactions.find(obj => obj.side === "LONG");
+                    const short = levelTransactions.find(obj => obj.side === "SHORT");
                     if(!short) await this.newTransaction({side: "SHORT", price});
                 }
             }
