@@ -93,9 +93,9 @@ class Transaction extends DB {
 
       if(this._mode === "TESTING") {
         if(
-          (this._side === "LONG" && this.ticker.currentPrice >= this._price)
+          (this._side === "LONG" && this.ticker.currentPrice <= this._price)
           ||
-          (this._side === "SHORT" && this.ticker.currentPrice <= this._price)
+          (this._side === "SHORT" && this.ticker.currentPrice >= this._price)
         ) this._status = "FILLED";
         if(
           (this._side === "LONG" && this.ticker.currentPrice >= this._takeProfit && this._takeProfit !== 0 && this._status === "FILLED")
