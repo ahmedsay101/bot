@@ -41,7 +41,7 @@ class Trader extends DB {
                 const transactionsCount = await Transaction.count(this._id);
                 if(transactionsCount === 0) {
                     await this.newTransaction({side: "LONG"});
-                    await this.newTransaction({side: "SHORT", force: true});
+                    await this.newTransaction({side: "SHORT"});
                 }
             }
             else {
@@ -103,10 +103,10 @@ class Trader extends DB {
 
     }
 
-    async newTransaction({side, price = null, force = false}) {
+    async newTransaction({side, price = null}) {
         try {
-            const doesExist = await Transaction.doesExist(this._id, price ? price : this.ticker.currentPrice);
-            if(doesExist && !force) return false
+            const count = await Transaction.getLevelCount(this._id, price);
+            if(count >= 2) return false;
             const transaction = new Transaction(this);
             transaction._side = side;
             transaction._price = price ? price : this.ticker.currentPrice;
@@ -139,9 +139,12 @@ class Trader extends DB {
             await this.sync();
             await this.generatePrices();
             for(let price of this._prices) {
-                const hasTransaction = await Transaction.doesExist(this._id, price);
-                if(!hasTransaction) {
-                    await this.newTransaction({side: this.ticker.currentPrice < price ? "SHORT" : "LONG", price});
+                const levelTransactions = await Transaction.getLevel(this._id, price);
+                if(levelTransactions.length < 2) {
+                    const long = levelTransactions.find(obj => obj.side === "LONG");
+                    if(!long) await this.newTransaction({side: "LONG", price});
+                    const short = levelTransactions.find(obj => obj.side === "LONG");
+                    if(!short) await this.newTransaction({side: "SHORT", price});
                 }
             }
             await this.updateTransactions();

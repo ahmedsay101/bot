@@ -93,9 +93,9 @@ class Transaction extends DB {
 
       if(this._mode === "TESTING") {
         if(
-          (this._side === "LONG" && this.ticker.currentPrice <= this._price)
+          (this._side === "LONG" && this.ticker.currentPrice >= this._price)
           ||
-          (this._side === "SHORT" && this.ticker.currentPrice >= this._price)
+          (this._side === "SHORT" && this.ticker.currentPrice <= this._price)
         ) this._status = "FILLED";
         if(
           (this._side === "LONG" && this.ticker.currentPrice >= this._takeProfit && this._takeProfit !== 0 && this._status === "FILLED")
@@ -124,23 +124,32 @@ class Transaction extends DB {
     }
   }
 
-  static async doesExist(traderId, price) {
+  static async getLevel(traderId, price) {
     try {
       const transactions = await Transactions.aggregate([
         {$match: {traderId, price, status: {$ne: "CLOSED"}}},
-        {$project: {_id: 1, price: 1}}
+        {$project: {_id: 1, price: 1, side: 1}}
       ]).exec();
-      if(transactions.length > 0) return true;
-      else return false;
+      return transactions;
     }  
     catch(error) {
       console.log(error);
     }
   } 
 
+  static async getLevelCount(traderId, price) {
+    try {
+      const count = await Transactions.countDocuments({traderId, price, status: {$ne: "CLOSED"}});
+      return count;
+    }  
+    catch(error) {
+      console.log(error);
+    }
+  }
+
   static async count(traderId) {
     try {
-      const count = await Transactions.countDocuments({traderId});
+      const count = await Transactions.countDocuments({traderId, status: {$ne: "CLOSED"}});
       return count;
     }  
     catch(error) {
