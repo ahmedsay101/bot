@@ -20,10 +20,20 @@ cron.schedule(`0 0 0 * * *`, async() => {
     fs.writeFileSync("./symbols.json", JSON.stringify(filter));
 });
 
-let traders = [{
-    symbol: "BTCUSDT", 
-    baseAmountIn: 0.002,
-}]
+let traders = [
+    {
+        symbol: "BTCUSDT", 
+        baseAmountIn: 0.01,
+    },
+    {
+        symbol: "ETHUSDT", 
+        baseAmountIn: 0.2,
+    },
+    {
+        symbol: "UNIUSDT", 
+        baseAmountIn: 50,
+    }
+]
 const controller = new Controller(traders);
 
 app.use(cors());

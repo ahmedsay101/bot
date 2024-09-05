@@ -26,7 +26,7 @@ class Trader extends DB {
         this._fee = 0.001;
         this._stepSize = 200;
         this._takeProfit = this._stepSize;
-        this._stopLoss = 200;
+        this._stopLoss = 400;
         this._profitTaken = 0;
         this._mode = "TESTING";
         this._status = "ACTIVE";
