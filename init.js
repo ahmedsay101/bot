@@ -31,7 +31,7 @@ let traders = [
         symbol: "ETHUSDT", 
         baseAmountIn: 0.2,
         takeProfit: 50,
-        stopLoss: 100
+        stopLoss: 100,
     },
     {
         symbol: "UNIUSDT", 
