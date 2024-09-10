@@ -23,7 +23,7 @@ cron.schedule(`0 0 0 * * *`, async() => {
 let traders = [
     {
         symbol: "BTCUSDT", 
-        baseAmountIn: 0.1,
+        baseAmountIn: 0.02,
         takeProfit: 100,
         stopLoss: 500
     },
@@ -35,7 +35,7 @@ let traders = [
     },
     {
         symbol: "UNIUSDT", 
-        baseAmountIn: 100,
+        baseAmountIn: 200,
         takeProfit: 0.05,
         stopLoss: 0.25
     }
