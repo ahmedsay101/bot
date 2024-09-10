@@ -23,21 +23,21 @@ cron.schedule(`0 0 0 * * *`, async() => {
 let traders = [
     {
         symbol: "BTCUSDT", 
-        baseAmountIn: 0.02,
-        takeProfit: 100,
-        stopLoss: 500
+        baseAmountIn: 0.03,
+        takeProfit: 200,
+        stopLoss: 1000
     },
     {
         symbol: "ETHUSDT", 
         baseAmountIn: 0.5,
-        takeProfit: 10,
-        stopLoss: 50,
+        takeProfit: 20,
+        stopLoss: 100,
     },
     {
         symbol: "UNIUSDT", 
         baseAmountIn: 200,
-        takeProfit: 0.05,
-        stopLoss: 0.25
+        takeProfit: 0.1,
+        stopLoss: 1
     }
 ]
 const controller = new Controller(traders);
