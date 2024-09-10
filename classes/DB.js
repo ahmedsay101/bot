@@ -35,8 +35,10 @@ class DB {
                 if(Array.isArray(property) && property.length < 1) isValid = false;
                 if(isValid) data[name.replace(/_/g, "")] = property;
             }  
+
+            const doesExist = this._id !== null && this._id !== undefined;
               
-            if(this._id) {
+            if(doesExist) {
                 await this.collection.findByIdAndUpdate(this._id, data);
             }
             else {
@@ -44,7 +46,7 @@ class DB {
                 if(response) this._id = response._id;
             }
 
-            if(this._id) {
+            if(doesExist) {
                 const results = await this.collection.findById(this._id).lean();
                 const namesToUpdate = Object.keys(results).filter(key => this.properties.map(name => name.replace(/_/g, "")).includes(key));
                 for(let property of namesToUpdate) {
