@@ -102,7 +102,7 @@ class Trader extends DB {
     async newTransaction({side, price = null}) {
         try {
             const count = await Transaction.getLevelCount(this._id, price);
-            if(count >= 1) return false;
+            if(count >= 2) return false;
             const transaction = new Transaction(this);
             transaction._side = side;
             transaction._price = price ? price : this.ticker.currentPrice;
@@ -136,9 +136,17 @@ class Trader extends DB {
             await this.generatePrices();
             for(let price of this._prices) {
                 const levelTransactions = await Transaction.getLevel(this._id, price);
-                if(levelTransactions.length < 1) {
-                    await this.newTransaction({side: price >= this.ticker.currentPrice ? "LONG" : "SHORT", price});
-                }
+                if(levelTransactions.length < 2) {
+                    const long = levelTransactions.find(transaction => transaction.side === "LONG");
+                    const short = levelTransactions.find(transaction => transaction.side === "SHORT");
+
+                    if(this.ticker.currentPrice > price && !short) {
+                        await this.newTransaction({side: "SHORT", price});
+                    }
+                    else if(this.ticker.currentPrice < price && !long) {
+                        await this.newTransaction({side: "LONG", price});
+                    }        
+                }       
             }
             await this.updateTransactions();
             await this.calculateProfit();
