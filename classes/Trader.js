@@ -38,7 +38,6 @@ class Trader extends DB {
         try {
             if(this._prices.length < 1) {
                 this._prices = [...new Set([this.ticker.currentPrice + this._stepSize, this.ticker.currentPrice, this.ticker.currentPrice - this._stepSize].sort((a, b) => b - a))];
-                const transactionsCount = await Transaction.count(this._id);
             }
             else {
                 const highestPrice = this._prices.sort((a, b) => b - a)[0];
