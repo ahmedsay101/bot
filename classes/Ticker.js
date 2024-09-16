@@ -41,8 +41,11 @@ class Ticker {
       if(!this.symbol) return;
       const currentPrice = await this.service.getPrice(this.symbol);
       const price = Number(currentPrice.price);
-      if(this.priceMemory.length > this.priceMemoryLimit) this.priceMemory = [...this.priceMemory.unshift()]
-      if(this.speedMemory.length > this.speedMemory) this.speedMemory = [...this.speedMemory.unshift()];
+      const lastPrice = this.priceMemory.lenth > 0 ? this.priceMemory[this.priceMemory.length - 1] : null;
+      this.priceMemory = [...this.priceMemory, price];
+      this.speedMemory = [...this.priceMemory, lastPrice ? lastPrice : price];
+      if(this.priceMemory.length > this.priceMemoryLimit) this.priceMemory = [...this.priceMemory.shift()]
+      if(this.speedMemory.length > this.speedMemory) this.speedMemory = [...this.speedMemory.shift()];
       if(this.speedMemory.length >= this.speedMemoryLimit) this.avgSpeed = arrayAvg(this.speedMemory);
       this.currentPrice = price;
       await this.trader.tick();
