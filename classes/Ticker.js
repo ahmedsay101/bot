@@ -7,7 +7,11 @@ class Ticker {
     this.id = uuidv4();
     this.trader = trader;
     this.symbol = this.trader._symbol;
-    this.speeds = [];
+    this.priceMemoryLimit = 10;
+    this.speedMemoryLimit = 100;
+    this.priceMemory = [];
+    this.speedMemory = [];
+    this.avgSpeed = 0;
     this.market = findMarketBySymbol(this.symbol);
     this.orderBook = null;
     this.service = this.trader.service;
@@ -37,6 +41,9 @@ class Ticker {
       if(!this.symbol) return;
       const currentPrice = await this.service.getPrice(this.symbol);
       const price = Number(currentPrice.price);
+      if(this.priceMemory.length > this.priceMemoryLimit) this.priceMemory = [...this.priceMemory.unshift()]
+      if(this.speedMemory.length > this.speedMemory) this.speedMemory = [...this.speedMemory.unshift()];
+      if(this.speedMemory.length >= this.speedMemoryLimit) this.avgSpeed = arrayAvg(this.speedMemory);
       this.currentPrice = price;
       await this.trader.tick();
     }
