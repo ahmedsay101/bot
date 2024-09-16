@@ -24,19 +24,19 @@ let traders = [
     {
         symbol: "BTCUSDT", 
         baseAmountIn: 0.002,
-        takeProfit: 80,
+        takeProfit: 100,
         stopLoss: 5000
     },
     {
         symbol: "ETHUSDT", 
         baseAmountIn: 0.06,
-        takeProfit: 5,
+        takeProfit: 10,
         stopLoss: 5000,
     },
     {
         symbol: "UNIUSDT", 
         baseAmountIn: 20,
-        takeProfit: 0.01,
+        takeProfit: 0.05,
         stopLoss: 5000
     }
 ]
