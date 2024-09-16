@@ -21,6 +21,7 @@ class Trader extends DB {
         this.transactions = [];
         this._baseAmountIn = 0;
         this._quoteAmountIn = 0;
+        this._aim = 1;
         this._profit = 0;
         this._leverage = 0;
         this._fee = 0.001;
@@ -73,9 +74,11 @@ class Trader extends DB {
 
     async updateTransactions() {
         try {
-          for(let transaction of this.transactions) {
-            await transaction.tick();
-          }
+            if(this._status === "ACTIVE") {
+                for(let transaction of this.transactions) {
+                    await transaction.tick();
+                }
+            }
         } 
         catch(error) {
           console.log(error);
@@ -101,7 +104,7 @@ class Trader extends DB {
     async newTransaction({side, price = null}) {
         try {
             const count = await Transaction.getLevelCount(this._id, price);
-            if(count >= 2) return false;
+            if(count >= 2 || this._status !== "ACTIVE") return false;
             const transaction = new Transaction(this);
             transaction._side = side;
             transaction._price = price ? price : this.ticker.currentPrice;
@@ -127,10 +130,11 @@ class Trader extends DB {
 
     async tick() {
         try {
-            if(!this._id || !this._symbol || !this.ticker.currentPrice) return;
+            if(!this._id || !this._symbol || !this.ticker.currentPrice || this._status !== "ACTIVE") return;
             if(this._mode === "LIVE" && !this._leverage) await this.setLeverage();
             if(this._baseAmountIn === 0 || !this._baseAmountIn) this._baseAmountIn = this._quoteAmountIn / this.ticker.currentPrice;
             if(this._quoteAmountIn === 0 || !this._quoteAmountIn) this._quoteAmountIn = this._baseAmountIn * this.ticker.currentPrice;
+            if(this._profit >= this._aim) await this.destroy();
             await this.sync();
             await this.generatePrices();
             for(let price of this._prices) {
@@ -161,6 +165,19 @@ class Trader extends DB {
             console.log("PRICES", this.ticker.priceMemory.length);
             console.log("SPEEDS", this.ticker.speedMemory.length);
             console.log("AVG SPEED", this.ticker.avgSpeed);
+            await this.sync();
+        }
+        catch(error) {
+            console.log(error);
+        }
+    }
+
+    async destroy() {
+        try {
+            for(let transaction of this.transactions) {
+                await transaction.close();
+            }
+            this._status = "STOPPED";
             await this.sync();
         }
         catch(error) {

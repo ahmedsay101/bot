@@ -8,6 +8,7 @@ const traderSchema = new mongoose.Schema(
     prices: { type: [Number], "default": [] },
     leverage: { type: Number, required: false, default: 1},
     profit: { type: Number, required: false, default: 0},
+    aim: { type: Number, required: false, default: 0},
     profitTaken: { type: Number, required: false, default: 0},
     moneyIn: { type: Number, required: false, default: 0},
     takeProfit: { type: Number, required: false, default: 0 },
