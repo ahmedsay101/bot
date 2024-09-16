@@ -62,6 +62,8 @@ app.get('/api', (req, res) => {
             takeProfit: obj._takeProfit,
             stopLoss: obj._stopLoss,
             stepSize: obj._stepSize,
+            speed: obj.ticker.avgSpeed,
+        
             createdAt: obj._createdAt,
             updatedAt: obj._updatedAt,
             transactions: obj.transactions.map(transaction => ({
