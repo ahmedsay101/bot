@@ -8,7 +8,7 @@ class Ticker {
     this.trader = trader;
     this.symbol = this.trader._symbol;
     this.priceMemoryLimit = 10;
-    this.speedMemoryLimit = 1000;
+    this.speedMemoryLimit = 100;
     this.priceMemory = [];
     this.speedMemory = [];
     this.avgSpeed = 0;
@@ -41,11 +41,11 @@ class Ticker {
       if(!this.symbol) return;
       const currentPrice = await this.service.getPrice(this.symbol);
       const price = Number(currentPrice.price);
-      const lastPrice = this.priceMemory.lenth > 0 ? this.priceMemory[this.priceMemory.length - 1] : null;
+      const lastPrice = this.priceMemory.length > 0 ? this.priceMemory[this.priceMemory.length - 1] : null;
       this.priceMemory = [...this.priceMemory, price];
-      this.speedMemory = [...this.priceMemory, lastPrice ? lastPrice : price];
-      if(this.priceMemory.length > this.priceMemoryLimit) this.priceMemory = [...this.priceMemory.shift()]
-      if(this.speedMemory.length > this.speedMemory) this.speedMemory = [...this.speedMemory.shift()];
+      this.speedMemory = [...this.speedMemory, lastPrice ? lastPrice - price : 0].filter(sp => sp > 0);
+      if(this.priceMemory.length > this.priceMemoryLimit) this.priceMemory.shift();
+      if(this.speedMemory.length > this.speedMemoryLimit) this.speedMemory.shift();
       if(this.speedMemory.length >= this.speedMemoryLimit) this.avgSpeed = arrayAvg(this.speedMemory);
       this.currentPrice = price;
       await this.trader.tick();

@@ -158,6 +158,9 @@ class Trader extends DB {
             console.log("PROFIT", this._profit);
             console.log("PROFIT TAKEN", this._profitTaken);
             console.log("MONEY IN", this._moneyIn);
+            console.log("PRICES", this.ticker.priceMemory.length);
+            console.log("SPEEDS", this.ticker.speedMemory.length);
+            console.log("AVG SPEED", this.ticker.avgSpeed);
             await this.sync();
         }
         catch(error) {
