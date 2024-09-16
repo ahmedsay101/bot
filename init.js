@@ -25,19 +25,19 @@ let traders = [
         symbol: "BTCUSDT", 
         baseAmountIn: 0.002,
         takeProfit: 100,
-        stopLoss: 5000
+        stopLoss: 1000
     },
     {
         symbol: "ETHUSDT", 
         baseAmountIn: 0.06,
         takeProfit: 10,
-        stopLoss: 5000,
+        stopLoss: 100,
     },
     {
         symbol: "UNIUSDT", 
         baseAmountIn: 20,
         takeProfit: 0.05,
-        stopLoss: 5000
+        stopLoss: 0.5
     }
 ]
 const controller = new Controller(traders);
@@ -64,6 +64,7 @@ app.get('/api', (req, res) => {
             stepSize: obj._stepSize,
             speed: obj.ticker.avgSpeed,
             aim: obj._aim,
+            totalProfit: obj._totalProfit,
             createdAt: obj._createdAt,
             updatedAt: obj._updatedAt,
             transactions: obj.transactions.map(transaction => ({
@@ -84,7 +85,7 @@ app.get('/api', (req, res) => {
                 updatedAt: transaction._createdAt,
             }))
         }
-    }));
+    }).sort((a, b) => b._profit - a._profit));
 })
 
 app.listen(port, () => {

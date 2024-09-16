@@ -8,14 +8,15 @@ const { DB } = require("./DB");
 const { hoursPassed } = require("../lib/utils");
 
 class Trader extends DB {
-    constructor(controller) {
+    constructor(controller, symbol) {
         super(Traders);
         this.id = uuidv4();
-        this._symbol = null;
+        this._symbol = symbol;
         this.controller = controller;
         this.controller.addTrader(this);
-        this.service = new Service("futures");
-        this.ticker = new Ticker(this);
+        this.service = this.controller.service;
+        this.ticker = this.controller.tickers.find(one => one.symbol === this._symbol);
+        this.ticker.addTrader(this);
         this._moneyIn = 0;
         this._prices = [];
         this.transactions = [];
@@ -23,6 +24,7 @@ class Trader extends DB {
         this._quoteAmountIn = 0;
         this._aim = 1;
         this._profit = 0;
+        this._totalProfit = 0;
         this._leverage = 0;
         this._fee = 0.001;
         this._stepSize = 200;
@@ -130,7 +132,7 @@ class Trader extends DB {
 
     async tick() {
         try {
-            if(!this._id || !this._symbol || !this.ticker.currentPrice || this._status !== "ACTIVE") return;
+            if(!this._id || !this._symbol || !this.ticker || !this.ticker.currentPrice || this._status !== "ACTIVE") return;
             if(this._mode === "LIVE" && !this._leverage) await this.setLeverage();
             if(this._baseAmountIn === 0 || !this._baseAmountIn) this._baseAmountIn = this._quoteAmountIn / this.ticker.currentPrice;
             if(this._quoteAmountIn === 0 || !this._quoteAmountIn) this._quoteAmountIn = this._baseAmountIn * this.ticker.currentPrice;
@@ -153,6 +155,7 @@ class Trader extends DB {
             }
             await this.updateTransactions();
             await this.calculateProfit();
+            await this.calculateTotalProfit();
             await this.calculateProfitTaken();
             await this.calculateMoneyIn();
             console.log(`--------------------${this._symbol}-----------------------`);
@@ -162,9 +165,8 @@ class Trader extends DB {
             console.log("PROFIT", this._profit);
             console.log("PROFIT TAKEN", this._profitTaken);
             console.log("MONEY IN", this._moneyIn);
-            console.log("PRICES", this.ticker.priceMemory.length);
-            console.log("SPEEDS", this.ticker.speedMemory.length);
             console.log("AVG SPEED", this.ticker.avgSpeed);
+            console.log("TICKERS", this.controller.tickers.map(obj => ({symbol: obj.symbol, traders: obj.traders.length})));
             await this.sync();
         }
         catch(error) {
@@ -201,6 +203,21 @@ class Trader extends DB {
         }
     }
 
+    async calculateTotalProfit() {
+        try {
+            const results = await Transactions.aggregate([
+                {$match: {symbol: this._symbol}},
+                {$group: {
+                  _id: null,
+                  totalProfit: { $sum: "$profit" },
+                }}
+            ]).exec();
+            this._totalProfit = results && results.length > 0 ? Number(results[0].totalProfit) : 0;
+        }
+        catch(error) {
+            console.log(error);
+        }
+    }
     async calculateProfitTaken() {
         try {
             const results = await Transactions.aggregate([

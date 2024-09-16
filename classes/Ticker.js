@@ -3,10 +3,12 @@ const { v4: uuidv4 } = require('uuid');
 const { findMarketBySymbol, arrayAvg } = require("../lib/utils");
 
 class Ticker {
-  constructor(trader) {
+  constructor(controller, symbol) {
     this.id = uuidv4();
-    this.trader = trader;
-    this.symbol = this.trader._symbol;
+    this.controller = controller;
+    this.controller.addTicker(this);
+    this.traders = [];
+    this.symbol = symbol;
     this.priceMemoryLimit = 10;
     this.speedMemoryLimit = 100;
     this.priceMemory = [];
@@ -14,7 +16,7 @@ class Ticker {
     this.avgSpeed = 0;
     this.market = findMarketBySymbol(this.symbol);
     this.orderBook = null;
-    this.service = this.trader.service;
+    this.service = this.controller.service;
 
     this.bidPrice = 0;
     this.askPrice = 0;
@@ -35,10 +37,26 @@ class Ticker {
     this.direction = this.direction === "LONG" ? "SHORT" : "LONG";
   }
 
+  addTrader(trader) {
+    if(this.traders.filter(one => one.id === trader.id).length < 1) {
+        this.traders = [...this.traders, trader];
+        trader.ticker = this;
+    }
+  }
+
+  async updateTraders() {
+    try {
+      for(let trader of this.traders) {
+        await trader.tick();
+      } 
+    } 
+    catch(error) {
+      console.log(error);
+    }
+  }
+
   async tick() {
     try {
-      this.symbol = this.trader._symbol;
-      if(!this.symbol) return;
       const currentPrice = await this.service.getPrice(this.symbol);
       const price = Number(currentPrice.price);
       const lastPrice = this.priceMemory.length > 0 ? this.priceMemory[this.priceMemory.length - 1] : null;
@@ -48,7 +66,7 @@ class Ticker {
       if(this.speedMemory.length > this.speedMemoryLimit) this.speedMemory.shift();
       if(this.speedMemory.length >= this.speedMemoryLimit) this.avgSpeed = arrayAvg(this.speedMemory);
       this.currentPrice = price;
-      await this.trader.tick();
+      await this.updateTraders();
     }
     catch(error) {
         throw(error);

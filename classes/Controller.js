@@ -1,17 +1,27 @@
 const { v4: uuidv4 } = require('uuid');
 const { Trader } = require("./Trader");
 const { Traders } = require('../schema/trader.schema');
+const cron = require('node-cron');
+const { Ticker } = require('./Ticker');
+const { Service } = require('./API');
 
 class Controller {
     constructor(data) {
         this.id = uuidv4();
         this.baseData = data;
         this.traders = [];
-        this.run();
+        this.tickers = [];
+        this.service = new Service("futures");
+        this.sync();
+        this.task = cron.schedule(`0 * * * *`, async() => {
+            await this.run();
+        });
     }
 
     async createTrader(data) {
-        const trader = new Trader(this);
+        let ticker = this.tickers.find(one => one.symbol === data.symbol);
+        if(!ticker) ticker = new Ticker(this, data.symbol);
+        const trader = new Trader(this, data.symbol);
         trader._symbol = data.symbol;
         if(data.baseAmountIn) trader._baseAmountIn = data.baseAmountIn;
         if(data.quoteAmountIn) trader._quoteAmountIn = data.quoteAmountIn;
@@ -20,6 +30,12 @@ class Controller {
         trader._stopLoss = data.stopLoss;
         await trader.sync();
         return trader;
+    }
+
+    addTicker(ticker) {
+        if(this.tickers.filter(one => one.symbol === ticker.symbol).length < 1) {
+            this.tickers = [...this.tickers, ticker];
+        }
     }
 
     addTrader(trader) {
@@ -42,6 +58,10 @@ class Controller {
                 const trader = new Trader(this);
                 await trader.fromId(obj._id);
             }
+
+            if(this.traders.length < 1) {
+                await this.run();
+            }
         } 
         catch(error) {
             console.log(error);
@@ -50,12 +70,9 @@ class Controller {
 
     async run() {
         try {
-            await this.sync();
-            if(this.traders.length < 1) {
-                for(let trader of this.baseData) {
-                    await this.createTrader(trader);
-                }
-            }
+            for(let trader of this.baseData) {
+                await this.createTrader(trader);
+            }    
         } 
         catch(error) {
           console.log(error);
