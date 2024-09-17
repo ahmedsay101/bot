@@ -141,6 +141,7 @@ class Trader extends DB {
             await this.generatePrices();
             for(let price of this._prices) {
                 const levelTransactions = await Transaction.getLevel(this._id, price);
+                console.log("LEVEL TRANSACTIONS", levelTransactions);
                 if(levelTransactions.length < 2) {
                     const long = levelTransactions.find(transaction => transaction.side === "LONG");
                     const short = levelTransactions.find(transaction => transaction.side === "SHORT");

@@ -131,7 +131,7 @@ class Transaction extends DB {
       const transactions = await Transactions.aggregate([
         {$match: {traderId, price, status: {$ne: "CLOSED"}}},
         {$project: {_id: 1, price: 1, side: 1}}
-      ]).exec();
+      ]);
       return transactions;
     }  
     catch(error) {
