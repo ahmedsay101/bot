@@ -47,7 +47,7 @@ class Ticker {
   async updateTraders() {
     try {
       for(let trader of this.traders) {
-        await trader.tick();
+        if(trader._status === "ACTIVE") await trader.tick();
       } 
     } 
     catch(error) {

@@ -8,6 +8,7 @@ class Transaction extends DB {
     this.id = uuidv4();
     this._id = null;
     this.trader = trader;
+    this._traderId = this.trader._id || null;   
     this.trader.addTransaction(this);
     this.ticker = this.trader.ticker;
     this._symbol = this.trader._symbol;
@@ -17,7 +18,6 @@ class Transaction extends DB {
     this._baseAmountOut = 0;
     this._quoteAmountOut = 0;
     this._side = null;
-    this._traderId = this.trader._id || null;   
     this._orderId = null;
     this._price = null;
     this._takeProfit = 0;

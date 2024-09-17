@@ -11,6 +11,7 @@ class Trader extends DB {
     constructor(controller, symbol) {
         super(Traders);
         this.id = uuidv4();
+        this._id = null;
         this._symbol = symbol;
         this.controller = controller;
         this.controller.addTrader(this);
@@ -136,7 +137,6 @@ class Trader extends DB {
             if(this._mode === "LIVE" && !this._leverage) await this.setLeverage();
             if(this._baseAmountIn === 0 || !this._baseAmountIn) this._baseAmountIn = this._quoteAmountIn / this.ticker.currentPrice;
             if(this._quoteAmountIn === 0 || !this._quoteAmountIn) this._quoteAmountIn = this._baseAmountIn * this.ticker.currentPrice;
-            if(this._profit >= this._aim) await this.destroy();
             await this.sync();
             await this.generatePrices();
             for(let price of this._prices) {
@@ -168,6 +168,7 @@ class Trader extends DB {
             console.log("AVG SPEED", this.ticker.avgSpeed);
             console.log("TICKERS", this.controller.tickers.map(obj => ({symbol: obj.symbol, traders: obj.traders.length})));
             await this.sync();
+            if(Number(this._profit) >= Number(this._aim)) await this.destroy();
         }
         catch(error) {
             console.log(error);
@@ -176,11 +177,11 @@ class Trader extends DB {
 
     async destroy() {
         try {
+            this._status = "STOPPED";
+            await this.sync();
             for(let transaction of this.transactions) {
                 await transaction.close();
             }
-            this._status = "STOPPED";
-            await this.sync();
         }
         catch(error) {
             console.log(error);

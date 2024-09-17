@@ -48,6 +48,7 @@ app.get('/api', (req, res) => {
     res.status(200).json(controller.traders.map(obj => {
         return {
             id: obj.id,
+            _id: obj._id,
             symbol: obj._symbol,
             mode: obj._mode,
             leverage: obj._leverage,
@@ -63,6 +64,7 @@ app.get('/api', (req, res) => {
             stopLoss: obj._stopLoss,
             stepSize: obj._stepSize,
             speed: obj.ticker.avgSpeed,
+            status: obj._status,
             aim: obj._aim,
             totalProfit: obj._totalProfit,
             createdAt: obj._createdAt,
