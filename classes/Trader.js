@@ -34,6 +34,7 @@ class Trader extends DB {
         this._profitTaken = 0;
         this._mode = "TESTING";
         this._status = "ACTIVE";
+        this.busy = false;
         this._createdAt = new Date();
         this._updatedAt = new Date();
     }
@@ -131,9 +132,18 @@ class Trader extends DB {
         }
     }
 
+    hold() {
+        this.busy = true;
+    }
+
+    release() {
+        this.busy = false;
+    }
+
     async tick() {
         try {
-            if(!this._id || !this._symbol || !this.ticker || !this.ticker.currentPrice || this._status !== "ACTIVE") return;
+            if(!this._id || !this._symbol || !this.ticker || !this.ticker.currentPrice || this._status !== "ACTIVE" || this.busy) return;
+            this.hold();
             if(this._mode === "LIVE" && !this._leverage) await this.setLeverage();
             if(this._baseAmountIn === 0 || !this._baseAmountIn) this._baseAmountIn = this._quoteAmountIn / this.ticker.currentPrice;
             if(this._quoteAmountIn === 0 || !this._quoteAmountIn) this._quoteAmountIn = this._baseAmountIn * this.ticker.currentPrice;
@@ -143,8 +153,8 @@ class Trader extends DB {
                 const levelTransactions = await Transaction.getLevel(this._id, price);
                 console.log("LEVEL TRANSACTIONS", levelTransactions);
                 if(levelTransactions.length < 2) {
-                    const long = levelTransactions.find(transaction => transaction.side === "LONG");
-                    const short = levelTransactions.find(transaction => transaction.side === "SHORT");
+                    const long = levelTransactions.find(transaction => transaction.side === "LONG") || null;
+                    const short = levelTransactions.find(transaction => transaction.side === "SHORT") || null;
 
                     if(this.ticker.currentPrice > price && !short && Math.abs(this.ticker.currentPrice - price) >= this.ticker.avgSpeed && this.ticker.avgSpeed > 0) {
                         await this.newTransaction({side: "SHORT", price});
@@ -170,6 +180,7 @@ class Trader extends DB {
             console.log("TICKERS", this.controller.tickers.map(obj => ({symbol: obj.symbol, traders: obj.traders.length})));
             await this.sync();
             if(Number(this._profit) >= Number(this._aim)) await this.destroy();
+            this.release();
         }
         catch(error) {
             console.log(error);
