@@ -125,39 +125,6 @@ class Transaction extends DB {
       console.log(error);
     }
   }
-
-  static async getLevel(traderId, price) {
-    try {
-      const transactions = await Transactions.aggregate([
-        {$match: {traderId, price}},
-        {$project: {_id: 1, price: 1, side: 1}}
-      ]);
-      return transactions;
-    }  
-    catch(error) {
-      console.log(error);
-    }
-  } 
-
-  static async getLevelCount(traderId, price) {
-    try {
-      const count = await Transactions.countDocuments({traderId, price, status: {$ne: "CLOSED"}});
-      return count;
-    }  
-    catch(error) {
-      console.log(error);
-    }
-  }
-
-  static async count(traderId) {
-    try {
-      const count = await Transactions.countDocuments({traderId, status: {$ne: "CLOSED"}});
-      return count;
-    }  
-    catch(error) {
-      console.log(error);
-    }
-  }
 };
 
 module.exports = { Transaction };

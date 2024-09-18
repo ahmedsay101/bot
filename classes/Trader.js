@@ -110,7 +110,7 @@ class Trader extends DB {
 
     async newTransaction({side, price = null}) {
         try {
-            const count = await Transaction.getLevelCount(this._id, price);
+            const count = await this.getLevelCount(this._id, price);
             if(count >= 1 || this._status !== "ACTIVE") return false;
             const transaction = new Transaction(this);
             transaction._side = side;
@@ -151,13 +151,14 @@ class Trader extends DB {
             if(this._baseAmountIn === 0 || !this._baseAmountIn) this._baseAmountIn = this._quoteAmountIn / this.ticker.currentPrice;
             if(this._quoteAmountIn === 0 || !this._quoteAmountIn) this._quoteAmountIn = this._baseAmountIn * this.ticker.currentPrice;
             await this.sync();
-            if(this.transactions.filter(t => t._status === "CLOSED").length > 0 && this._profit > 0) {
+            const closed = await this.getClosedCount();
+            if(closed >= 2) {
                 await this.destroy();
                 return;
             }
             await this.generatePrices();
             for(let price of this._prices) {
-                const levelTransactions = await Transaction.getLevel(this._id, price);
+                const levelTransactions = await this.getLevel(this._id, price);
                 console.log("LEVEL TRANSACTIONS", levelTransactions);
                 if(levelTransactions.length < 1) {
                     const long = levelTransactions.find(transaction => transaction.side === "LONG") || null;
@@ -270,6 +271,49 @@ class Trader extends DB {
             console.log(error);
         }
     }
+
+    async getLevel(price) {
+        try {
+          const transactions = await Transactions.aggregate([
+            {$match: {traderId: this._id, price}},
+            {$project: {_id: 1, price: 1, side: 1}}
+          ]);
+          return transactions;
+        }  
+        catch(error) {
+          console.log(error);
+        }
+      } 
+    
+      async getClosedCount() {
+        try {
+          const count = await Transactions.countDocuments({traderId: this._id, status: "CLOSED"});
+          return count;
+        }  
+        catch(error) {
+          console.log(error);
+        }
+      } 
+    
+      async getLevelCount(price) {
+        try {
+          const count = await Transactions.countDocuments({traderId: this._id, price, status: {$ne: "CLOSED"}});
+          return count;
+        }  
+        catch(error) {
+          console.log(error);
+        }
+      }
+    
+      async getTransactionsCount() {
+        try {
+          const count = await Transactions.countDocuments({traderId: this._id, status: {$ne: "CLOSED"}});
+          return count;
+        }  
+        catch(error) {
+          console.log(error);
+        }
+      }
 }
 
 module.exports = { Trader };
