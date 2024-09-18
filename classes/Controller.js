@@ -26,7 +26,7 @@ class Controller {
         if(data.baseAmountIn) trader._baseAmountIn = data.baseAmountIn;
         if(data.quoteAmountIn) trader._quoteAmountIn = data.quoteAmountIn;
         trader._takeProfit = data.takeProfit;
-        trader._stepSize = data.takeProfit;
+        trader._stepSize = data.stepSize;
         trader._stopLoss = data.stopLoss;
         await trader.sync();
         return trader;

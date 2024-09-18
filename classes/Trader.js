@@ -151,6 +151,10 @@ class Trader extends DB {
             if(this._baseAmountIn === 0 || !this._baseAmountIn) this._baseAmountIn = this._quoteAmountIn / this.ticker.currentPrice;
             if(this._quoteAmountIn === 0 || !this._quoteAmountIn) this._quoteAmountIn = this._baseAmountIn * this.ticker.currentPrice;
             await this.sync();
+            if(this.transactions.filter(t => t._status === "CLOSED").length > 0 && this._profit > 0) {
+                await this.destroy();
+                return;
+            }
             await this.generatePrices();
             for(let price of this._prices) {
                 const levelTransactions = await Transaction.getLevel(this._id, price);
