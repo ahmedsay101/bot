@@ -41,7 +41,7 @@ class Trader extends DB {
 
     async generatePrices() {
         try {
-            if(this._prices.length < 1) {
+            if(this._prices.length < 1 && this.ticker.avgSpeed > 0) {
                 this._prices = [...new Set([this.ticker.currentPrice + this._stepSize, this.ticker.currentPrice - this._stepSize].sort((a, b) => b - a))];
             }
             /*if(this._prices.length < 1) {
