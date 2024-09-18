@@ -129,7 +129,7 @@ class Transaction extends DB {
   static async getLevel(traderId, price) {
     try {
       const transactions = await Transactions.aggregate([
-        {$match: {traderId, price, status: {$ne: "CLOSED"}}},
+        {$match: {traderId, price}},
         {$project: {_id: 1, price: 1, side: 1}}
       ]);
       return transactions;
