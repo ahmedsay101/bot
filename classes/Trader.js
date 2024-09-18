@@ -42,6 +42,9 @@ class Trader extends DB {
     async generatePrices() {
         try {
             if(this._prices.length < 1) {
+                this._prices = [...new Set([this.ticker.currentPrice + this._stepSize, this.ticker.currentPrice - this._stepSize].sort((a, b) => b - a))];
+            }
+            /*if(this._prices.length < 1) {
                 this._prices = [...new Set([this.ticker.currentPrice + this._stepSize, this.ticker.currentPrice, this.ticker.currentPrice - this._stepSize].sort((a, b) => b - a))];
             }
             else {
@@ -49,7 +52,7 @@ class Trader extends DB {
                 const lowestPrice = this._prices.sort((a, b) => a - b)[0];
                 if(this.ticker.currentPrice >= highestPrice) this._prices = [...new Set([...this._prices, highestPrice + this._stepSize].sort((a, b) => b - a))]; 
                 else if(this.ticker.currentPrice <= lowestPrice) this._prices = [...new Set([...this._prices, lowestPrice - this._stepSize].sort((a, b) => b - a))]; 
-            } 
+            }*/
         }
         catch(error) {
             console.log(error);
