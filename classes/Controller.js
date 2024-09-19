@@ -4,6 +4,7 @@ const { Traders } = require('../schema/trader.schema');
 const cron = require('node-cron');
 const { Ticker } = require('./Ticker');
 const { Service } = require('./API');
+const { Transactions } = require('../schema/transaction.schema');
 
 class Controller {
     constructor(data) {
