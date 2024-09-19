@@ -153,7 +153,7 @@ class Trader extends DB {
             await this.sync();
             const transactions = await this.getTransactions();
             if(
-                (transactions.filter(t => t.status === "CLOSED").length === transactions.length)
+                (transactions.filter(t => t.status === "CLOSED").length === transactions.length && transactions.length > 0)
                 || (transactions.filter(t => t.status === "FILLED").length === 0 && transactions.filter(t => t.status === "CLOSED").length > 0 && this._profit > 0)
                 || (transactions.filter(t => t.status === "CLOSED").length === 1 && transactions.filter(t => t.status === "FILLED").length === 1 && this._profit > 0)
             ) {
@@ -291,8 +291,8 @@ class Trader extends DB {
     async getTransactions() {
         try {
             const transactions = await Transactions.aggregate([
-            {$match: {traderId: this._id}},
-            {$project: {_id: 1, price: 1, side: 1, status: 1}}
+                {$match: {traderId: this._id}},
+                {$project: {_id: 1, price: 1, side: 1, status: 1}}
             ]);
             return transactions;
         }  
