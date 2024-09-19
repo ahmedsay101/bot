@@ -207,6 +207,7 @@ class Trader extends DB {
                 await transaction.close();
             }
             this.controller.removeTrader(this);
+            this.ticker.removeTrader(this);
         }
         catch(error) {
             console.log(error);

@@ -10,7 +10,7 @@ class Ticker {
     this.traders = [];
     this.symbol = symbol;
     this.priceMemoryLimit = 10;
-    this.speedMemoryLimit = 300;
+    this.speedMemoryLimit = 500;
     this.priceMemory = [];
     this.speedMemory = [];
     this.avgSpeed = 0;
@@ -44,6 +44,10 @@ class Ticker {
     }
   }
 
+  removeTrader(trader) {
+    this.traders = this.traders.filter(one => one.id !== trader.id);
+  }
+  
   async updateTraders() {
     try {
       for(let trader of this.traders) {
