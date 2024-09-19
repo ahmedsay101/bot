@@ -154,7 +154,7 @@ class Trader extends DB {
             const transactions = await this.getTransactions();
             if(
                 (transactions.filter(t => t.status === "CLOSED").length === transactions.length)
-                || (transactions.filter(t => t.status === "FILLED").length === 0 && this._profit > 0)
+                || (transactions.filter(t => t.status === "FILLED").length === 0 && transactions.filter(t => t.status === "CLOSED").length > 0 && this._profit > 0)
                 || (transactions.filter(t => t.status === "CLOSED").length === 1 && transactions.filter(t => t.status === "FILLED").length === 1 && this._profit > 0)
             ) {
                 await this.destroy();
