@@ -15,7 +15,7 @@ class Controller {
         this.profit = 0;
         this.service = new Service("futures");
         this.sync();
-        this.task = cron.schedule(`0 */30 * * * *`, async() => {
+        this.task = cron.schedule(`0 * * * *`, async() => {
             await this.run();
         });
     }
