@@ -48,49 +48,52 @@ const controller = new Controller(traders);
 app.use(cors());
 
 app.get('/api', (req, res) => {
-    res.status(200).json(controller.traders.map(obj => {
-        return {
-            id: obj.id,
-            _id: obj._id,
-            symbol: obj._symbol,
-            mode: obj._mode,
-            leverage: obj._leverage,
-            currentPrice: obj.ticker.currentPrice,
-            baseAmountIn: obj._baseAmountIn,
-            quoteAmountIn: obj._quoteAmountIn,
-            moneyIn: obj._moneyIn,
-            profit: obj._profit,
-            profitTaken: obj._profitTaken,
-            fee: obj._fee,
-            levels: [{type: "PRICE", price: obj.ticker.currentPrice}, ...obj._prices.map(p => ({type: "LEVEL", price: p}))].sort((a, b) => b.price - a.price),
-            takeProfit: obj._takeProfit,
-            stopLoss: obj._stopLoss,
-            stepSize: obj._stepSize,
-            speed: obj.ticker.avgSpeed,
-            status: obj._status,
-            aim: obj._aim,
-            totalProfit: obj._totalProfit,
-            createdAt: obj._createdAt,
-            updatedAt: obj._updatedAt,
-            transactions: obj.transactions.map(transaction => ({
-                _id: transaction._id,
-                side: transaction._side,
-                price: transaction._price,
-                orderId: transaction._orderId,
-                baseAmountIn: transaction._baseAmountIn,
-                baseAmountOut: transaction._baseAmountOut,
-                quoteAmountIn: transaction._quoteAmountIn,
-                quoteAmountOut: transaction._quoteAmountOut,
-                profit: transaction._profit,
-                status: transaction._status,
-                takeProfit: transaction._takeProfit,
-                stopLoss: transaction._stopLoss,
-                isProfitable: transaction._isProfitable,
-                createdAt: transaction._createdAt,
-                updatedAt: transaction._createdAt,
-            }))
-        }
-    }).sort((a, b) => b._profit - a._profit));
+    res.status(200).json({
+        profit: controller.profit,
+        traders: controller.traders.map(obj => {
+            return {
+                id: obj.id,
+                _id: obj._id,
+                symbol: obj._symbol,
+                mode: obj._mode,
+                leverage: obj._leverage,
+                currentPrice: obj.ticker.currentPrice,
+                baseAmountIn: obj._baseAmountIn,
+                quoteAmountIn: obj._quoteAmountIn,
+                moneyIn: obj._moneyIn,
+                profit: obj._profit,
+                profitTaken: obj._profitTaken,
+                fee: obj._fee,
+                levels: [{type: "PRICE", price: obj.ticker.currentPrice}, ...obj._prices.map(p => ({type: "LEVEL", price: p}))].sort((a, b) => b.price - a.price),
+                takeProfit: obj._takeProfit,
+                stopLoss: obj._stopLoss,
+                stepSize: obj._stepSize,
+                speed: obj.ticker.avgSpeed,
+                status: obj._status,
+                aim: obj._aim,
+                totalProfit: obj._totalProfit,
+                createdAt: obj._createdAt,
+                updatedAt: obj._updatedAt,
+                transactions: obj.transactions.map(transaction => ({
+                    _id: transaction._id,
+                    side: transaction._side,
+                    price: transaction._price,
+                    orderId: transaction._orderId,
+                    baseAmountIn: transaction._baseAmountIn,
+                    baseAmountOut: transaction._baseAmountOut,
+                    quoteAmountIn: transaction._quoteAmountIn,
+                    quoteAmountOut: transaction._quoteAmountOut,
+                    profit: transaction._profit,
+                    status: transaction._status,
+                    takeProfit: transaction._takeProfit,
+                    stopLoss: transaction._stopLoss,
+                    isProfitable: transaction._isProfitable,
+                    createdAt: transaction._createdAt,
+                    updatedAt: transaction._createdAt,
+                }))
+            }
+        }).sort((a, b) => b._profit - a._profit)
+    });
 })
 
 app.listen(port, () => {

@@ -10,7 +10,7 @@ class Ticker {
     this.traders = [];
     this.symbol = symbol;
     this.priceMemoryLimit = 10;
-    this.speedMemoryLimit = 100;
+    this.speedMemoryLimit = 300;
     this.priceMemory = [];
     this.speedMemory = [];
     this.avgSpeed = 0;

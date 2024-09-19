@@ -11,6 +11,7 @@ class Controller {
         this.baseData = data;
         this.traders = [];
         this.tickers = [];
+        this.profit = 0;
         this.service = new Service("futures");
         this.sync();
         this.task = cron.schedule(`0 */30 * * * *`, async() => {
@@ -76,6 +77,30 @@ class Controller {
         } 
         catch(error) {
           console.log(error);
+        }
+    }
+
+    async tick() {
+        try {
+            await this.calculateProfit();
+        }
+        catch(error) {
+            console.log(error);
+        }
+    }
+
+    async calculateProfit() {
+        try {
+            const results = await Transactions.aggregate([
+                {$group: {
+                  _id: null,
+                  totalProfit: { $sum: "$profit" },
+                }}
+            ]).exec();
+            this.profit = results && results.length > 0 ? Number(results[0].totalProfit) : 0;
+        }
+        catch(error) {
+            console.log(error);
         }
     }
 }

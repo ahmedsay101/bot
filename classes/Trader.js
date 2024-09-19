@@ -147,6 +147,7 @@ class Trader extends DB {
         try {
             if(!this._id || !this._symbol || !this.ticker || !this.ticker.currentPrice || this._status !== "ACTIVE" || this.busy) return;
             this.hold();
+            await this.controller.tick();
             if(this._mode === "LIVE" && !this._leverage) await this.setLeverage();
             if(this._baseAmountIn === 0 || !this._baseAmountIn) this._baseAmountIn = this._quoteAmountIn / this.ticker.currentPrice;
             if(this._quoteAmountIn === 0 || !this._quoteAmountIn) this._quoteAmountIn = this._baseAmountIn * this.ticker.currentPrice;
@@ -205,6 +206,7 @@ class Trader extends DB {
             for(let transaction of this.transactions) {
                 await transaction.close();
             }
+            this.controller.removeTrader(this);
         }
         catch(error) {
             console.log(error);
