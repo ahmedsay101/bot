@@ -13,7 +13,7 @@ class Controller {
         this.tickers = [];
         this.service = new Service("futures");
         this.sync();
-        this.task = cron.schedule(`0 * * * *`, async() => {
+        this.task = cron.schedule(`0 */30 * * * *`, async() => {
             await this.run();
         });
     }

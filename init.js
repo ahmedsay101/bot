@@ -26,21 +26,21 @@ let traders = [
         baseAmountIn: 0.002,
         takeProfit: 200,
         stepSize: 100,
-        stopLoss: 600
+        stopLoss: 500
     },
     {
         symbol: "ETHUSDT", 
         baseAmountIn: 0.06,
         stepSize: 5,
-        takeProfit: 10,
-        stopLoss: 30,
+        takeProfit: 5,
+        stopLoss: 10,
     },
     {
         symbol: "UNIUSDT", 
         baseAmountIn: 20,
-        takeProfit: 0.050,
-        stepSize: 0.025,
-        stopLoss: 0.15
+        takeProfit: 0.025,
+        stepSize: 0.0125,
+        stopLoss: 0.10
     }
 ]
 const controller = new Controller(traders);
