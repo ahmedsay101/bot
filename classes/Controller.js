@@ -60,10 +60,6 @@ class Controller {
                 const trader = new Trader(this);
                 await trader.fromId(obj._id);
             }
-
-            if(this.traders.length < 1) {
-                await this.run();
-            }
         } 
         catch(error) {
             console.log(error);
