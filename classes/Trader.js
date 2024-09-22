@@ -189,7 +189,7 @@ class Trader extends DB {
             console.log("MONEY IN", this._moneyIn);
             console.log("AVG SPEED", this.ticker.avgSpeed);
             console.log("TICKERS", this.controller.tickers.map(obj => ({symbol: obj.symbol, traders: obj.traders.length})));
-            if(Number(this._profit) >= Number(this._aim)) await this.destroy();
+            //if(Number(this._profit) >= Number(this._aim)) await this.destroy();
             this.release();
         }
         catch(error) {
