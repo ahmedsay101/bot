@@ -38,9 +38,9 @@ let traders = [
     {
         symbol: "UNIUSDT", 
         baseAmountIn: 20,
-        takeProfit: 0.01,
-        stepSize: 0.01,
-        stopLoss: 0.1
+        takeProfit: 0.02,
+        stepSize: 0.02,
+        stopLoss: 0.2
     }
 ]
 const controller = new Controller(traders);
