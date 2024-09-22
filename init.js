@@ -31,15 +31,15 @@ let traders = [
     {
         symbol: "ETHUSDT", 
         baseAmountIn: 0.06,
-        stepSize: 5,
-        takeProfit: 5,
+        stepSize: 2,
+        takeProfit: 2,
         stopLoss: 1000,
     },
     {
         symbol: "UNIUSDT", 
         baseAmountIn: 20,
-        takeProfit: 0.02,
-        stepSize: 0.02,
+        takeProfit: 0.01,
+        stepSize: 0.01,
         stopLoss: 100
     }
 ]
