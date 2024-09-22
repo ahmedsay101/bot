@@ -1,7 +1,6 @@
 const { v4: uuidv4 } = require('uuid');
 const { Trader } = require("./Trader");
 const { Traders } = require('../schema/trader.schema');
-const cron = require('node-cron');
 const { Ticker } = require('./Ticker');
 const { Service } = require('./API');
 const { Transactions } = require('../schema/transaction.schema');
@@ -15,9 +14,6 @@ class Controller {
         this.profit = 0;
         this.service = new Service("futures");
         this.sync();
-        this.task = cron.schedule(`0 * * * *`, async() => {
-            await this.run();
-        });
     }
 
     async createTrader(data) {
@@ -50,16 +46,22 @@ class Controller {
         this.traders = this.traders.filter(one => one.id !== trader.id);
     }
 
+    
+
     async sync() {
         try {
             const traderIds = await Traders.aggregate([
-                {$project: {_id: 1}}
+                {$project: {_id: 1, symbol: 1}}
             ]);
 
             for(let obj of traderIds) {
+                let ticker = this.tickers.find(one => one.symbol === obj.symbol);
+                if(!ticker) ticker = new Ticker(this, obj.symbol);
                 const trader = new Trader(this);
                 await trader.fromId(obj._id);
             }
+
+            if(this.traders.length < 1) await this.run();
         } 
         catch(error) {
             console.log(error);

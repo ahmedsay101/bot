@@ -41,10 +41,7 @@ class Trader extends DB {
 
     async generatePrices() {
         try {
-            if(this._prices.length < 1 && this.ticker.avgSpeed > 0) {
-                this._prices = [...new Set([this.ticker.currentPrice + this._stepSize, this.ticker.currentPrice - this._stepSize].sort((a, b) => b - a))];
-            }
-            /*if(this._prices.length < 1) {
+            if(this._prices.length < 1) {
                 this._prices = [...new Set([this.ticker.currentPrice + this._stepSize, this.ticker.currentPrice, this.ticker.currentPrice - this._stepSize].sort((a, b) => b - a))];
             }
             else {
@@ -52,7 +49,7 @@ class Trader extends DB {
                 const lowestPrice = this._prices.sort((a, b) => a - b)[0];
                 if(this.ticker.currentPrice >= highestPrice) this._prices = [...new Set([...this._prices, highestPrice + this._stepSize].sort((a, b) => b - a))]; 
                 else if(this.ticker.currentPrice <= lowestPrice) this._prices = [...new Set([...this._prices, lowestPrice - this._stepSize].sort((a, b) => b - a))]; 
-            }*/
+            }
         }
         catch(error) {
             console.log(error);
@@ -111,7 +108,7 @@ class Trader extends DB {
     async newTransaction({side, price = null}) {
         try {
             const count = await this.getLevelCount(price);
-            if(count >= 1 || this._status !== "ACTIVE") return false;
+            if(count >= 2 || this._status !== "ACTIVE") return false;
             const transaction = new Transaction(this);
             transaction._side = side;
             transaction._price = price ? price : this.ticker.currentPrice;
@@ -164,7 +161,7 @@ class Trader extends DB {
             await this.generatePrices();
             for(let price of this._prices) {
                 const levelTransactions = await this.getLevel(price);
-                if(levelTransactions.length < 1) {
+                if(levelTransactions.length < 2) {
                     const long = levelTransactions.find(transaction => transaction.side === "LONG") || null;
                     const short = levelTransactions.find(transaction => transaction.side === "SHORT") || null;
 
@@ -190,7 +187,6 @@ class Trader extends DB {
             console.log("MONEY IN", this._moneyIn);
             console.log("AVG SPEED", this.ticker.avgSpeed);
             console.log("TICKERS", this.controller.tickers.map(obj => ({symbol: obj.symbol, traders: obj.traders.length})));
-            await this.sync();
             if(Number(this._profit) >= Number(this._aim)) await this.destroy();
             this.release();
         }

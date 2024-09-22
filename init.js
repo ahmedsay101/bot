@@ -24,23 +24,23 @@ let traders = [
     {
         symbol: "BTCUSDT", 
         baseAmountIn: 0.002,
-        takeProfit: 200,
-        stepSize: 100,
-        stopLoss: 1000
+        takeProfit: 500,
+        stepSize: 500,
+        stopLoss: 10000
     },
     {
         symbol: "ETHUSDT", 
         baseAmountIn: 0.06,
-        stepSize: 5,
-        takeProfit: 10,
-        stopLoss: 100,
+        stepSize: 50,
+        takeProfit: 50,
+        stopLoss: 1000,
     },
     {
         symbol: "UNIUSDT", 
         baseAmountIn: 20,
-        takeProfit: 0.05,
-        stepSize: 0.025,
-        stopLoss: 0.20
+        takeProfit: 0.1,
+        stepSize: 0.1,
+        stopLoss: 10
     }
 ]
 const controller = new Controller(traders);
