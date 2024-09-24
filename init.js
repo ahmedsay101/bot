@@ -38,8 +38,8 @@ let traders = [
     {
         symbol: "UNIUSDT", 
         baseAmountIn: 30,
-        takeProfit: 0.05,
-        stepSize: 0.05,
+        takeProfit: 0.1,
+        stepSize: 0.1,
         stopLoss: 10
     }
 ]
