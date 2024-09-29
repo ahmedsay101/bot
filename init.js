@@ -23,24 +23,31 @@ cron.schedule(`0 0 0 * * *`, async() => {
 let traders = [
     {
         symbol: "BTCUSDT", 
-        baseAmountIn: 0.005,
-        takeProfit: 500,
-        stepSize: 500,
+        baseAmountIn: 0.002,
+        takeProfit: 200,
+        stepSize: 200,
         stopLoss: 10000
     },    
     {
         symbol: "ETHUSDT", 
-        baseAmountIn: 0.1,
-        takeProfit: 50,
-        stepSize: 50,
-        stopLoss: 1000
+        baseAmountIn: 0.05,
+        takeProfit: 5,
+        stepSize: 5,
+        stopLoss: 500
     },
     {
         symbol: "UNIUSDT", 
-        baseAmountIn: 30,
-        takeProfit: 0.1,
-        stepSize: 0.1,
-        stopLoss: 10
+        baseAmountIn: 20,
+        takeProfit: 0.05,
+        stepSize: 0.05,
+        stopLoss: 2
+    },
+    {
+        symbol: "SOLUSDT", 
+        baseAmountIn: 1,
+        takeProfit: 1,
+        stepSize: 1,
+        stopLoss: 30
     }
 ]
 const controller = new Controller(traders);
@@ -64,7 +71,7 @@ app.get('/api', (req, res) => {
                 profit: obj._profit,
                 profitTaken: obj._profitTaken,
                 fee: obj._fee,
-                levels: [{type: "PRICE", price: obj.ticker.currentPrice}, ...obj._prices.map(p => ({type: "LEVEL", price: p}))].sort((a, b) => b.price - a.price),
+                levels: [{type: "PRICE", price: obj.ticker.currentPrice}, ...obj._levels.map(p => ({type: "LEVEL", price: p}))].sort((a, b) => b.price - a.price),
                 takeProfit: obj._takeProfit,
                 stopLoss: obj._stopLoss,
                 stepSize: obj._stepSize,

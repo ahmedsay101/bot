@@ -46,18 +46,17 @@ class Controller {
         this.traders = this.traders.filter(one => one.id !== trader.id);
     }
 
-    
-
     async sync() {
         try {
             const traderIds = await Traders.aggregate([
+                {$match: {status: "ACTIVE"}},
                 {$project: {_id: 1, symbol: 1}}
             ]);
 
             for(let obj of traderIds) {
                 let ticker = this.tickers.find(one => one.symbol === obj.symbol);
                 if(!ticker) ticker = new Ticker(this, obj.symbol);
-                const trader = new Trader(this);
+                const trader = new Trader(this, obj.symbol);
                 await trader.fromId(obj._id);
             }
 
