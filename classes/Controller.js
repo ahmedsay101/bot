@@ -6,9 +6,8 @@ const { Service } = require('./API');
 const { Transactions } = require('../schema/transaction.schema');
 
 class Controller {
-    constructor(data) {
+    constructor() {
         this.id = uuidv4();
-        this.baseData = data;
         this.traders = [];
         this.tickers = [];
         this.profit = 0;
@@ -59,22 +58,9 @@ class Controller {
                 const trader = new Trader(this, obj.symbol);
                 await trader.fromId(obj._id);
             }
-
-            if(this.traders.length < 1) await this.run();
         } 
         catch(error) {
             console.log(error);
-        }
-    }
-
-    async run() {
-        try {
-            for(let trader of this.baseData) {
-                await this.createTrader(trader);
-            }    
-        } 
-        catch(error) {
-          console.log(error);
         }
     }
 

@@ -50,9 +50,10 @@ let traders = [
         stopLoss: 30
     }
 ]
-const controller = new Controller(traders);
+const controller = new Controller();
 
 app.use(cors());
+app.use(express.json());
 
 app.get('/api', (req, res) => {
     res.status(200).json({
@@ -101,6 +102,25 @@ app.get('/api', (req, res) => {
             }
         }).sort((a, b) => b._profit - a._profit)
     });
+})
+
+app.post('/api', async(req, res) => {
+    try {
+        const {symbol, baseAmountIn, takeProfit, stepSize, stopLoss} = req.body;
+        if(!symbol || !baseAmountIn) return res.status(400).json({success: false, message: "Missing Data!"});
+        await controller.createTrader({
+            symbol,
+            baseAmountIn,
+            takeProfit,
+            stepSize,
+            stopLoss
+        });
+        res.status(200).json({success: true, message: "Trader Created Successfully"});
+    }
+    catch(error) {
+        console.log(error);
+        return res.status(500).json({success: false, message: "Something Went Wrong!"});
+    }
 })
 
 app.listen(port, () => {
