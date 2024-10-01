@@ -70,7 +70,7 @@ app.get('/api', (req, res) => {
                     updatedAt: transaction._createdAt,
                 }))
             }
-        }).sort((a, b) => b._profit - a._profit)
+        }).sort((a, b) => b.profit - a.profit)
     });
 })
 
@@ -91,7 +91,21 @@ app.post('/api', async(req, res) => {
         console.log(error);
         return res.status(500).json({success: false, message: "Something Went Wrong!"});
     }
+});
+
+app.delete('/api/:id', async(req, res) => {
+    try {
+        const traderId = req.params.id;
+        const trader = controller.traders.find(one => JSON.stringify(one._id) === JSON.stringify(traderId));
+        if(trader) await trader.destroy();
+        res.status(200).json({success: true, message: "Trader Destroyed Successfully"});
+    }
+    catch(error) {
+        console.log(error);
+        return res.status(500).json({success: false, message: "Something Went Wrong!"});
+    }
 })
+
 
 app.listen(port, () => {
     console.log(`App is listening on port ${port}`)
