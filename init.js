@@ -3,11 +3,11 @@ require("dotenv").config();
 const cron = require('node-cron');
 const fs = require("fs");
 const { getInfo } = require("./lib/services");
-
 const express = require('express');
 const app = express();
 const cors = require('cors');
 const { Controller } = require("./classes/Controller");
+const jwt = require('jsonwebtoken');
 
 const port = 5000;
 
@@ -25,56 +25,111 @@ const controller = new Controller();
 app.use(cors());
 app.use(express.json());
 
-app.get('/api', (req, res) => {
-    res.status(200).json({
-        profit: controller.profit,
-        traders: controller.traders.map(obj => {
-            return {
-                id: obj.id,
-                _id: obj._id,
-                symbol: obj._symbol,
-                mode: obj._mode,
-                leverage: obj._leverage,
-                currentPrice: obj.ticker.currentPrice,
-                baseAmountIn: obj._baseAmountIn,
-                quoteAmountIn: obj._quoteAmountIn,
-                moneyIn: obj._moneyIn,
-                profit: obj._profit,
-                profitTaken: obj._profitTaken,
-                fee: obj._fee,
-                levels: [{type: "PRICE", price: obj.ticker.currentPrice}, ...obj._levels.map(p => ({type: "LEVEL", price: p}))].sort((a, b) => b.price - a.price),
-                takeProfit: obj._takeProfit,
-                stopLoss: obj._stopLoss,
-                stepSize: obj._stepSize,
-                speed: obj.ticker.avgSpeed,
-                status: obj._status,
-                aim: obj._aim,
-                totalProfit: obj._totalProfit,
-                createdAt: obj._createdAt,
-                updatedAt: obj._updatedAt,
-                transactions: obj.transactions.map(transaction => ({
-                    _id: transaction._id,
-                    side: transaction._side,
-                    price: transaction._price,
-                    orderId: transaction._orderId,
-                    baseAmountIn: transaction._baseAmountIn,
-                    baseAmountOut: transaction._baseAmountOut,
-                    quoteAmountIn: transaction._quoteAmountIn,
-                    quoteAmountOut: transaction._quoteAmountOut,
-                    profit: transaction._profit,
-                    status: transaction._status,
-                    takeProfit: transaction._takeProfit,
-                    stopLoss: transaction._stopLoss,
-                    isProfitable: transaction._isProfitable,
-                    createdAt: transaction._createdAt,
-                    updatedAt: transaction._createdAt,
-                }))
-            }
-        }).sort((a, b) => b.profit - a.profit)
-    });
+const authenticate = async (req, res, next) => {
+    try {
+        console.log(req.headers);
+        if (req.headers && req.headers.authorization) {
+            const token = req.headers.authorization.split(" ")[1];
+            const decodedToken = jwt.verify(
+                token,
+                `${process.env.JWT_SECRET_KEY}`,
+                (err, verifiedJwt) => {
+                  if (err) {
+                    return err.message;
+                  } else {
+                    return verifiedJwt;
+                  }
+                }
+            );
+            if(decodedToken) return next();
+            else throw "Unauthorized!";
+        }
+        else {
+            throw "Unauthorized!";
+        }
+    }   
+    catch(error) {
+        console.log(error);
+        return res.status(401).json({success: false, message: "Unauthorized!"});
+    }
+}
+
+app.post('/api/login', async(req, res) => {
+    try {
+        const validUsername = process.env.USER_NAME,
+        validPassword = process.env.PASSWORD;
+        const {username, password} = req.body;
+
+        if(username === validUsername && password === validPassword) {
+            const token = jwt.sign({ createdAt: new Date() }, process.env.JWT_SECRET_KEY);
+            return res.status(200).json({success: true, message: "Logged In Successfully", token});
+        }
+        else {
+            throw "Unauthorized!";
+        }
+    }
+    catch(error) {
+        console.log(error);
+        return res.status(401).json({success: false, message: "Unauthorized!"});
+    }
+});
+
+app.get('/api', authenticate, (req, res) => {
+    try {
+        return res.status(200).json({
+            profit: controller.profit,
+            traders: controller.traders.map(obj => {
+                return {
+                    id: obj.id,
+                    _id: obj._id,
+                    symbol: obj._symbol,
+                    mode: obj._mode,
+                    leverage: obj._leverage,
+                    currentPrice: obj.ticker.currentPrice,
+                    baseAmountIn: obj._baseAmountIn,
+                    quoteAmountIn: obj._quoteAmountIn,
+                    moneyIn: obj._moneyIn,
+                    profit: obj._profit,
+                    profitTaken: obj._profitTaken,
+                    fee: obj._fee,
+                    levels: [{type: "PRICE", price: obj.ticker.currentPrice}, ...obj._levels.map(p => ({type: "LEVEL", price: p}))].sort((a, b) => b.price - a.price),
+                    takeProfit: obj._takeProfit,
+                    stopLoss: obj._stopLoss,
+                    stepSize: obj._stepSize,
+                    speed: obj.ticker.avgSpeed,
+                    status: obj._status,
+                    aim: obj._aim,
+                    totalProfit: obj._totalProfit,
+                    createdAt: obj._createdAt,
+                    updatedAt: obj._updatedAt,
+                    transactions: obj.transactions.map(transaction => ({
+                        _id: transaction._id,
+                        side: transaction._side,
+                        price: transaction._price,
+                        orderId: transaction._orderId,
+                        baseAmountIn: transaction._baseAmountIn,
+                        baseAmountOut: transaction._baseAmountOut,
+                        quoteAmountIn: transaction._quoteAmountIn,
+                        quoteAmountOut: transaction._quoteAmountOut,
+                        profit: transaction._profit,
+                        status: transaction._status,
+                        takeProfit: transaction._takeProfit,
+                        stopLoss: transaction._stopLoss,
+                        isProfitable: transaction._isProfitable,
+                        createdAt: transaction._createdAt,
+                        updatedAt: transaction._createdAt,
+                    }))
+                }
+            }).sort((a, b) => b.profit - a.profit)
+        });
+    }
+    catch(error) {
+        console.log(error);
+        return res.status(500).json({success: false, message: "Something Went Wrong!"});
+    }
 })
 
-app.post('/api', async(req, res) => {
+app.post('/api', authenticate, async(req, res) => {
     try {
         const {symbol, baseAmountIn, takeProfit, stepSize, stopLoss} = req.body;
         if(!symbol || !baseAmountIn) return res.status(400).json({success: false, message: "Missing Data!"});
@@ -93,7 +148,7 @@ app.post('/api', async(req, res) => {
     }
 });
 
-app.delete('/api/:id', async(req, res) => {
+app.delete('/api/:id', authenticate, async(req, res) => {
     try {
         const traderId = req.params.id;
         const trader = controller.traders.find(one => JSON.stringify(one._id) === JSON.stringify(traderId));
