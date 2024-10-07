@@ -27,7 +27,6 @@ app.use(express.json());
 
 const authenticate = async (req, res, next) => {
     try {
-        console.log(req.headers);
         if (req.headers && req.headers.authorization) {
             const token = req.headers.authorization.split(" ")[1];
             const decodedToken = jwt.verify(
@@ -99,7 +98,10 @@ app.get('/api', authenticate, (req, res) => {
                     speed: obj.ticker.avgSpeed,
                     status: obj._status,
                     aim: obj._aim,
+                    lives: obj._lives,
+                    type: obj._type,
                     totalProfit: obj._totalProfit,
+                    peak: obj._peak,
                     createdAt: obj._createdAt,
                     updatedAt: obj._updatedAt,
                     transactions: obj.transactions.map(transaction => ({
@@ -131,14 +133,19 @@ app.get('/api', authenticate, (req, res) => {
 
 app.post('/api', authenticate, async(req, res) => {
     try {
-        const {symbol, baseAmountIn, takeProfit, stepSize, stopLoss} = req.body;
+        const {symbol, baseAmountIn, takeProfit, stepSize, stopLoss, leverage = 10, aim = 1, lives = 0, type = "IMMORTAL", mode = "TESTING"} = req.body;
         if(!symbol || !baseAmountIn) return res.status(400).json({success: false, message: "Missing Data!"});
         await controller.createTrader({
             symbol,
-            baseAmountIn,
-            takeProfit,
-            stepSize,
-            stopLoss
+            baseAmountIn: Number(baseAmountIn),
+            takeProfit: Number(takeProfit),
+            stepSize: Number(stepSize),
+            stopLoss: Number(stopLoss),
+            leverage: Number(leverage),
+            aim: Number(aim),
+            lives: Number(lives),
+            type,
+            mode
         });
         res.status(200).json({success: true, message: "Trader Created Successfully"});
     }
@@ -152,7 +159,7 @@ app.delete('/api/:id', authenticate, async(req, res) => {
     try {
         const traderId = req.params.id;
         const trader = controller.traders.find(one => JSON.stringify(one._id) === JSON.stringify(traderId));
-        if(trader) await trader.destroy();
+        if(trader) await trader.destroy(true);
         res.status(200).json({success: true, message: "Trader Destroyed Successfully"});
     }
     catch(error) {

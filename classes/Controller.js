@@ -18,13 +18,21 @@ class Controller {
     async createTrader(data) {
         let ticker = this.tickers.find(one => one.symbol === data.symbol);
         if(!ticker) ticker = new Ticker(this, data.symbol);
-        const trader = new Trader(this, data.symbol);
-        trader._symbol = data.symbol;
-        if(data.baseAmountIn) trader._baseAmountIn = data.baseAmountIn;
-        if(data.quoteAmountIn) trader._quoteAmountIn = data.quoteAmountIn;
-        trader._takeProfit = data.takeProfit;
-        trader._stepSize = data.stepSize;
-        trader._stopLoss = data.stopLoss;
+        const traderData = {
+            symbol: data.symbol,
+            takeProfit: data.takeProfit,
+            stepSize: data.stepSize,
+            stopLoss: data.stopLoss,
+            mode: data.mode
+        };
+        if(data.baseAmountIn) traderData["baseAmountIn"] = data.baseAmountIn;
+        if(data.quoteAmountIn) traderData["quoteAmountIn"] = data.quoteAmountIn;
+        if(data.type !== "IMMORTAL" && data.aim > 0 && data.lives > 0) {
+            traderData["type"] = data.type;
+            traderData["aim"] = data.aim;
+            traderData["lives"] = data.lives;
+        }
+        const trader = new Trader(this, traderData);
         await trader.sync();
         return trader;
     }
@@ -48,14 +56,13 @@ class Controller {
     async sync() {
         try {
             const traderIds = await Traders.aggregate([
-                {$match: {status: "ACTIVE"}},
-                {$project: {_id: 1, symbol: 1}}
+                {$match: {status: "ACTIVE"}}
             ]);
 
             for(let obj of traderIds) {
                 let ticker = this.tickers.find(one => one.symbol === obj.symbol);
                 if(!ticker) ticker = new Ticker(this, obj.symbol);
-                const trader = new Trader(this, obj.symbol);
+                const trader = new Trader(this, obj);
                 await trader.fromId(obj._id);
             }
         } 

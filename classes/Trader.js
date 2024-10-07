@@ -5,7 +5,18 @@ const { Traders } = require("../schema/trader.schema");
 const { DB } = require("./DB");
 
 class Trader extends DB {
-    constructor(controller, symbol) {
+    constructor(controller, {
+        symbol,
+        baseAmountIn = 0,
+        quoteAmountIn = 0,
+        takeProfit = 0,
+        stepSize = 0,
+        stopLoss = 0,
+        type = "IMMORTAL",
+        aim = 0,
+        leverage = 10,
+        lives = 0,
+    }) {
         super(Traders);
         this.id = uuidv4();
         this._id = null;
@@ -18,21 +29,24 @@ class Trader extends DB {
         this._moneyIn = 0;
         this._levels = [];
         this.transactions = [];
-        this._baseAmountIn = 0;
-        this._quoteAmountIn = 0;
-        this._aim = 1;
+        this._baseAmountIn = baseAmountIn;
+        this._quoteAmountIn = quoteAmountIn;
+        this._aim = aim;
         this._profit = 0;
         this._totalProfit = 0;
-        this._leverage = 0;
+        this._leverage = leverage;
         this._fee = 0.001;
-        this._stepSize = 200;
-        this._takeProfit = 200;
-        this._stopLoss = 400;
+        this._stepSize = stepSize;
+        this._takeProfit = takeProfit;
+        this._stopLoss = stopLoss;
         this._profitTaken = 0;
         this._maxLevels = 1000;
         this._mode = "TESTING";
         this._status = "ACTIVE";
+        this._type = type;
+        this._lives = lives;
         this.busy = false;
+        this._peak = 0;
         this._createdAt = new Date();
         this._updatedAt = new Date();
     }
@@ -40,7 +54,7 @@ class Trader extends DB {
     async generateLevels() {
         try {
             if(this._levels.length < 1) {
-                this._levels = [...new Set([this.ticker.currentPrice + this._stepSize, this.ticker.currentPrice, this.ticker.currentPrice - this._stepSize].sort((a, b) => b - a))];
+                this._levels = [...new Set([Number(this.ticker.currentPrice) + Number(this._stepSize), Number(this.ticker.currentPrice), Number(this.ticker.currentPrice) - Number(this._stepSize)].sort((a, b) => b - a))];
             }
             else if(this._levels.length < this._maxLevels && this._levels.length > 1) {
                 const highestPrice = this._levels.sort((a, b) => b - a)[0];
@@ -56,6 +70,7 @@ class Trader extends DB {
 
     async sync() {
         try {
+            if(this._status !== "ACTIVE" || this.busy) return;
             await this.dbSync();
             if(this.transactions.length < 1) {
                 const transactions = await Transactions.aggregate([
@@ -145,6 +160,10 @@ class Trader extends DB {
             if(this._mode === "LIVE" && !this._leverage) await this.setLeverage();
             if(this._baseAmountIn === 0 || !this._baseAmountIn) this._baseAmountIn = this._quoteAmountIn / this.ticker.currentPrice;
             if(this._quoteAmountIn === 0 || !this._quoteAmountIn) this._quoteAmountIn = this._baseAmountIn * this.ticker.currentPrice;
+            if(this._profit >= this._aim && this._type === "MORTAL") {
+                await this.destroy();
+                return;
+            }
             await this.controller.tick();
             await this.sync();
             await this.generateLevels();
@@ -196,7 +215,7 @@ class Trader extends DB {
         }
     }
 
-    async destroy() {
+    async destroy(hard = false) {
         try {
             this._status = "STOPPED";
             await this.sync();
@@ -205,6 +224,7 @@ class Trader extends DB {
             }
             this.controller.removeTrader(this);
             this.ticker.removeTrader(this);
+            if(this._type === "MORTAL" && this._lives > 1 && !hard) await this.revive();
         }
         catch(error) {
             console.log(error);
@@ -215,9 +235,16 @@ class Trader extends DB {
         try {
             await this.controller.createTrader({
                 symbol: this._symbol,
+                baseAmountIn: this._baseAmountIn,
+                quoteAmountIn: this._quoteAmountIn,
                 takeProfit: this._takeProfit,
                 stepSize: this._stepSize,
                 stopLoss: this._stopLoss,
+                mode: this._mode,
+                type: this._type,
+                leverage: this._leverage,
+                aim: this._aim,
+                lives: this._lives - 1
             });
         }
         catch(error) {
@@ -235,6 +262,7 @@ class Trader extends DB {
                 }}
             ]).exec();
             this._profit = results && results.length > 0 ? Number(results[0].totalProfit) : 0;
+            if(this._profit > this._peak) this._peak = this._profit;
         }
         catch(error) {
             console.log(error);
