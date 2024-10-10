@@ -62,9 +62,7 @@ class Ticker {
   async tick() {
     try {
       const currentPrice = await this.service.getPrice(this.symbol);
-      //const price = Number(currentPrice.price);
-      const price = this.currentPrice += 0.01;
-      this.avgSpeed = 0.01;
+      const price = Number(currentPrice.price);
       const lastPrice = this.priceMemory.length > 0 ? this.priceMemory[this.priceMemory.length - 1] : null;
       this.priceMemory = [...this.priceMemory, price];
       this.speedMemory = [...this.speedMemory, lastPrice ? lastPrice - price : 0].filter(sp => sp > 0);
