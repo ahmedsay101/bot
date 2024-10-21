@@ -12,6 +12,8 @@ const traderSchema = new mongoose.Schema(
     totalProfit: { type: Number, required: false, default: 0},    
     lives: { type: Number, required: false, default: 0},    
     maxLevels: { type: Number, required: false, default: 5},
+    maxMoneyIn: { type: Number, required: false, default: 0},
+    accumulatedProfit: { type: Number, required: false, default: 0},
     aim: { type: Number, required: false, default: 0},
     profitTaken: { type: Number, required: false, default: 0},
     moneyIn: { type: Number, required: false, default: 0},

@@ -25,6 +25,8 @@ class Controller {
             stopLoss: data.stopLoss,
             mode: data.mode
         };
+        if(data.accumulatedProfit) traderData["accumulatedProfit"] = data.accumulatedProfit;
+        if(data.maxMoneyIn) traderData["maxMoneyIn"] = data.maxMoneyIn;
         if(data.baseAmountIn) traderData["baseAmountIn"] = data.baseAmountIn;
         if(data.quoteAmountIn) traderData["quoteAmountIn"] = data.quoteAmountIn;
         if(data.type !== "IMMORTAL" && data.aim > 0 && data.lives > 0) {

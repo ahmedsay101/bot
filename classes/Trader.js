@@ -16,6 +16,8 @@ class Trader extends DB {
         aim = 0,
         leverage = 10,
         lives = 0,
+        accumulatedProfit = 0,
+        maxMoneyIn = 0
     }) {
         super(Traders);
         this.id = uuidv4();
@@ -47,6 +49,8 @@ class Trader extends DB {
         this._lives = lives;
         this.busy = false;
         this._peak = 0;
+        this._maxMoneyIn = maxMoneyIn;
+        this._accumulatedProfit = accumulatedProfit;
         this._createdAt = new Date();
         this._updatedAt = new Date();
     }
@@ -237,6 +241,8 @@ class Trader extends DB {
                 symbol: this._symbol,
                 baseAmountIn: this._baseAmountIn,
                 quoteAmountIn: this._quoteAmountIn,
+                accumulatedProfit: Number(this._accumulatedProfit) + Number(this._profit),
+                maxMoneyIn: this._maxMoneyIn,
                 takeProfit: this._takeProfit,
                 stepSize: this._stepSize,
                 stopLoss: this._stopLoss,
@@ -312,6 +318,7 @@ class Trader extends DB {
             ]).exec();
             const money = results && results.length > 0 ? Number(results[0].moneyIn) : 0;
             this._moneyIn = Number(money);
+            if(this._moneyIn > this._maxMoneyIn) this._maxMoneyIn = this._moneyIn;
         }
         catch(error) {
             console.log(error);

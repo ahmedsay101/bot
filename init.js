@@ -88,6 +88,8 @@ app.get('/api', authenticate, (req, res) => {
                     baseAmountIn: obj._baseAmountIn,
                     quoteAmountIn: obj._quoteAmountIn,
                     moneyIn: obj._moneyIn,
+                    maxMoneyIn: obj._maxMoneyIn,
+                    accumulatedProfit: obj._accumulatedProfit,
                     profit: obj._profit,
                     profitTaken: obj._profitTaken,
                     fee: obj._fee,
