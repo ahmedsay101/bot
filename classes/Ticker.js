@@ -20,7 +20,7 @@ class Ticker {
 
     this.bidPrice = 0;
     this.askPrice = 0;
-    this.currentPrice = 7;
+    this.currentPrice = 0;
     this.bidPercentage = 0;
     this.askPercentage = 0;
     this.side = 0;

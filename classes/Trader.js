@@ -17,7 +17,9 @@ class Trader extends DB {
         leverage = 10,
         lives = 0,
         accumulatedProfit = 0,
-        maxMoneyIn = 0
+        maxMoneyIn = 0,
+        maxPrice = 0,
+        minPrice = 0
     }) {
         super(Traders);
         this.id = uuidv4();
@@ -43,6 +45,8 @@ class Trader extends DB {
         this._stopLoss = stopLoss;
         this._profitTaken = 0;
         this._maxLevels = 1000;
+        this._maxPrice = maxPrice;
+        this._minPrice = minPrice;
         this._mode = "TESTING";
         this._status = "ACTIVE";
         this._type = type;
@@ -168,6 +172,16 @@ class Trader extends DB {
                 await this.destroy();
                 return;
             }
+            if(this._type === "RANGE") {
+                if(this._maxPrice === 0 && this._minPrice === 0) {
+                    this._maxPrice = Number(this.ticker.currentPrice) + ((Number(this.ticker.currentPrice) / Number(this._leverage)) * 0.95);
+                    this._minPrice = Number(this.ticker.currentPrice) - ((Number(this.ticker.currentPrice) / Number(this._leverage)) * 0.95);
+                }
+                if(this.ticker.currentPrice > this._maxPrice || this.ticker.currentPrice < this._minPrice) {
+                    await this.destroy();
+                    return;
+                }
+            }
             await this.controller.tick();
             await this.sync();
             await this.generateLevels();
@@ -228,7 +242,7 @@ class Trader extends DB {
             }
             this.controller.removeTrader(this);
             this.ticker.removeTrader(this);
-            if(this._type === "MORTAL" && this._lives > 1 && !hard) await this.revive();
+            if(this._type !== "IMMORTAL" && this._lives > 1 && !hard) await this.revive();
         }
         catch(error) {
             console.log(error);

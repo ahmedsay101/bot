@@ -23,17 +23,20 @@ class Controller {
             takeProfit: data.takeProfit,
             stepSize: data.stepSize,
             stopLoss: data.stopLoss,
-            mode: data.mode
+            mode: data.mode,
+            leverage: data.leverage
         };
         if(data.accumulatedProfit) traderData["accumulatedProfit"] = data.accumulatedProfit;
         if(data.maxMoneyIn) traderData["maxMoneyIn"] = data.maxMoneyIn;
         if(data.baseAmountIn) traderData["baseAmountIn"] = data.baseAmountIn;
         if(data.quoteAmountIn) traderData["quoteAmountIn"] = data.quoteAmountIn;
-        if(data.type !== "IMMORTAL" && data.aim > 0 && data.lives > 0) {
+        if(data.maxPrice) traderData["maxPrice"] = data.maxPrice;
+        if(data.minPrice) traderData["minPrice"] = data.minPrice;
+        if(data.type !== "IMMORTAL") {
             traderData["type"] = data.type;
-            traderData["aim"] = data.aim;
             traderData["lives"] = data.lives;
         }
+        if(data.type === "MORTAL") traderData["aim"] = aim;
         const trader = new Trader(this, traderData);
         await trader.sync();
         return trader;
