@@ -34,8 +34,17 @@ class Transaction extends DB {
 
   async order() {
     try {
-      if(!this._side) return false;
+      if(!this._side|| this._mode !== "LIVE") return false;
       if(this._type === "LIMIT" && (!this._price || !this._takeProfit)) return false;
+      const order = await this.service.order({
+        symbol: this._symbol,
+        side: "BUY",
+        positionSide: this._side,
+        type: "LIMIT",
+        price: this._price
+      });
+      this._orderId = order.orderId;
+      await this.sync();
     } 
     catch(error) {
       console.log(error);
@@ -77,6 +86,16 @@ class Transaction extends DB {
   async close() {
     try {
       this._status = "CLOSED";
+      if(this._mode === "LIVE") {
+        await this.service.order({
+          symbol: this._symbol,
+          side: "SELL",
+          positionSide: this._side,
+          type: "STOP_MARKET",
+          closePosition: true,
+          stopPrice: this.ticker.currentPrice
+        });
+      }
       this.trader.removeTransaction(this);
       await this.sync();
     }  

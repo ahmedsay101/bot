@@ -19,7 +19,9 @@ class Trader extends DB {
         accumulatedProfit = 0,
         maxMoneyIn = 0,
         maxPrice = 0,
-        minPrice = 0
+        minPrice = 0,
+        mode = "TESTING",
+        levels = []
     }) {
         super(Traders);
         this.id = uuidv4();
@@ -31,7 +33,7 @@ class Trader extends DB {
         this.ticker = this.controller.tickers.find(one => one.symbol === this._symbol);
         this.ticker.addTrader(this);
         this._moneyIn = 0;
-        this._levels = [];
+        this._levels = levels;
         this.transactions = [];
         this._baseAmountIn = baseAmountIn;
         this._quoteAmountIn = quoteAmountIn;
@@ -47,7 +49,7 @@ class Trader extends DB {
         this._maxLevels = 1000;
         this._maxPrice = maxPrice;
         this._minPrice = minPrice;
-        this._mode = "TESTING";
+        this._mode = mode;
         this._status = "ACTIVE";
         this._type = type;
         this._lives = lives;
@@ -177,7 +179,7 @@ class Trader extends DB {
                     this._maxPrice = Number(this.ticker.currentPrice) + ((Number(this.ticker.currentPrice) / Number(this._leverage)) * 0.95);
                     this._minPrice = Number(this.ticker.currentPrice) - ((Number(this.ticker.currentPrice) / Number(this._leverage)) * 0.95);
                 }
-                if(this.ticker.currentPrice > this._maxPrice || this.ticker.currentPrice < this._minPrice) {
+                if((this.ticker.currentPrice > this._maxPrice || this.ticker.currentPrice < this._minPrice) && this._profit > 0) {
                     await this.destroy();
                     return;
                 }
