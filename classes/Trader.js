@@ -20,6 +20,9 @@ class Trader extends DB {
         maxMoneyIn = 0,
         maxPrice = 0,
         minPrice = 0,
+        coverage = 0,
+        requiredTransactions = 0,
+        requiredBalance = 0,
         mode = "TESTING",
         levels = []
     }) {
@@ -41,7 +44,7 @@ class Trader extends DB {
         this._profit = 0;
         this._totalProfit = 0;
         this._leverage = leverage;
-        this._fee = 0.001;
+        this._fee = 0;
         this._stepSize = stepSize;
         this._takeProfit = takeProfit;
         this._stopLoss = stopLoss;
@@ -49,6 +52,9 @@ class Trader extends DB {
         this._maxLevels = 1000;
         this._maxPrice = maxPrice;
         this._minPrice = minPrice;
+        this._coverage = coverage;
+        this._requiredTransactions = requiredTransactions;
+        this._requiredBalance = requiredBalance;
         this._mode = mode;
         this._status = "ACTIVE";
         this._type = type;
@@ -64,13 +70,23 @@ class Trader extends DB {
     async generateLevels() {
         try {
             if(this._levels.length < 1) {
-                this._levels = [...new Set([Number(this.ticker.currentPrice) + Number(this._stepSize), Number(this.ticker.currentPrice), Number(this.ticker.currentPrice) - Number(this._stepSize)].sort((a, b) => b - a))];
+                this._levels = [...new Set([
+                    this.ticker.getQuoteQuantity(Number(this.ticker.currentPrice) + Number(this._stepSize)), 
+                    this.ticker.getQuoteQuantity(Number(this.ticker.currentPrice)), 
+                    this.ticker.getQuoteQuantity(Number(this.ticker.currentPrice) - Number(this._stepSize))
+                ].sort((a, b) => b - a))];
             }
             else if(this._levels.length < this._maxLevels && this._levels.length > 1) {
                 const highestPrice = this._levels.sort((a, b) => b - a)[0];
                 const lowestPrice = this._levels.sort((a, b) => a - b)[0];
-                if(this.ticker.currentPrice >= highestPrice) this._levels = [...new Set([...this._levels, highestPrice + this._stepSize].sort((a, b) => b - a))]; 
-                else if(this.ticker.currentPrice <= lowestPrice) this._levels = [...new Set([...this._levels, lowestPrice - this._stepSize].sort((a, b) => b - a))];
+                if(this.ticker.currentPrice >= highestPrice) this._levels = [...new Set([
+                    ...this._levels, 
+                    this.ticker.getQuoteQuantity(Number(highestPrice) + Number(this._stepSize))
+                ].sort((a, b) => b - a))]; 
+                else if(this.ticker.currentPrice <= lowestPrice) this._levels = [...new Set([
+                    ...this._levels, 
+                    this.ticker.getQuoteQuantity(Number(lowestPrice) - Number(this._stepSize))
+                ].sort((a, b) => b - a))];
             }
         }
         catch(error) {
@@ -80,7 +96,6 @@ class Trader extends DB {
 
     async sync() {
         try {
-            if(this.busy) return;
             await this.dbSync();
             if(this.transactions.length < 1) {
                 const transactions = await Transactions.aggregate([
@@ -143,12 +158,11 @@ class Trader extends DB {
         }
     }
 
-    async setLeverage(leverage = 1) {
+    async setLeverage() {
         try {
-            if(!this.symbol || this.mode === "TESTING") return;
-            this.leverage = leverage;
-            await this.service.leverage(this.symbol, this.leverage);
-            console.log(`Leverage set for ${this.symbol}: ${this.leverage}`);
+            if(!this._symbol || this._mode !== "LIVE") return;
+            await this.service.leverage(this._symbol, this._leverage);
+            console.log(`Leverage set for ${this._symbol}: ${this._leverage}`);
         }
         catch(error) {
             console.log(error);
@@ -167,18 +181,19 @@ class Trader extends DB {
         try {
             if(!this._id || !this._symbol || !this.ticker || !this.ticker.currentPrice || this._status !== "ACTIVE" || this.busy) return;
             this.hold();
-            if(this._mode === "LIVE" && !this._leverage) await this.setLeverage();
+            if(this._mode === "LIVE" && this.transactions.length < 1) await this.setLeverage();
             if(this._baseAmountIn === 0 || !this._baseAmountIn) this._baseAmountIn = this._quoteAmountIn / this.ticker.currentPrice;
-            if(this._quoteAmountIn === 0 || !this._quoteAmountIn) this._quoteAmountIn = this._baseAmountIn * this.ticker.currentPrice;
+            if(this._quoteAmountIn === 0 || !this._quoteAmountIn) this._quoteAmountIn = this.ticker.getQuoteQuantity(this._baseAmountIn * this.ticker.currentPrice);
             if(this._profit >= this._aim && this._type === "MORTAL") {
                 await this.destroy();
                 return;
             }
             if(this._type === "RANGE") {
-                if(this._maxPrice === 0 && this._minPrice === 0) {
-                    this._maxPrice = Number(this.ticker.currentPrice) + ((Number(this.ticker.currentPrice) / Number(this._leverage)) * 0.95);
-                    this._minPrice = Number(this.ticker.currentPrice) - ((Number(this.ticker.currentPrice) / Number(this._leverage)) * 0.95);
-                }
+                if(this._coverage === 0) this._coverage = Number(this.ticker.currentPrice) / Number(this._leverage);
+                if(this._maxPrice === 0) this._maxPrice = Number(this.ticker.currentPrice) + (this._coverage * 0.95);
+                if(this._minPrice === 0) this._minPrice = Number(this.ticker.currentPrice) - (this._coverage * 0.95);
+                if(this._requiredTransactions === 0) this._requiredTransactions = Math.ceil(this._coverage / Number(this._stepSize));
+                if(this._requiredBalance === 0) this._requiredBalance = (this._requiredTransactions * this._quoteAmountIn) / Number(this._leverage);
                 if((this.ticker.currentPrice > this._maxPrice || this.ticker.currentPrice < this._minPrice) && this._profit > 0) {
                     await this.destroy();
                     return;
@@ -194,7 +209,7 @@ class Trader extends DB {
             await this.calculateProfitTaken();
             await this.calculateMoneyIn();
             this.release();
-            this.log();
+            //this.log();
         }
         catch(error) {
             console.log(error);
@@ -221,11 +236,11 @@ class Trader extends DB {
                     const long = levelTransactions.find(transaction => transaction.side === "LONG") || null;
                     const short = levelTransactions.find(transaction => transaction.side === "SHORT") || null;
 
-                    if(this.ticker.currentPrice > price && !short && Math.abs(this.ticker.currentPrice - price) >= this.ticker.avgSpeed && this.ticker.avgSpeed > 0) {
-                        await this.newTransaction({side: "SHORT", price});
-                    }
-                    else if(this.ticker.currentPrice < price && !long && Math.abs(this.ticker.currentPrice - price) >= this.ticker.avgSpeed && this.ticker.avgSpeed > 0) {
+                    if(this.ticker.currentPrice > price && !long && Math.abs(this.ticker.currentPrice - price) >= this.ticker.avgSpeed && this.ticker.avgSpeed >= 0) {
                         await this.newTransaction({side: "LONG", price});
+                    }
+                    else if(this.ticker.currentPrice < price && !short && Math.abs(this.ticker.currentPrice - price) >= this.ticker.avgSpeed && this.ticker.avgSpeed >= 0) {
+                        await this.newTransaction({side: "SHORT", price});
                     }    
                 }       
             }
@@ -238,13 +253,13 @@ class Trader extends DB {
     async destroy(hard = false) {
         try {
             this._status = "STOPPED";
-            await this.sync();
-            for(let transaction of this.transactions) {
+            await Promise.all(this.transactions.map(async (transaction) => {
                 await transaction.close();
-            }
+            }));
             this.controller.removeTrader(this);
             this.ticker.removeTrader(this);
             if(this._type !== "IMMORTAL" && this._lives > 1 && !hard) await this.revive();
+            await this.sync();
         }
         catch(error) {
             console.log(error);

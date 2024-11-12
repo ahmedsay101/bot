@@ -30,6 +30,7 @@ class API {
             tradeList: "/trades",
             account: "/account",
             order: "/order",
+            batchOrders: "/batchOrders",
             leverage: "/leverage",
             openOrders: "/openOrders",
             allOrders: "/allOrders",
@@ -106,6 +107,7 @@ class API {
             throw(error);
         }
     }
+
     
     async get(url, query = []) {
         try {
@@ -131,7 +133,19 @@ class API {
             throw(error);
         }
     }
-    
+
+    async authenticatedDelete(url, body, query = []) {
+        try {
+            const payload = await this.getPayload(body);
+            const response = await this.instance.delete(url, {data: payload});
+            return response.data;
+        }
+        catch(error) {
+            console.log(error);
+            throw(error);
+        }
+    }
+
     async post(url, body, query = []) {
         try {
             const response = await this.instance.post(url, body);
@@ -241,10 +255,29 @@ class Service extends API {
         }
     }
 
+    async cancelOrder(data) {
+        try {
+            return this.authenticatedDelete(this.urls.order, {symbol: data.symbol, orderId: data.orderId});
+        }
+        catch(error) {
+            throw error;
+        }
+    }
+
+    async cancelOrders(data) {
+        try {
+            return this.authenticatedDelete(this.urls.batchOrders, {symbol: data.symbol, orderIdList: JSON.stringify(data.orderIds)});
+        }
+        catch(error) {
+            throw error;
+        }
+    }
+
     async leverage(symbol, leverage) {
         try {
             const payload = {
-                symbol, leverage
+                symbol, 
+                leverage
             }
             return this.authenticatedPost(this.urls.leverage, payload);
         }
