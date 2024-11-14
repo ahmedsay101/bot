@@ -106,12 +106,28 @@ class Transaction extends DB {
     }
   } 
 
+  async updateTakeProfit() {
+    try {
+      if(this._takeProfitOrderId !== null && this._mode === "LIVE" && this._status !== "CLOSED") {
+        const orderResponse = await this.service.getOrderByOrderId(this._symbol, this._takeProfitOrderId);
+        console.log("TAKE PROFIT ORDER RESPONSE", orderResponse);
+        if(orderResponse?.status === "FILLED" && this._status !== "CLOSED") {
+          await this.close(false);
+        }
+      }
+    } 
+    catch(error) {
+      console.log(error);
+    }
+  } 
+
   async sync() {
     try {
       if(this._mode === "LIVE") {
         if(!this._orderId) await this.order();
         if(!this._takeProfitOrderId && this._takeProfit && this._status === "FILLED") await this.takeProfit();
         if(!this.busy && this._status === "NEW") await this.update();
+        if(!this.busy && this._status !== "CLOSED") await this.updateTakeProfit();
       }
       await this.dbSync();
     } 
