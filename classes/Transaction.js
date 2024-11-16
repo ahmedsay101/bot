@@ -110,6 +110,7 @@ class Transaction extends DB {
     try {
       if(this._takeProfitOrderId !== null && this._mode === "LIVE" && this._status !== "CLOSED") {
         const orderResponse = await this.service.getOrderByOrderId(this._symbol, this._takeProfitOrderId);
+        console.log("TAKEPROFITORDER:::", orderResponse)
         if(orderResponse?.status === "FILLED" && this._status !== "CLOSED") {
           await this.destroy();
         }
