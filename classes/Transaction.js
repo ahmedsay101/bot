@@ -110,7 +110,7 @@ class Transaction extends DB {
     try {
       if(this._takeProfitOrderId !== null && this._mode === "LIVE" && this._status !== "CLOSED") {
         const orderResponse = await this.service.getOrderByOrderId(this._symbol, this._takeProfitOrderId);
-        console.log("TAKEPROFITORDER:::", orderResponse)
+        if(orderResponse?.status !== "NEW") console.log("TAKEPROFITORDER:::", orderResponse)
         if(orderResponse?.status === "FILLED" && this._status !== "CLOSED") {
           await this.destroy();
         }
@@ -138,7 +138,7 @@ class Transaction extends DB {
 
   async close() {
     try {
-      if(this._mode === "LIVE" && this._status !== "CLOSED" && !this.busy && fully) {
+      if(this._mode === "LIVE" && this._status !== "CLOSED" && !this.busy) {
         this.hold();
         if(this._status === "FILLED") await this.service.order({
           symbol: this._symbol,
