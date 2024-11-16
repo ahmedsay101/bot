@@ -111,7 +111,7 @@ class Transaction extends DB {
       if(this._takeProfitOrderId !== null && this._mode === "LIVE" && this._status !== "CLOSED") {
         const orderResponse = await this.service.getOrderByOrderId(this._symbol, this._takeProfitOrderId);
         if(orderResponse?.status === "FILLED" && this._status !== "CLOSED") {
-          await this.close(false);
+          await this.destroy();
         }
       }
     } 
@@ -135,7 +135,7 @@ class Transaction extends DB {
     }
   }
 
-  async close(fully = true) {
+  async close() {
     try {
       if(this._mode === "LIVE" && this._status !== "CLOSED" && !this.busy && fully) {
         this.hold();
@@ -148,11 +148,19 @@ class Transaction extends DB {
         });
         if(this._takeProfitOrderId) await this.service.cancelOrder({symbol: this._symbol, orderId: this._takeProfitOrderId});
         if(this._orderId && this._status === "NEW")  await this.service.cancelOrder({symbol: this._symbol, orderId: this._orderId});
+        this.release();
       }
-      this.hold();
+      await this.destroy();
+    }  
+    catch(error) {
+      console.log(error);
+    }
+  } 
+
+  async destroy() {
+    try {
       this._status = "CLOSED";
       this.trader.removeTransaction(this);
-      this.release();
       await this.sync();
     }  
     catch(error) {
@@ -174,18 +182,18 @@ class Transaction extends DB {
           ||
           (this.position === "LOWER" && this.ticker.currentPrice <= this._price)
         ) this._status = "FILLED";
+
+        if(
+          (this._side === "LONG" && this.ticker.currentPrice >= this._takeProfit && this._takeProfit !== 0 && this._status === "FILLED")
+          ||
+          (this._side === "SHORT" && this.ticker.currentPrice <= this._takeProfit && this._takeProfit !== 0 && this._status === "FILLED")
+          ||
+          (this._side === "SHORT" && this.ticker.currentPrice >= this._stopLoss && this._stopLoss !== 0 && this._status === "FILLED")
+          ||
+          (this._side === "LONG" && this.ticker.currentPrice <= this._stopLoss && this._stopLoss !== 0 && this._status === "FILLED")
+        ) await this.destroy();
       }
 
-      if(
-        (this._side === "LONG" && this.ticker.currentPrice >= this._takeProfit && this._takeProfit !== 0 && this._status === "FILLED")
-        ||
-        (this._side === "SHORT" && this.ticker.currentPrice <= this._takeProfit && this._takeProfit !== 0 && this._status === "FILLED")
-        ||
-        (this._side === "SHORT" && this.ticker.currentPrice >= this._stopLoss && this._stopLoss !== 0 && this._status === "FILLED")
-        ||
-        (this._side === "LONG" && this.ticker.currentPrice <= this._stopLoss && this._stopLoss !== 0 && this._status === "FILLED")
-      ) await this.close(false);
-          
       this._baseAmountIn = this.trader._baseAmountIn;
       this._quoteAmountIn = this._baseAmountIn * this._price;
       this._quoteAmountOut = this._side === "LONG" ? this._baseAmountIn * this.ticker.currentPrice : (this._quoteAmountIn + (this._quoteAmountIn - (this._baseAmountIn * this.ticker.currentPrice)));
