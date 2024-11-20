@@ -21,6 +21,7 @@ class Transaction extends DB {
     this._side = null;
     this._orderId = null;
     this._takeProfitOrderId = null;
+    this._stopLossOrderId = null;
     this._price = null;
     this._takeProfit = 0;
     this._stopLoss = 0;
@@ -88,6 +89,30 @@ class Transaction extends DB {
       console.log(error);
     }
   }
+
+  async stopLoss() {
+    try {
+      if(this.busy) return;
+      this.hold();
+      if(this._stopLoss && !this._stopLossOrderId && this._status === "FILLED") {
+        const stopLossOrder = await this.service.order({
+          symbol: this._symbol,
+          side: this._side === "SHORT" ? "BUY" : "SELL",
+          positionSide: this._side,
+          type: "STOP",
+          price: this.ticker.getQuoteQuantity(this._price),
+          stopPrice: this.ticker.getQuoteQuantity(this._stopLoss),
+          quantity: this.ticker.getBaseQuantity(this._baseAmountIn),
+          timeInForce: "GTC"
+        });
+        if(stopLossOrder && stopLossOrder?.orderId) this._stopLossOrderId = stopLossOrder.orderId;
+      }
+      this.release();
+    } 
+    catch(error) {
+      console.log(error);
+    }
+  }
   
   async update() {
     try {
@@ -121,13 +146,32 @@ class Transaction extends DB {
     }
   } 
 
+  async updateStopLoss() {
+    try {
+      if(this._stopLossOrderId !== null && this._mode === "LIVE" && this._status !== "CLOSED") {
+        const orderResponse = await this.service.getOrderByOrderId(this._symbol, this._stopLossOrderId);
+        if(orderResponse?.status !== "NEW") console.log("STOPLOSSORDER:::", orderResponse)
+        if(orderResponse?.status === "FILLED" && this._status !== "CLOSED") {
+          await this.destroy();
+        }
+      }
+    } 
+    catch(error) {
+      console.log(error);
+    }
+  } 
+
   async sync() {
     try {
       if(this._mode === "LIVE") {
         if(!this._orderId) await this.order();
         if(!this._takeProfitOrderId && this._takeProfit && this._status === "FILLED") await this.takeProfit();
+        if(!this._stopLossOrderId && this._stopLoss && this._status === "FILLED") await this.stopLoss();
         if(!this.busy && this._status === "NEW") await this.update();
-        if(!this.busy && this._status !== "CLOSED") await this.updateTakeProfit();
+        if(!this.busy && this._status !== "CLOSED") {
+          await this.updateTakeProfit();
+          await this.updateStopLoss();
+        } 
       }
       await this.dbSync();
     } 
@@ -183,17 +227,17 @@ class Transaction extends DB {
           ||
           (this.position === "LOWER" && this.ticker.currentPrice <= this._price)
         ) this._status = "FILLED";
-
-        if(
-          (this._side === "LONG" && this.ticker.currentPrice >= this._takeProfit && this._takeProfit !== 0 && this._status === "FILLED")
-          ||
-          (this._side === "SHORT" && this.ticker.currentPrice <= this._takeProfit && this._takeProfit !== 0 && this._status === "FILLED")
-          ||
-          (this._side === "SHORT" && this.ticker.currentPrice >= this._stopLoss && this._stopLoss !== 0 && this._status === "FILLED")
-          ||
-          (this._side === "LONG" && this.ticker.currentPrice <= this._stopLoss && this._stopLoss !== 0 && this._status === "FILLED")
-        ) await this.destroy();
       }
+
+      if(
+        (this._side === "LONG" && Number(this.ticker.currentPrice).toFixed(6) > Number(this._takeProfit).toFixed(6) && this._takeProfit !== 0 && this._status === "FILLED")
+        ||
+        (this._side === "SHORT" && Number(this.ticker.currentPrice).toFixed(6) < Number(this._takeProfit).toFixed(6) && this._takeProfit !== 0 && this._status === "FILLED")
+        ||
+        (this._side === "SHORT" && Number(this.ticker.currentPrice).toFixed(6) > Number(this._stopLoss).toFixed(6) && this._stopLoss !== 0 && this._status === "FILLED")
+        ||
+        (this._side === "LONG" && Number(this.ticker.currentPrice).toFixed(6) < Number(this._stopLoss).toFixed(6) && this._stopLoss !== 0 && this._status === "FILLED")
+      ) await this.destroy();
 
       this._baseAmountIn = this.trader._baseAmountIn;
       this._quoteAmountIn = this._baseAmountIn * this._price;

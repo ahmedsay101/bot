@@ -3,6 +3,7 @@ const { Transactions } = require("../schema/transaction.schema");
 const { Transaction } = require("./Transaction");
 const { Traders } = require("../schema/trader.schema");
 const { DB } = require("./DB");
+const { hoursPassed } = require('../lib/utils');
 
 class Trader extends DB {
     constructor(controller, {
@@ -12,10 +13,11 @@ class Trader extends DB {
         takeProfit = 0,
         stepSize = 0,
         stopLoss = 0,
-        type = "IMMORTAL",
+        type = "UNLIMITED",
         aim = 0,
         leverage = 10,
         lives = 0,
+        hours = 0,
         accumulatedProfit = 0,
         maxMoneyIn = 0,
         maxPrice = 0,
@@ -41,6 +43,7 @@ class Trader extends DB {
         this._baseAmountIn = baseAmountIn;
         this._quoteAmountIn = quoteAmountIn;
         this._aim = aim;
+        this._hours = hours;
         this._profit = 0;
         this._totalProfit = 0;
         this._leverage = leverage;
@@ -177,14 +180,19 @@ class Trader extends DB {
         this.busy = false;
     }
 
+    canTick() {
+        let can = this._id && this._symbol && this.ticker && this.ticker.currentPrice && this._status === "ACTIVE" && !this.busy;
+        return can;
+    }
+
     async tick() {
         try {
-            if(!this._id || !this._symbol || !this.ticker || !this.ticker.currentPrice || this._status !== "ACTIVE" || this.busy) return;
+            if(!this.canTick()) return;
             this.hold();
             if(this._mode === "LIVE" && this.transactions.length < 1) await this.setLeverage();
             if(this._baseAmountIn === 0 || !this._baseAmountIn) this._baseAmountIn = this._quoteAmountIn / this.ticker.currentPrice;
             if(this._quoteAmountIn === 0 || !this._quoteAmountIn) this._quoteAmountIn = this.ticker.getQuoteQuantity(this._baseAmountIn * this.ticker.currentPrice);
-            if(this._profit >= this._aim && this._type === "MORTAL") {
+            if(this._type === "LIMITED" && this._profit >= this._aim) {
                 await this.destroy();
                 return;
             }
@@ -195,6 +203,14 @@ class Trader extends DB {
                 if(this._requiredTransactions === 0) this._requiredTransactions = Math.ceil(this._coverage / Number(this._stepSize));
                 if(this._requiredBalance === 0) this._requiredBalance = (this._requiredTransactions * this._quoteAmountIn) / Number(this._leverage);
                 if((this.ticker.currentPrice > this._maxPrice || this.ticker.currentPrice < this._minPrice) && this._profit > 0) {
+                    await this.destroy();
+                    return;
+                }
+            }
+            if(this._type === "TIMED") {
+                const hours = hoursPassed(this._createdAt);
+                console.log("HOURS", hours);
+                if(Number(hours) > Number(this._hours) && this._profit > 0) {
                     await this.destroy();
                     return;
                 }
@@ -258,7 +274,7 @@ class Trader extends DB {
             }));
             this.controller.removeTrader(this);
             this.ticker.removeTrader(this);
-            if(this._type !== "IMMORTAL" && this._lives > 1 && !hard) await this.revive();
+            if(this._type !== "UNLIMITED" && this._lives > 1 && !hard) await this.revive();
             await this.sync();
         }
         catch(error) {

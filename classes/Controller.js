@@ -33,11 +33,12 @@ class Controller {
         if(data.quoteAmountIn) traderData["quoteAmountIn"] = data.quoteAmountIn;
         if(data.maxPrice) traderData["maxPrice"] = data.maxPrice;
         if(data.minPrice) traderData["minPrice"] = data.minPrice;
-        if(data.type !== "IMMORTAL") {
+        if(data.type !== "UNLIMITED") {
             traderData["type"] = data.type;
             traderData["lives"] = data.lives;
         }
-        if(data.type === "MORTAL") traderData["aim"] = aim;
+        if(data.type === "LIMITED") traderData["aim"] = data.aim;
+        if(data.type === "TIMED" || data.type === "TIMEDAVERAGE") traderData["hours"] = data.hours;
         const trader = new Trader(this, traderData);
         await trader.sync();
         return trader;

@@ -140,7 +140,7 @@ app.get('/api', authenticate, (req, res) => {
 
 app.post('/api', authenticate, async(req, res) => {
     try {
-        const {symbol, baseAmountIn, takeProfit, stepSize, stopLoss, leverage = 10, aim = 1, lives = 0, type = "IMMORTAL", mode = "TESTING"} = req.body;
+        const {symbol, baseAmountIn, takeProfit, stepSize, stopLoss, leverage = 10, aim = 1, lives = 0, hours = 0, type = "UNLIMITED", mode = "TESTING"} = req.body;
         if(!symbol || !baseAmountIn) return res.status(400).json({success: false, message: "Missing Data!"});
         const data = {
             symbol,
@@ -152,8 +152,9 @@ app.post('/api', authenticate, async(req, res) => {
             type,
             mode
         }
-        if(type === "MORTAL") data["aim"] = aim;
-        if(type !== "IMMORTAL") data["lives"] = lives;
+        if(type === "LIMITED") data["aim"] = aim;
+        if(type !== "UNLIMITED") data["lives"] = lives;
+        if(type === "TIMED") data["hours"] = hours;
         await controller.createTrader(data);
         res.status(200).json({success: true, message: "Trader Created Successfully"});
     }
