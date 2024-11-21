@@ -168,10 +168,18 @@ class Transaction extends DB {
         if(!this._takeProfitOrderId && this._takeProfit && this._status === "FILLED") await this.takeProfit();
         if(!this._stopLossOrderId && this._stopLoss && this._status === "FILLED") await this.stopLoss();
         if(!this.busy && this._status === "NEW") await this.update();
-        if(!this.busy && this._status !== "CLOSED") {
+        if(
+          !this.busy 
+          && this._status !== "CLOSED" 
+          && (this.ticker.currentPrice <= this._takeProfit + this.trader._stepSize && this.ticker.currentPrice >= this._takeProfit - this.trader._stepSize)) {
           await this.updateTakeProfit();
+        }
+          if(
+          !this.busy 
+          && this._status !== "CLOSED" 
+          && (this.ticker.currentPrice <= this._stopLoss + this.trader._stepSize && this.ticker.currentPrice >= this._stopLoss - this.trader._stepSize)) {
           await this.updateStopLoss();
-        } 
+        }
       }
       await this.dbSync();
     } 
