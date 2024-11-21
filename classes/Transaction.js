@@ -228,17 +228,17 @@ class Transaction extends DB {
           ||
           (this.position === "LOWER" && this.ticker.currentPrice <= this._price)
         ) this._status = "FILLED";
-      }
 
-      if(
-        (this._side === "LONG" && Number(this.ticker.currentPrice).toFixed(6) >= Number(this._takeProfit).toFixed(6) && this._takeProfit !== 0 && this._status === "FILLED")
-        ||
-        (this._side === "SHORT" && Number(this.ticker.currentPrice).toFixed(6) <= Number(this._takeProfit).toFixed(6) && this._takeProfit !== 0 && this._status === "FILLED")
-        ||
-        (this._side === "SHORT" && Number(this.ticker.currentPrice).toFixed(6) >= Number(this._stopLoss).toFixed(6) && this._stopLoss !== 0 && this._status === "FILLED")
-        ||
-        (this._side === "LONG" && Number(this.ticker.currentPrice).toFixed(6) <= Number(this._stopLoss).toFixed(6) && this._stopLoss !== 0 && this._status === "FILLED")
-      ) await this.destroy();
+        if(
+          (this._side === "LONG" && this.ticker.currentPrice >= this._takeProfit && this._takeProfit !== 0 && this._status === "FILLED")
+          ||
+          (this._side === "SHORT" && this.ticker.currentPrice <= this._takeProfit && this._takeProfit !== 0 && this._status === "FILLED")
+          ||
+          (this._side === "SHORT" && this.ticker.currentPrice >= this._stopLoss && this._stopLoss !== 0 && this._status === "FILLED")
+          ||
+          (this._side === "LONG" && this.ticker.currentPrice <= this._stopLoss && this._stopLoss !== 0 && this._status === "FILLED")
+        ) await this.destroy();
+      }
 
       this._baseAmountIn = this.trader._baseAmountIn;
       this._quoteAmountIn = this._baseAmountIn * this._price;
