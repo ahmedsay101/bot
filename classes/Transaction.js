@@ -192,6 +192,7 @@ class Transaction extends DB {
           quantity: this.ticker.getBaseQuantity(this._baseAmountIn),
         });
         if(this._takeProfitOrderId) await this.service.cancelOrder({symbol: this._symbol, orderId: this._takeProfitOrderId});
+        if(this._stopLossOrderId) await this.service.cancelOrder({symbol: this._symbol, orderId: this._stopLossOrderId});
         if(this._orderId && this._status === "NEW")  await this.service.cancelOrder({symbol: this._symbol, orderId: this._orderId});
         this.release();
       }
@@ -230,13 +231,13 @@ class Transaction extends DB {
       }
 
       if(
-        (this._side === "LONG" && Number(this.ticker.currentPrice).toFixed(6) > Number(this._takeProfit).toFixed(6) && this._takeProfit !== 0 && this._status === "FILLED")
+        (this._side === "LONG" && Number(this.ticker.currentPrice).toFixed(6) >= Number(this._takeProfit).toFixed(6) && this._takeProfit !== 0 && this._status === "FILLED")
         ||
-        (this._side === "SHORT" && Number(this.ticker.currentPrice).toFixed(6) < Number(this._takeProfit).toFixed(6) && this._takeProfit !== 0 && this._status === "FILLED")
+        (this._side === "SHORT" && Number(this.ticker.currentPrice).toFixed(6) <= Number(this._takeProfit).toFixed(6) && this._takeProfit !== 0 && this._status === "FILLED")
         ||
-        (this._side === "SHORT" && Number(this.ticker.currentPrice).toFixed(6) > Number(this._stopLoss).toFixed(6) && this._stopLoss !== 0 && this._status === "FILLED")
+        (this._side === "SHORT" && Number(this.ticker.currentPrice).toFixed(6) >= Number(this._stopLoss).toFixed(6) && this._stopLoss !== 0 && this._status === "FILLED")
         ||
-        (this._side === "LONG" && Number(this.ticker.currentPrice).toFixed(6) < Number(this._stopLoss).toFixed(6) && this._stopLoss !== 0 && this._status === "FILLED")
+        (this._side === "LONG" && Number(this.ticker.currentPrice).toFixed(6) <= Number(this._stopLoss).toFixed(6) && this._stopLoss !== 0 && this._status === "FILLED")
       ) await this.destroy();
 
       this._baseAmountIn = this.trader._baseAmountIn;
