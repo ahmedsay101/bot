@@ -75,11 +75,13 @@ class Transaction extends DB {
           symbol: this._symbol,
           side: this._side === "SHORT" ? "BUY" : "SELL",
           positionSide: this._side,
-          type: "TAKE_PROFIT",
-          price: this.ticker.getQuoteQuantity(this._price),
+          type: "TAKE_PROFIT_MARKET",
+          //price: this.ticker.getQuoteQuantity(this._price),
           stopPrice: this.ticker.getQuoteQuantity(this._takeProfit),
           quantity: this.ticker.getBaseQuantity(this._baseAmountIn),
-          timeInForce: "GTC"
+          timeInForce: "GTC",
+          workingType: "MARK_PRICE",
+          priceProtect: true,
         });
         if(takeProfitOrder && takeProfitOrder?.orderId) this._takeProfitOrderId = takeProfitOrder.orderId;
       }
@@ -99,11 +101,13 @@ class Transaction extends DB {
           symbol: this._symbol,
           side: this._side === "SHORT" ? "BUY" : "SELL",
           positionSide: this._side,
-          type: "STOP",
-          price: this.ticker.getQuoteQuantity(this._price),
+          type: "STOP_MARKET",
+          //price: this.ticker.getQuoteQuantity(this._price),
           stopPrice: this.ticker.getQuoteQuantity(this._stopLoss),
           quantity: this.ticker.getBaseQuantity(this._baseAmountIn),
-          timeInForce: "GTC"
+          timeInForce: "GTC",
+          workingType: "MARK_PRICE",
+          priceProtect: true,
         });
         if(stopLossOrder && stopLossOrder?.orderId) this._stopLossOrderId = stopLossOrder.orderId;
       }
@@ -165,10 +169,10 @@ class Transaction extends DB {
     try {
       if(this._mode === "LIVE") {
         if(!this._orderId) await this.order();
-        if(!this._takeProfitOrderId && this._takeProfit && this._status === "FILLED") await this.takeProfit();
-        if(!this._stopLossOrderId && this._stopLoss && this._status === "FILLED") await this.stopLoss();
         if(!this.busy && this._status === "NEW") await this.update();
-        if(
+        //if(!this._takeProfitOrderId && this._takeProfit && this._status === "FILLED") await this.takeProfit();
+        //if(!this._stopLossOrderId && this._stopLoss && this._status === "FILLED") await this.stopLoss();
+        /*if(
           !this.busy 
           && this._status !== "CLOSED" 
           && (this.ticker.currentPrice <= this._takeProfit + this.trader._stepSize && this.ticker.currentPrice >= this._takeProfit - this.trader._stepSize)) {
@@ -179,7 +183,7 @@ class Transaction extends DB {
           && this._status !== "CLOSED" 
           && (this.ticker.currentPrice <= this._stopLoss + this.trader._stepSize && this.ticker.currentPrice >= this._stopLoss - this.trader._stepSize)) {
           await this.updateStopLoss();
-        }
+        }*/
       }
       await this.dbSync();
     } 
@@ -236,17 +240,22 @@ class Transaction extends DB {
           ||
           (this.position === "LOWER" && this.ticker.currentPrice <= this._price)
         ) this._status = "FILLED";
-
-        if(
-          (this._side === "LONG" && this.ticker.currentPrice >= this._takeProfit && this._takeProfit !== 0 && this._status === "FILLED")
-          ||
-          (this._side === "SHORT" && this.ticker.currentPrice <= this._takeProfit && this._takeProfit !== 0 && this._status === "FILLED")
-          ||
-          (this._side === "SHORT" && this.ticker.currentPrice >= this._stopLoss && this._stopLoss !== 0 && this._status === "FILLED")
-          ||
-          (this._side === "LONG" && this.ticker.currentPrice <= this._stopLoss && this._stopLoss !== 0 && this._status === "FILLED")
-        ) await this.destroy();
       }
+
+      console.log(`------------------------------${this._side} ${this._price}--------------------------------`);
+      console.log("CURRENT PRICE", this.ticker.currentPrice);
+      console.log("TAKEPROFIT", this.ticker._takeProfit);
+      console.log("STOPLOSS", this.ticker._stopLoss);
+
+      if(
+        (this._side === "LONG" && this.ticker.currentPrice >= this._takeProfit && this._takeProfit !== 0 && this._status === "FILLED")
+        ||
+        (this._side === "SHORT" && this.ticker.currentPrice <= this._takeProfit && this._takeProfit !== 0 && this._status === "FILLED")
+        ||
+        (this._side === "SHORT" && this.ticker.currentPrice >= this._stopLoss && this._stopLoss !== 0 && this._status === "FILLED")
+        ||
+        (this._side === "LONG" && this.ticker.currentPrice <= this._stopLoss && this._stopLoss !== 0 && this._status === "FILLED")
+      ) await this.close();
 
       this._baseAmountIn = this.trader._baseAmountIn;
       this._quoteAmountIn = this._baseAmountIn * this._price;
