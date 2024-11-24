@@ -256,7 +256,7 @@ class Transaction extends DB {
       this._quoteAmountOut = this._side === "LONG" ? this._baseAmountIn * this.ticker.currentPrice : (this._quoteAmountIn + (this._quoteAmountIn - (this._baseAmountIn * this.ticker.currentPrice)));
       this._baseAmountOut = this.ticker.getBaseQuantity(this._quoteAmountOut / this.ticker.currentPrice);
       this._closingPrice = this.ticker.currentPrice;
-      this._profit = this._status === "FILLED" ? (this._quoteAmountOut - this._quoteAmountIn) - (this._quoteAmountIn * this.trader._fee) : 0;
+      this._profit = this._status === "FILLED" ? (this._quoteAmountOut - this._quoteAmountIn) - (this._quoteAmountIn * this.trader._fee) : this._profit > 0 ? this._profit : 0;
       this._isProfitable = this._profit > 0;
       this._expectedAmountOut = this._side === "LONG" ? this._baseAmountIn * this._takeProfit : (this._quoteAmountIn + (this._quoteAmountIn - (this._baseAmountIn * this._takeProfit)));
       this._expectedProfit = (this._expectedAmountOut - this._quoteAmountIn) - (this._quoteAmountIn * this.trader._fee);
