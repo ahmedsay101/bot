@@ -194,13 +194,16 @@ class Transaction extends DB {
     try {
       if(this._mode === "LIVE" && this._status !== "CLOSED" && !this.busy) {
         this.hold();
-        if(this._status === "FILLED") await this.service.order({
-          symbol: this._symbol,
-          side: this._side === "LONG" ? "SELL" : "BUY",
-          positionSide: this._side,
-          type: "MARKET",
-          quantity: this.ticker.getBaseQuantity(this._baseAmountIn),
-        });
+        if(this._status === "FILLED") {
+          const closeOrder = await this.service.order({
+            symbol: this._symbol,
+            side: this._side === "LONG" ? "SELL" : "BUY",
+            positionSide: this._side,
+            type: "MARKET",
+            quantity: this.ticker.getBaseQuantity(this._baseAmountIn),
+            recvWindow: '10000'
+          });
+        }
         if(this._takeProfitOrderId) await this.service.cancelOrder({symbol: this._symbol, orderId: this._takeProfitOrderId});
         if(this._stopLossOrderId) await this.service.cancelOrder({symbol: this._symbol, orderId: this._stopLossOrderId});
         if(this._orderId && this._status === "NEW")  await this.service.cancelOrder({symbol: this._symbol, orderId: this._orderId});
