@@ -210,6 +210,7 @@ class Transaction extends DB {
     }  
     catch(error) {
       console.log(error);
+      this.release();
     }
   } 
 
