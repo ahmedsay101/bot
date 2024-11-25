@@ -54,7 +54,8 @@ class Transaction extends DB {
         type: "LIMIT",
         price: this.ticker.getQuoteQuantity(this._price),
         quantity: this.ticker.getBaseQuantity(this._baseAmountIn),
-        timeInForce: "GTC"
+        timeInForce: "GTC",
+        priceMatch: true
       });
       if(order && order?.orderId) this._orderId = order.orderId;
       this.release();
