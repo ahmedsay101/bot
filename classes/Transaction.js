@@ -117,7 +117,7 @@ class Transaction extends DB {
       if(this._orderId !== null && this._mode === "LIVE" && this._status !== "CLOSED") {
         const orderResponse = await this.service.getOrderByOrderId(this._symbol, this._orderId);
         if(orderResponse) {
-          this._status = orderResponse.status;
+          this._status = orderResponse?.status === "NEW" || orderResponse?.status === "FILLED" ? orderResponse?.status : "CLOSED";
           this._baseAmountIn = Number(orderResponse.executedQty) ? Number(orderResponse.executedQty) : Number(orderResponse.origQty);
           this._quoteAmountIn = Number(orderResponse.cumQuote) ? Number(orderResponse.cumQuote) : Number(this._quoteAmountIn);
           this._price = Number(orderResponse.price) ? Number(orderResponse.price) : Number(this._price);
@@ -159,12 +159,16 @@ class Transaction extends DB {
   async cancel() {
     try {
       if(this._mode === "LIVE" && this._status === "NEW" && !this.busy && this._orderId) {
+        this.hold();
         await this.service.cancelOrder({symbol: this._symbol, orderId: this._orderId});
         this._orderId = null;
+        await this.destroy();
+        this.release();
       }
     }  
     catch(error) {
       console.log(error);
+      this.release();
     }
   } 
 
