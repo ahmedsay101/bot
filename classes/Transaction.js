@@ -136,6 +136,7 @@ class Transaction extends DB {
   async sync() {
     try {
       if(this._mode === "LIVE") {
+        if(!this.busy && this._status === "NEW") await this.update();
         if(
           !this._orderId 
           && (
@@ -151,7 +152,6 @@ class Transaction extends DB {
             || (this._side === "SHORT" && this.ticker.getQuoteQuantity(this.ticker.currentPrice) < this.ticker.getQuoteQuantity(Number(this._price) - (Number(this.trader._stepSize) * 2)))
           )
         ) await this.cancel();
-        if(!this.busy && this._status === "NEW") await this.update();
       }
       await this.dbSync();
     } 
