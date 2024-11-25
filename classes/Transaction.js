@@ -123,6 +123,9 @@ class Transaction extends DB {
           this._price = Number(orderResponse.price) ? Number(orderResponse.price) : Number(this._price);
         }
       }
+      if(this._status === "CLOSED") {
+        await this.destroy();
+      }
     } 
     catch(error) {
       console.log(error);
