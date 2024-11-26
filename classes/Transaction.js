@@ -115,7 +115,7 @@ class Transaction extends DB {
   
   async update() {
     try {
-      if(this._orderId !== null && this._mode === "LIVE" && this._status !== "CLOSED") {
+      if(this._orderId !== null && this._mode === "LIVE" && this._status !== "CLOSED" && !this.busy) {
         const orderResponse = await this.service.getOrderByOrderId(this._symbol, this._orderId);
         if(orderResponse) {
           if(orderResponse?.status === "NEW" || orderResponse?.status === "FILLED") this._status = orderResponse?.status;
@@ -177,8 +177,8 @@ class Transaction extends DB {
 
   async close() {
     try {
+      this.hold();
       if(this._mode === "LIVE" && this._status !== "CLOSED" && !this.busy) {
-        this.hold();
         if(this._status === "FILLED") {
           const closeOrder = await this.service.order({
             symbol: this._symbol,
@@ -190,9 +190,9 @@ class Transaction extends DB {
           });
         }
         if(this._orderId && this._status === "NEW") await this.cancel();
-        this.release();
       }
       await this.destroy();
+      this.release();
     }  
     catch(error) {
       console.log(error);
