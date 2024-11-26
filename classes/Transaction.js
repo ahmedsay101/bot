@@ -117,14 +117,15 @@ class Transaction extends DB {
       if(this._orderId !== null && this._mode === "LIVE" && this._status !== "CLOSED") {
         const orderResponse = await this.service.getOrderByOrderId(this._symbol, this._orderId);
         if(orderResponse) {
-          this._status = orderResponse?.status === "NEW" || orderResponse?.status === "FILLED" ? orderResponse?.status : "CLOSED";
+          if(orderResponse?.status === "NEW" || orderResponse?.status === "FILLED") this._status = orderResponse?.status;
+          if(orderResponse?.status === "CANCELED") {
+            this._orderId = null;
+            return;
+          }
           this._baseAmountIn = Number(orderResponse.executedQty) ? Number(orderResponse.executedQty) : Number(orderResponse.origQty);
           this._quoteAmountIn = Number(orderResponse.cumQuote) ? Number(orderResponse.cumQuote) : Number(this._quoteAmountIn);
           this._price = Number(orderResponse.price) ? Number(orderResponse.price) : Number(this._price);
         }
-      }
-      if(this._status === "CLOSED") {
-        await this.destroy();
       }
     } 
     catch(error) {
@@ -164,7 +165,6 @@ class Transaction extends DB {
       if(this._mode === "LIVE" && this._status === "NEW" && !this.busy && this._orderId) {
         this.hold();
         await this.service.cancelOrder({symbol: this._symbol, orderId: this._orderId});
-        this._orderId = null;
         this.release();
       }
     }  
