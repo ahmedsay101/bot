@@ -177,8 +177,8 @@ class Transaction extends DB {
 
   async close() {
     try {
-      this.hold();
       if(this._mode === "LIVE" && this._status !== "CLOSED" && !this.busy) {
+        this.hold();
         if(this._status === "FILLED") {
           const closeOrder = await this.service.order({
             symbol: this._symbol,
@@ -191,8 +191,8 @@ class Transaction extends DB {
         }
         if(this._orderId && this._status === "NEW") await this.cancel();
       }
-      await this.destroy();
       this.release();
+      await this.destroy();
     }  
     catch(error) {
       console.log(error);
