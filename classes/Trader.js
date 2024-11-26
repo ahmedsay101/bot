@@ -68,6 +68,7 @@ class Trader extends DB {
         this._accumulatedProfit = accumulatedProfit;
         this._createdAt = new Date();
         this._updatedAt = new Date();
+        this.overwrite = [];
     }
 
     async generateLevels() {

@@ -32,6 +32,7 @@ class Transaction extends DB {
     this.busy = false;
     this._createdAt = new Date();
     this._updatedAt = new Date();
+    this.overwrite = ["orderId"];
   }
 
   hold() {

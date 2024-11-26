@@ -33,6 +33,7 @@ class DB {
                 const property = this[name];
                 if(property && property !== "" && property !== null) isValid = true;
                 if(Array.isArray(property) && property.length < 1) isValid = false;
+                if(this.overwrite.includes(name.replace(/_/g, ""))) isValid = true;
                 if(isValid) data[name.replace(/_/g, "")] = property;
             }  
 
@@ -54,6 +55,15 @@ class DB {
                 }
                 this.updatedAt = new Date();
             }
+        }
+        catch(error) {
+            console.log(error);
+        }
+    }
+
+    async forceUpdate(data) {
+        try {
+            await this.collection.findByIdAndUpdate(this._id, data);
         }
         catch(error) {
             console.log(error);
