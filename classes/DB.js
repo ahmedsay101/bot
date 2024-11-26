@@ -53,7 +53,7 @@ class DB {
                 for(let property of namesToUpdate) {
                     this[`_${property}`] = (typeof results[property] === "number") ? Number(results[property]) : results[property];
                 }
-                this.updatedAt = new Date();
+                this._updatedAt = new Date();
             }
         }
         catch(error) {

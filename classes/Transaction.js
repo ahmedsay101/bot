@@ -163,7 +163,7 @@ class Transaction extends DB {
 
   async cancel() {
     try {
-      if(this._mode === "LIVE" && this._status === "NEW" && !this.busy && this._orderId) {
+      if(this._mode === "LIVE" && this._status === "NEW" && this._orderId) {
         this.hold();
         await this.service.cancelOrder({symbol: this._symbol, orderId: this._orderId});
         this.release();
