@@ -166,7 +166,6 @@ class Transaction extends DB {
         this.hold();
         await this.service.cancelOrder({symbol: this._symbol, orderId: this._orderId});
         this._orderId = null;
-        await this.destroy();
         this.release();
       }
     }  
