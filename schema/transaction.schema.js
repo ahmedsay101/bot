@@ -20,6 +20,7 @@ const transactionSchema = new mongoose.Schema(
     status: { type: String, enum: ["NEW", "FILLED", "CLOSED"], default: "NEW"},
     type: { type: String, enum: ["LIMIT", "MARKET"], default: "MARKET"},
     mode: { type: String, enum: ["TESTING", "LIVE"], default: "TESTING"},
+    position: { type: String, enum: ["HIGHER", "LOWER"], required: false },
     isProfitable: { type: Boolean, required: false, default: false },
     closedAt: { type: Date, default: Date.now },
   },

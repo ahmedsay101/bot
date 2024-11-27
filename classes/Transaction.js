@@ -27,8 +27,8 @@ class Transaction extends DB {
     this._profit = 0;
     this._profitable = false;
     this._status = null;
-    this._type = "LIMIT";
-    this.position = null;
+    this._type = "MARKET";
+    this._position = null;
     this.busy = false;
     this._createdAt = new Date();
     this._updatedAt = new Date();
@@ -48,15 +48,19 @@ class Transaction extends DB {
       if(!this._side || this._mode !== "LIVE" || this.busy || this._orderId !== null || !this._takeProfit) return false;
       if(this._type === "LIMIT" && (!this._price || !this._takeProfit)) return false;
       this.hold();
-      const order = await this.service.order({
+      const orderObj = {
         symbol: this._symbol,
         side: this._side === "LONG" ? "BUY" : "SELL",
         positionSide: this._side,
-        type: "LIMIT",
-        price: this.ticker.getQuoteQuantity(this._price),
+        type: this._type,
         quantity: this.ticker.getBaseQuantity(this._baseAmountIn),
-        timeInForce: "GTC",
-      });
+      }
+      if(this._type === "LIMIT") {
+        orderObj["price"] = this.ticker.getQuoteQuantity(this._price);
+        orderObj["timeInForce"] = "GTC";
+      }
+      const order = await this.service.order(orderObj);
+      console.log("ORDER", order);
       if(order && order?.orderId) this._orderId = order.orderId;
       this.release();
     } 
@@ -138,7 +142,7 @@ class Transaction extends DB {
     try {
       if(this._mode === "LIVE") {
         if(!this.busy && this._status === "NEW") await this.update();
-        if(
+        /*if(
           !this._orderId 
           && (
             (this._side === "LONG" && this.ticker.getQuoteQuantity(this.ticker.currentPrice) <= this.ticker.getQuoteQuantity(Number(this._price) + (Number(this.trader._stepSize) * 2)))
@@ -152,7 +156,7 @@ class Transaction extends DB {
             (this._side === "LONG" && this.ticker.getQuoteQuantity(this.ticker.currentPrice) > this.ticker.getQuoteQuantity(Number(this._price) + (Number(this.trader._stepSize) * 2)))
             || (this._side === "SHORT" && this.ticker.getQuoteQuantity(this.ticker.currentPrice) < this.ticker.getQuoteQuantity(Number(this._price) - (Number(this.trader._stepSize) * 2)))
           )
-        ) await this.cancel();
+        ) await this.cancel();*/
       }
       await this.dbSync();
     } 
@@ -215,18 +219,21 @@ class Transaction extends DB {
     try {
       if(!this._price && this._type === "MARKET") this._price = this.ticker.currentPrice;
       if(!this._price || !this._baseAmountIn || !this.ticker.currentPrice || this._status === "CLOSED") return;
-      if(this.position === null) this.position = this.ticker.currentPrice > this._price ? "LOWER" : "HIGHER";
+      if(this._position === null) this._position = this.ticker.currentPrice > this._price ? "LOWER" : "HIGHER";
       this._takeProfit = this._side === "LONG" ? this._price + this.trader._takeProfit : this._price  - this.trader._takeProfit;
       this._stopLoss = this._side === "LONG" ? this._price - (this.trader._stopLoss > 0 ? this.trader._stopLoss : ((this._price / this.trader._leverage) * 0.9)) : this._price + (this.trader._stopLoss > 0 ? this.trader._stopLoss : ((this._price / this.trader._leverage) * 0.9));
 
-      if(this._mode === "TESTING" && this._status !== "CLOSED") {
-        if(
-          (this.position === "HIGHER" && this.ticker.currentPrice >= this._price)
-          ||
-          (this.position === "LOWER" && this.ticker.currentPrice <= this._price)
-        ) this._status = "FILLED";
+      if(
+        this._status === "NEW"
+        &&
+        ((this._position === "HIGHER" && this.ticker.currentPrice >= this._price)
+        ||
+        (this._position === "LOWER" && this.ticker.currentPrice <= this._price))
+      ) {
+        if(this._mode === "LIVE") await this.order();
+        else if(this._mode === "TESTING") this._status = "FILLED";
       }
-
+      
       if(
         (this._side === "LONG" && this.ticker.getQuoteQuantity(this.ticker.currentPrice) >= this.ticker.getQuoteQuantity(this._takeProfit) && this.ticker.getQuoteQuantity(this._takeProfit) !== 0 && this._status === "FILLED")
         ||
