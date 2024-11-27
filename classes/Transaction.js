@@ -219,8 +219,6 @@ class Transaction extends DB {
       this._takeProfit = this._side === "LONG" ? this._price + this.trader._takeProfit : this._price  - this.trader._takeProfit;
       this._stopLoss = this._side === "LONG" ? this._price - (this.trader._stopLoss > 0 ? this.trader._stopLoss : ((this._price / this.trader._leverage) * 0.9)) : this._price + (this.trader._stopLoss > 0 ? this.trader._stopLoss : ((this._price / this.trader._leverage) * 0.9));
 
-      console.log("STOP LOSS:::::", this._stopLoss);
-
       if(this._mode === "TESTING" && this._status !== "CLOSED") {
         if(
           (this.position === "HIGHER" && this.ticker.currentPrice >= this._price)
