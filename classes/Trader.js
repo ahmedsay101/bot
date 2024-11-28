@@ -264,6 +264,8 @@ class Trader extends DB {
                         }
                     }
                     else {
+                        if(this.transactions.length === 0) await this.newTransaction({side: "LONG", price});
+
                         if(this.ticker.currentPrice <= (Number(price) - Number(this._stepSize)) && !long) {
                             await this.newTransaction({side: "LONG", price});
                         }
