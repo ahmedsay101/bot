@@ -25,7 +25,9 @@ class Controller {
             stopLoss: data.stopLoss,
             mode: data.mode,
             leverage: data.leverage,
-            levels: data.levels
+            levels: data.levels,
+            type: data.type,
+            direction: data.direction
         };
         if(data.accumulatedProfit) traderData["accumulatedProfit"] = data.accumulatedProfit;
         if(data.maxMoneyIn) traderData["maxMoneyIn"] = data.maxMoneyIn;

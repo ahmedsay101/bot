@@ -104,6 +104,7 @@ app.get('/api', authenticate, (req, res) => {
                     stepSize: obj._stepSize,
                     speed: obj.ticker.avgSpeed,
                     status: obj._status,
+                    status: obj._direction,
                     aim: obj._aim,
                     lives: obj._lives,
                     type: obj._type,
@@ -140,7 +141,7 @@ app.get('/api', authenticate, (req, res) => {
 
 app.post('/api', authenticate, async(req, res) => {
     try {
-        const {symbol, baseAmountIn, takeProfit, stepSize, stopLoss, leverage = 10, aim = 1, lives = 0, hours = 0, type = "UNLIMITED", mode = "TESTING"} = req.body;
+        const {symbol, baseAmountIn, takeProfit, stepSize, stopLoss, leverage = 10, aim = 1, lives = 0, hours = 0, type = "UNLIMITED", mode = "TESTING", direction = "BOTH"} = req.body;
         if(!symbol || !baseAmountIn) return res.status(400).json({success: false, message: "Missing Data!"});
         const data = {
             symbol,
@@ -150,7 +151,8 @@ app.post('/api', authenticate, async(req, res) => {
             stopLoss: Number(stopLoss),
             leverage: Number(leverage),
             type,
-            mode
+            mode,
+            direction
         }
         if(type === "LIMITED") data["aim"] = aim;
         if(type !== "UNLIMITED") data["lives"] = lives;

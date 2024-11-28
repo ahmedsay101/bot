@@ -13,6 +13,7 @@ class Trader extends DB {
         takeProfit = 0,
         stepSize = 0,
         stopLoss = 0,
+        direction = "BOTH",
         type = "UNLIMITED",
         aim = 0,
         leverage = 10,
@@ -59,6 +60,7 @@ class Trader extends DB {
         this._requiredTransactions = requiredTransactions;
         this._requiredBalance = requiredBalance;
         this._mode = mode;
+        this._direction = direction;
         this._status = "ACTIVE";
         this._type = type;
         this._lives = lives;
@@ -253,19 +255,22 @@ class Trader extends DB {
                     const long = levelTransactions.find(transaction => transaction.side === "LONG") || null;
                     const short = levelTransactions.find(transaction => transaction.side === "SHORT") || null;
 
-                    /*if(this.ticker.currentPrice > price && !long && Math.abs(this.ticker.currentPrice - price) >= this.ticker.avgSpeed && this.ticker.avgSpeed >= 0) {
-                        await this.newTransaction({side: "LONG", price});
+                    if(this._direction === "BOTH") {
+                        if(!long) {
+                            await this.newTransaction({side: "LONG", price});
+                        }
+                        else if(!short) {
+                            await this.newTransaction({side: "SHORT", price});
+                        }
                     }
-                    else if(this.ticker.currentPrice < price && !short && Math.abs(this.ticker.currentPrice - price) >= this.ticker.avgSpeed && this.ticker.avgSpeed >= 0) {
-                        await this.newTransaction({side: "SHORT", price});
-                    }*/ 
-                   
-                    if(!long) {
-                        await this.newTransaction({side: "LONG", price});
-                    }
-                    else if(!short) {
-                        await this.newTransaction({side: "SHORT", price});
-                    }
+                    else {
+                        if(this.ticker.currentPrice <= (Number(price) - Number(this._stepSize)) && !long) {
+                            await this.newTransaction({side: "LONG", price});
+                        }
+                        else if(this.ticker.currentPrice >= (Number(price) + Number(this._stepSize)) && !short) {
+                            await this.newTransaction({side: "SHORT", price});
+                        }
+                    }      
                 }       
             }
         }
