@@ -26,6 +26,7 @@ class Trader extends DB {
         coverage = 0,
         requiredTransactions = 0,
         requiredBalance = 0,
+        hours = 0,
         mode = "TESTING",
         levels = []
     }) {
@@ -66,6 +67,8 @@ class Trader extends DB {
         this._lives = lives;
         this.busy = false;
         this._peak = 0;
+        this._hours = 0;
+        this._timeLeft = 0;
         this._maxMoneyIn = maxMoneyIn;
         this._accumulatedProfit = accumulatedProfit;
         this._createdAt = new Date();
@@ -211,9 +214,9 @@ class Trader extends DB {
                 }
             }
             if(this._type === "TIMED") {
-                const hours = hoursPassed(this._createdAt);
-                console.log("HOURS", hours);
-                if(Number(hours) > Number(this._hours) && this._profit > 0) {
+                this._timeLeft = hoursPassed(this._createdAt);
+                console.log("TIME LEFT: ", this._timeLeft);
+                if(Number(this._timeLeft) > Number(this._hours) && this._profit > 0) {
                     await this.destroy();
                     return;
                 }

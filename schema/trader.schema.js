@@ -21,6 +21,7 @@ const traderSchema = new mongoose.Schema(
     accumulatedProfit: { type: Number, required: false, default: 0},
     aim: { type: Number, required: false, default: 0},
     hours: { type: Number, required: false, default: 0},
+    timeLeft: { type: Number, required: false, default: 0},
     profitTaken: { type: Number, required: false, default: 0},
     moneyIn: { type: Number, required: false, default: 0},
     takeProfit: { type: Number, required: false, default: 0 },

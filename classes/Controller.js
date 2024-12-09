@@ -27,7 +27,9 @@ class Controller {
             leverage: data.leverage,
             levels: data.levels,
             type: data.type,
-            direction: data.direction
+            direction: data.direction,
+            coverage: data.coverage,
+            hours: data.hours
         };
         if(data.accumulatedProfit) traderData["accumulatedProfit"] = data.accumulatedProfit;
         if(data.maxMoneyIn) traderData["maxMoneyIn"] = data.maxMoneyIn;

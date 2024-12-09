@@ -98,6 +98,8 @@ app.get('/api', authenticate, (req, res) => {
                     profit: obj._profit,
                     profitTaken: obj._profitTaken,
                     fee: obj._fee,
+                    timeLeft: obj._timeLeft,
+                    hours: obj._hours,
                     levels: [{type: "PRICE", price: obj.ticker.currentPrice}, ...obj._levels.map(p => ({type: "LEVEL", price: p}))].sort((a, b) => b.price - a.price),
                     takeProfit: obj._takeProfit,
                     stopLoss: obj._stopLoss,
@@ -141,7 +143,21 @@ app.get('/api', authenticate, (req, res) => {
 
 app.post('/api', authenticate, async(req, res) => {
     try {
-        const {symbol, baseAmountIn, takeProfit, stepSize, stopLoss, leverage = 10, aim = 1, lives = 0, hours = 0, type = "UNLIMITED", mode = "TESTING", direction = "BOTH"} = req.body;
+        const {
+            symbol, 
+            baseAmountIn, 
+            takeProfit, 
+            stepSize, 
+            stopLoss, 
+            leverage = 10, 
+            aim = 1, 
+            lives = 0, 
+            hours = 0,
+            coverage = 0,
+            type = "UNLIMITED", 
+            mode = "TESTING", 
+            direction = "BOTH",
+        } = req.body;
         if(!symbol || !baseAmountIn) return res.status(400).json({success: false, message: "Missing Data!"});
         const data = {
             symbol,
@@ -157,6 +173,7 @@ app.post('/api', authenticate, async(req, res) => {
         if(type === "LIMITED") data["aim"] = aim;
         if(type !== "UNLIMITED") data["lives"] = lives;
         if(type === "TIMED") data["hours"] = hours;
+        if(coverage) data["coverage"] = coverage;
         await controller.createTrader(data);
         res.status(200).json({success: true, message: "Trader Created Successfully"});
     }
