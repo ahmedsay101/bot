@@ -18,7 +18,6 @@ class Trader extends DB {
         aim = 0,
         leverage = 10,
         lives = 0,
-        hours = 0,
         accumulatedProfit = 0,
         maxMoneyIn = 0,
         maxPrice = 0,
@@ -67,7 +66,6 @@ class Trader extends DB {
         this._lives = lives;
         this.busy = false;
         this._peak = 0;
-        this._hours = 0;
         this._timeLeft = 0;
         this._maxMoneyIn = maxMoneyIn;
         this._accumulatedProfit = accumulatedProfit;
@@ -214,9 +212,10 @@ class Trader extends DB {
                 }
             }
             if(this._type === "TIMED") {
-                this._timeLeft = hoursPassed(this._createdAt);
+                console.log("HOURS:::", hoursPassed(this._createdAt));
+                this._timeLeft = Number(this._hours) - Math.floor(hoursPassed(this._createdAt));
                 console.log("TIME LEFT: ", this._timeLeft);
-                if(Number(this._timeLeft) > Number(this._hours) && this._profit > 0) {
+                if(Number(this._timeLeft) <= 0 && this._profit > 0) {
                     await this.destroy();
                     return;
                 }
