@@ -155,8 +155,8 @@ app.post('/api', authenticate, async(req, res) => {
             hours = 0,
             coverage = 0,
             type = "UNLIMITED", 
-            mode = "TESTING", 
-            direction = "BOTH",
+            mode = "LIVE", 
+            direction = "ONEWAY",
         } = req.body;
         if(!symbol || !baseAmountIn) return res.status(400).json({success: false, message: "Missing Data!"});
         const data = {
@@ -168,7 +168,8 @@ app.post('/api', authenticate, async(req, res) => {
             leverage: Number(leverage),
             type,
             mode,
-            direction
+            direction,
+            coverage
         }
         if(type === "LIMITED") data["aim"] = aim;
         if(type !== "UNLIMITED") data["lives"] = lives;

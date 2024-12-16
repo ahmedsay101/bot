@@ -202,11 +202,17 @@ class Trader extends DB {
             }
             if(this._type === "RANGE") {
                 if(this._coverage === 0) this._coverage = Number(this.ticker.currentPrice) / Number(this._leverage);
-                if(this._maxPrice === 0) this._maxPrice = Number(this.ticker.currentPrice) + (this._coverage * 0.5);
-                if(this._minPrice === 0) this._minPrice = Number(this.ticker.currentPrice) - (this._coverage * 0.5);
+                if(this._maxPrice === 0) this._maxPrice = Number(this.ticker.currentPrice) + (this._coverage);
+                if(this._minPrice === 0) this._minPrice = Number(this.ticker.currentPrice) - (this._coverage);
                 if(this._requiredTransactions === 0) this._requiredTransactions = Math.ceil(this._coverage / Number(this._stepSize));
                 if(this._requiredBalance === 0) this._requiredBalance = (this._requiredTransactions * this._quoteAmountIn) / Number(this._leverage);
-                if((this.ticker.currentPrice > this._maxPrice || this.ticker.currentPrice < this._minPrice)) {
+                if(
+                    (
+                        this.ticker.currentPrice > this._maxPrice 
+                        || this.ticker.currentPrice < this._minPrice) 
+                        || this.transactions.filter(obj => obj._profit < 0).map(obj => Math.abs(obj._profit).sort((a, b) => b - a)[0] >= this._coverage
+                    )
+                ) {
                     await this.destroy();
                     return;
                 }
