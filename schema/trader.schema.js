@@ -13,8 +13,6 @@ const traderSchema = new mongoose.Schema(
     lives: { type: Number, required: false, default: 0},    
     maxLevels: { type: Number, required: false, default: 5},
     maxMoneyIn: { type: Number, required: false, default: 0},
-    maxPrice: { type: Number, required: false, default: 0},
-    minPrice: { type: Number, required: false, default: 0},
     coverage: { type: Number, required: false, default: 0},
     requiredTransactions: { type: Number, required: false, default: 0},
     requiredBalance: { type: Number, required: false, default: 0},

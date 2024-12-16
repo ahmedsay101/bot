@@ -35,8 +35,6 @@ class Controller {
         if(data.maxMoneyIn) traderData["maxMoneyIn"] = data.maxMoneyIn;
         if(data.baseAmountIn) traderData["baseAmountIn"] = data.baseAmountIn;
         if(data.quoteAmountIn) traderData["quoteAmountIn"] = data.quoteAmountIn;
-        if(data.maxPrice) traderData["maxPrice"] = data.maxPrice;
-        if(data.minPrice) traderData["minPrice"] = data.minPrice;
         if(data.type !== "UNLIMITED") {
             traderData["type"] = data.type;
             traderData["lives"] = data.lives;

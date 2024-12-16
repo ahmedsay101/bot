@@ -20,8 +20,6 @@ class Trader extends DB {
         lives = 0,
         accumulatedProfit = 0,
         maxMoneyIn = 0,
-        maxPrice = 0,
-        minPrice = 0,
         coverage = 0,
         requiredTransactions = 0,
         requiredBalance = 0,
@@ -54,8 +52,6 @@ class Trader extends DB {
         this._stopLoss = stopLoss;
         this._profitTaken = 0;
         this._maxLevels = 1000;
-        this._maxPrice = maxPrice;
-        this._minPrice = minPrice;
         this._coverage = coverage;
         this._requiredTransactions = requiredTransactions;
         this._requiredBalance = requiredBalance;
@@ -202,18 +198,9 @@ class Trader extends DB {
             }
             if(this._type === "RANGE") {
                 if(this._coverage === 0) this._coverage = Number(this.ticker.currentPrice) / Number(this._leverage);
-                if(this._maxPrice === 0) this._maxPrice = Number(this.ticker.currentPrice) + (this._coverage);
-                if(this._minPrice === 0) this._minPrice = Number(this.ticker.currentPrice) - (this._coverage);
                 if(this._requiredTransactions === 0) this._requiredTransactions = Math.ceil(this._coverage / Number(this._stepSize));
                 if(this._requiredBalance === 0) this._requiredBalance = (this._requiredTransactions * this._quoteAmountIn) / Number(this._leverage);
-                console.log("BIGGEST LOSS", this.transactions.filter(obj => obj._profit < 0).map(obj => Math.abs(obj._profit)).sort((a, b) => b - a)[0]);
-                if(
-                    (
-                        this.ticker.currentPrice > this._maxPrice 
-                        || this.ticker.currentPrice < this._minPrice) 
-                        || this.transactions.filter(obj => obj._profit < 0).map(obj => Math.abs(obj._profit).sort((a, b) => b - a)[0] >= this._coverage
-                    )
-                ) {
+                if(this.transactions.filter(one => Math.abs(one._price - this.ticker.currentPrice) >= this._coverage).length > 0) {
                     await this.destroy();
                     return;
                 }
