@@ -202,11 +202,11 @@ class Trader extends DB {
             }
             if(this._type === "RANGE") {
                 if(this._coverage === 0) this._coverage = Number(this.ticker.currentPrice) / Number(this._leverage);
-                if(this._maxPrice === 0) this._maxPrice = Number(this.ticker.currentPrice) + (this._coverage * 0.95);
-                if(this._minPrice === 0) this._minPrice = Number(this.ticker.currentPrice) - (this._coverage * 0.95);
+                if(this._maxPrice === 0) this._maxPrice = Number(this.ticker.currentPrice) + (this._coverage * 0.5);
+                if(this._minPrice === 0) this._minPrice = Number(this.ticker.currentPrice) - (this._coverage * 0.5);
                 if(this._requiredTransactions === 0) this._requiredTransactions = Math.ceil(this._coverage / Number(this._stepSize));
                 if(this._requiredBalance === 0) this._requiredBalance = (this._requiredTransactions * this._quoteAmountIn) / Number(this._leverage);
-                if((this.ticker.currentPrice > this._maxPrice || this.ticker.currentPrice < this._minPrice) && this._profit > 0) {
+                if((this.ticker.currentPrice > this._maxPrice || this.ticker.currentPrice < this._minPrice)) {
                     await this.destroy();
                     return;
                 }
@@ -310,6 +310,7 @@ class Trader extends DB {
                 stopLoss: this._stopLoss,
                 mode: this._mode,
                 type: this._type,
+                coverage: this._coverage,
                 leverage: this._leverage,
                 aim: this._aim,
                 lives: this._lives - 1
