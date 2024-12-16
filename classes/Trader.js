@@ -206,6 +206,7 @@ class Trader extends DB {
                 if(this._minPrice === 0) this._minPrice = Number(this.ticker.currentPrice) - (this._coverage);
                 if(this._requiredTransactions === 0) this._requiredTransactions = Math.ceil(this._coverage / Number(this._stepSize));
                 if(this._requiredBalance === 0) this._requiredBalance = (this._requiredTransactions * this._quoteAmountIn) / Number(this._leverage);
+                console.log("BIGGEST LOSS", this.transactions.filter(obj => obj._profit < 0).map(obj => Math.abs(obj._profit).sort((a, b) => b - a)[0]));
                 if(
                     (
                         this.ticker.currentPrice > this._maxPrice 
