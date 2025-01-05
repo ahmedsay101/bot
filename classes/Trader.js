@@ -84,11 +84,15 @@ class Trader extends DB {
                 const lowestPrice = this._levels.sort((a, b) => a - b)[0];
                 if(this.ticker.currentPrice >= highestPrice) this._levels = [...new Set([
                     ...this._levels, 
-                    this.ticker.getQuoteQuantity(Number(highestPrice) + Number(this._stepSize))
+                    this.ticker.getQuoteQuantity(Number(highestPrice) + Number(this._stepSize)),
+                    this.ticker.getQuoteQuantity(Number(highestPrice) + (Number(this._stepSize) * 2)),
+                    this.ticker.getQuoteQuantity(Number(highestPrice) + (Number(this._stepSize) * 3))
                 ].sort((a, b) => b - a))]; 
                 else if(this.ticker.currentPrice <= lowestPrice) this._levels = [...new Set([
                     ...this._levels, 
-                    this.ticker.getQuoteQuantity(Number(lowestPrice) - Number(this._stepSize))
+                    this.ticker.getQuoteQuantity(Number(lowestPrice) - Number(this._stepSize)),
+                    this.ticker.getQuoteQuantity(Number(lowestPrice) - (Number(this._stepSize) * 2)),
+                    this.ticker.getQuoteQuantity(Number(lowestPrice) - (Number(this._stepSize) * 3))
                 ].sort((a, b) => b - a))];
             }
         }
