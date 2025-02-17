@@ -43,10 +43,20 @@ class Transaction extends DB {
     this.busy = false;
   }
 
+  async fill() {
+    try {
+      if(this._mode === "LIVE") await this.order();
+      else this._status = "FILLED";
+    } 
+    catch(error) {
+      console.log(error);
+    }
+  }
+
   async order() {
     try {
-      if(!this._side || this._mode !== "LIVE" || this.busy || this._orderId !== null || !this._takeProfit) return false;
-      if(this._type === "LIMIT" && (!this._price || !this._takeProfit)) return false;
+      if(!this._side || this._mode !== "LIVE" || this.busy || this._orderId !== null) return false;
+      if(this._type === "LIMIT" && (!this._price)) return false;
       this.hold();
       const orderObj = {
         symbol: this._symbol,
@@ -220,7 +230,7 @@ class Transaction extends DB {
       if(!this._price && this._type === "MARKET") this._price = this.ticker.currentPrice;
       if(!this._price || !this._baseAmountIn || !this.ticker.currentPrice || this._status === "CLOSED") return;
       if(this._position === null) this._position = this.ticker.currentPrice > this._price ? "LOWER" : "HIGHER";
-      //this._takeProfit = this.trader._takeProfit > 0 this._side === "LONG" ? this._price + this.trader._takeProfit : this._price  - this.trader._takeProfit;
+      //this._takeProfit = this.trader._takeProfit > 0 this._side === "LONG" ? this._price + this.trader._takeProfit : this._price  - this.trader._takeProfit : 0;
       //this._stopLoss = this.trader._stopLoss > 0 ? this._side === "LONG" ? this._price - this.trader._stopLoss : this._price + this.trader._stopLoss : 0;
 
       if(
@@ -230,8 +240,7 @@ class Transaction extends DB {
         ||
         (this._position === "LOWER" && this.ticker.currentPrice <= this._price))
       ) {
-        if(this._mode === "LIVE") await this.order();
-        else if(this._mode === "TESTING") this._status = "FILLED";
+        await this.fill();
       }
       
       /*if(
