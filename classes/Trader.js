@@ -71,9 +71,17 @@ class Trader extends DB {
         try {
             if(this._levels.length < 1) {
                 this._levels = [...new Set([
+                    this.ticker.getQuoteQuantity(Number(this.ticker.currentPrice) + Number(this._stepSize)) * 5, 
+                    this.ticker.getQuoteQuantity(Number(this.ticker.currentPrice) + Number(this._stepSize)) * 4, 
+                    this.ticker.getQuoteQuantity(Number(this.ticker.currentPrice) + Number(this._stepSize)) * 3, 
+                    this.ticker.getQuoteQuantity(Number(this.ticker.currentPrice) + Number(this._stepSize)) * 2, 
                     this.ticker.getQuoteQuantity(Number(this.ticker.currentPrice) + Number(this._stepSize)), 
                     this.ticker.getQuoteQuantity(Number(this.ticker.currentPrice)), 
-                    this.ticker.getQuoteQuantity(Number(this.ticker.currentPrice) - Number(this._stepSize))
+                    this.ticker.getQuoteQuantity(Number(this.ticker.currentPrice) - Number(this._stepSize)),
+                    this.ticker.getQuoteQuantity(Number(this.ticker.currentPrice) - Number(this._stepSize)) * 2, 
+                    this.ticker.getQuoteQuantity(Number(this.ticker.currentPrice) - Number(this._stepSize)) * 3, 
+                    this.ticker.getQuoteQuantity(Number(this.ticker.currentPrice) - Number(this._stepSize)) * 4, 
+                    this.ticker.getQuoteQuantity(Number(this.ticker.currentPrice) - Number(this._stepSize)) * 5, 
                 ].sort((a, b) => b - a))];
             }
             else if(this._levels.length < this._maxLevels && this._levels.length > 1) {
@@ -83,13 +91,17 @@ class Trader extends DB {
                     ...this._levels, 
                     this.ticker.getQuoteQuantity(Number(highestPrice) + Number(this._stepSize)),
                     this.ticker.getQuoteQuantity(Number(highestPrice) + (Number(this._stepSize) * 2)),
-                    this.ticker.getQuoteQuantity(Number(highestPrice) + (Number(this._stepSize) * 3))
+                    this.ticker.getQuoteQuantity(Number(highestPrice) + (Number(this._stepSize) * 3)),
+                    this.ticker.getQuoteQuantity(Number(highestPrice) + (Number(this._stepSize) * 4)),
+                    this.ticker.getQuoteQuantity(Number(highestPrice) + (Number(this._stepSize) * 5)),
                 ].sort((a, b) => b - a))]; 
                 else if(this.ticker.currentPrice <= lowestPrice) this._levels = [...new Set([
                     ...this._levels, 
                     this.ticker.getQuoteQuantity(Number(lowestPrice) - Number(this._stepSize)),
                     this.ticker.getQuoteQuantity(Number(lowestPrice) - (Number(this._stepSize) * 2)),
-                    this.ticker.getQuoteQuantity(Number(lowestPrice) - (Number(this._stepSize) * 3))
+                    this.ticker.getQuoteQuantity(Number(lowestPrice) - (Number(this._stepSize) * 3)),
+                    this.ticker.getQuoteQuantity(Number(lowestPrice) - (Number(this._stepSize) * 4)),
+                    this.ticker.getQuoteQuantity(Number(lowestPrice) - (Number(this._stepSize) * 5)),
                 ].sort((a, b) => b - a))];
             }
         }
