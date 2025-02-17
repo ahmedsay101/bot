@@ -104,7 +104,6 @@ app.get('/api', authenticate, (req, res) => {
                     stepSize: obj._stepSize,
                     speed: obj.ticker.avgSpeed,
                     status: obj._status,
-                    direction: obj._direction,
                     aim: obj._aim,
                     lives: obj._lives,
                     type: obj._type,

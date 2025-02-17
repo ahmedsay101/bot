@@ -20,7 +20,6 @@ class Trader extends DB {
         lives = 0,
         accumulatedProfit = 0,
         maxMoneyIn = 0,
-        coverage = 0,
         requiredTransactions = 0,
         requiredBalance = 0,
         hours = 0,
@@ -56,7 +55,6 @@ class Trader extends DB {
         this._requiredTransactions = requiredTransactions;
         this._requiredBalance = requiredBalance;
         this._mode = mode;
-        this._direction = direction;
         this._status = "ACTIVE";
         this._type = type;
         this._lives = lives;
@@ -254,23 +252,12 @@ class Trader extends DB {
                 if(levelTransactions.length < 2) {
                     const long = levelTransactions.find(transaction => transaction.side === "LONG") || null;
                     const short = levelTransactions.find(transaction => transaction.side === "SHORT") || null;
-
-                    if(this._direction === "BOTH") {
-                        if(!long) {
-                            await this.newTransaction({side: "LONG", price});
-                        }
-                        else if(!short) {
-                            await this.newTransaction({side: "SHORT", price});
-                        }
+                    if(this.ticker.currentPrice <= (Number(price) - Number(this._stepSize)) && !long) {
+                        await this.newTransaction({side: "LONG", price});
                     }
-                    else {
-                        if(this.ticker.currentPrice <= (Number(price) - Number(this._stepSize)) && !long) {
-                            await this.newTransaction({side: "LONG", price});
-                        }
-                        else if(this.ticker.currentPrice >= (Number(price) + Number(this._stepSize)) && !short) {
-                            await this.newTransaction({side: "SHORT", price});
-                        }
-                    }      
+                    else if(this.ticker.currentPrice >= (Number(price) + Number(this._stepSize)) && !short) {
+                        await this.newTransaction({side: "SHORT", price});
+                    }    
                 }       
             }
         }
@@ -279,7 +266,7 @@ class Trader extends DB {
         }
     }
 
-    async destroy(hard = false) {
+    async destroy() {
         try {
             this._status = "STOPPED";
             await Promise.all(this.transactions.map(async (transaction) => {
@@ -287,32 +274,7 @@ class Trader extends DB {
             }));
             this.controller.removeTrader(this);
             this.ticker.removeTrader(this);
-            if(this._type !== "UNLIMITED" && this._lives > 1 && !hard) await this.revive();
             await this.sync();
-        }
-        catch(error) {
-            console.log(error);
-        }
-    }
-
-    async revive() {
-        try {
-            await this.controller.createTrader({
-                symbol: this._symbol,
-                baseAmountIn: this._baseAmountIn,
-                quoteAmountIn: this._quoteAmountIn,
-                accumulatedProfit: Number(this._accumulatedProfit) + Number(this._profit),
-                maxMoneyIn: this._maxMoneyIn,
-                takeProfit: this._takeProfit,
-                stepSize: this._stepSize,
-                stopLoss: this._stopLoss,
-                mode: this._mode,
-                type: this._type,
-                coverage: this._coverage,
-                leverage: this._leverage,
-                aim: this._aim,
-                lives: this._lives - 1
-            });
         }
         catch(error) {
             console.log(error);

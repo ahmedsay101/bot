@@ -29,7 +29,6 @@ const traderSchema = new mongoose.Schema(
     type: { type: String, enum: ["UNLIMITED", "LIMITED", "RANGE", "TIMED"], default: "UNLIMITED"},
     status: { type: String, enum: ["ACTIVE", "STOPPED"], default: "ACTIVE"},
     mode: { type: String, enum: ["TESTING", "LIVE"], default: "TESTING"},
-    direction: { type: String, enum: ["BOTH", "ONEWAY"], default: "BOTH"},
     createdAt: { type: Date, default: Date.now },
     updatedAt: { type: Date, default: Date.now },
   },
