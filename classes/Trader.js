@@ -13,7 +13,6 @@ class Trader extends DB {
         takeProfit = 0,
         stepSize = 0,
         stopLoss = 0,
-        direction = "BOTH",
         type = "UNLIMITED",
         aim = 0,
         leverage = 10,
@@ -51,7 +50,7 @@ class Trader extends DB {
         this._stopLoss = stopLoss;
         this._profitTaken = 0;
         this._maxLevels = 1000;
-        this._coverage = coverage;
+        this._coverage = 0;
         this._requiredTransactions = requiredTransactions;
         this._requiredBalance = requiredBalance;
         this._mode = mode;
