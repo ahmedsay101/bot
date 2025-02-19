@@ -11,8 +11,9 @@ class Trader extends DB {
         baseAmountIn = 0,
         quoteAmountIn = 0,
         takeProfit = 0,
-        stepSize = 0,
         stopLoss = 0,
+        takeProfitStep = 1,
+        stepSize = 0,
         type = "UNLIMITED",
         aim = 0,
         leverage = 10,
@@ -46,8 +47,11 @@ class Trader extends DB {
         this._leverage = leverage;
         this._fee = 0;
         this._stepSize = stepSize;
-        this._takeProfit = takeProfit;
-        this._stopLoss = stopLoss;
+        this._takeProfit = Number(takeProfit);
+        this._stopLoss = Number(stopLoss);
+        this._currentTakeProfit = Number(takeProfit);
+        this._takeProfitStep = Number(takeProfitStep);
+        this._readyToTakeProfit = false;
         this._profitTaken = 0;
         this._maxLevels = 1000;
         this._coverage = 0;
@@ -64,7 +68,7 @@ class Trader extends DB {
         this._accumulatedProfit = accumulatedProfit;
         this._createdAt = new Date();
         this._updatedAt = new Date();
-        this.overwrite = [];
+        this.overwrite = ["levels", "profit"];
     }
 
     async generateLevels() {
@@ -85,8 +89,8 @@ class Trader extends DB {
                 ].sort((a, b) => b - a))];
             }
             else if(this._levels.length < this._maxLevels && this._levels.length > 1) {
-                const highestPrice = this._levels.sort((a, b) => b - a)[0];
-                const lowestPrice = this._levels.sort((a, b) => a - b)[0];
+                const highestPrice = this._levels.sort((a, b) => b - a)[1];
+                const lowestPrice = this._levels.sort((a, b) => a - b)[1];
                 if(this.ticker.currentPrice >= highestPrice) this._levels = [...new Set([
                     ...this._levels, 
                     this.ticker.getQuoteQuantity(Number(highestPrice) + Number(this._stepSize)),
@@ -112,6 +116,7 @@ class Trader extends DB {
 
     async sync() {
         try {
+            if(this._status === "ACTIVE") await this.takeProfit();
             await this.dbSync();
             if(this.transactions.length < 1) {
                 const transactions = await Transactions.aggregate([
@@ -123,6 +128,23 @@ class Trader extends DB {
                     const transaction = new Transaction(this);
                     await transaction.fromId(obj._id);
                 }
+            }
+        } 
+        catch(error) {a
+          console.log(error);
+        }
+    }
+
+    async takeProfit() {
+        try {
+            if(Number(this._profit) >= Number(this._currentTakeProfit)) {
+                this._readyToTakeProfit = true;
+                this._currentTakeProfit = Number(this._currentTakeProfit) + Number(this._takeProfitStep);
+            }
+
+            let minProfit = Number(this._currentTakeProfit) - Number(this._takeProfitStep);
+            if(this._readyToTakeProfit) {
+                if(Number(this._profit) < Number(minProfit)) await this.revive();
             }
         } 
         catch(error) {
@@ -286,6 +308,26 @@ class Trader extends DB {
             this.controller.removeTrader(this);
             this.ticker.removeTrader(this);
             await this.sync();
+        }
+        catch(error) {
+            console.log(error);
+        }
+    }
+
+    async revive() {
+        try {
+            await this.destroy();
+            await this.controller.createTrader({
+                symbol: this._symbol,
+                takeProfit: this._takeProfit,
+                baseAmountIn: this._baseAmountIn,
+                quoteAmountIn: this._quoteAmountIn,
+                stepSize: this._stepSize,
+                stopLoss: this._stopLoss,
+                mode: this._mode,
+                leverage: this._leverage,
+                takeProfitStep: this._takeProfitStep
+            });
         }
         catch(error) {
             console.log(error);
