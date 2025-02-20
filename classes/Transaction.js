@@ -63,7 +63,7 @@ class Transaction extends DB {
         side: this._side === "LONG" ? "BUY" : "SELL",
         positionSide: this._side,
         type: this._type,
-        quantity: this.ticker.getBaseQuantity(this._baseAmountIn),
+        quantity: this._baseAmountIn,
       }
       if(this._type === "LIMIT") {
         orderObj["price"] = this.ticker.getQuoteQuantity(this._price);
