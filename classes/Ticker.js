@@ -28,9 +28,7 @@ class Ticker {
     this.createdAt = new Date();
     this.updatedAt = new Date();
 
-    this.task = cron.schedule(`*/1 * * * * *`, async() => {
-      await this.tick();
-    });
+    this.interval = setInterval(this.tick, 500);
   }
 
   reverse() {
