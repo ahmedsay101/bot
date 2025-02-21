@@ -28,7 +28,11 @@ class Ticker {
     this.createdAt = new Date();
     this.updatedAt = new Date();
 
-    this.interval = setInterval(this.tick, 500);
+    this.start();
+  }
+
+  start() {
+    setInterval(this.tick, 500);
   }
 
   reverse() {
