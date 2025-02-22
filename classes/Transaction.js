@@ -230,7 +230,7 @@ class Transaction extends DB {
       if(!this._price && this._type === "MARKET") this._price = this.ticker.currentPrice;
       if(!this._price || !this._baseAmountIn || !this.ticker.currentPrice || this._status === "CLOSED") return;
       if(this._position === null) this._position = this.ticker.currentPrice > this._price ? "LOWER" : "HIGHER";
-      //this._takeProfit = this.trader._takeProfit > 0 this._side === "LONG" ? this._price + this.trader._takeProfit : this._price  - this.trader._takeProfit : 0;
+      this._takeProfit = this._side === "LONG" ? this._price + this.trader._stepSize : this._price  - this.trader._stepSize;
       //this._stopLoss = this.trader._stopLoss > 0 ? this._side === "LONG" ? this._price - this.trader._stopLoss : this._price + this.trader._stopLoss : 0;
 
       if(
