@@ -29,6 +29,7 @@ class Transaction extends DB {
     this._status = null;
     this._type = "MARKET";
     this._position = null;
+    this._canLose = true;
     this.busy = false;
     this._createdAt = new Date();
     this._updatedAt = new Date();
@@ -251,6 +252,10 @@ class Transaction extends DB {
         (this._side === "SHORT" && this.ticker.getQuoteQuantity(this.ticker.currentPrice) >= this.ticker.getQuoteQuantity(this._stopLoss) && this.ticker.getQuoteQuantity(this._stopLoss) !== 0 && this._status === "FILLED")
         ||
         (this._side === "LONG" && this.ticker.getQuoteQuantity(this.ticker.currentPrice) <= this.ticker.getQuoteQuantity(this._stopLoss) && this.ticker.getQuoteQuantity(this._stopLoss) !== 0 && this._status === "FILLED")
+        ||
+        (this._side === "LONG" && this.ticker.getQuoteQuantity(this.ticker.currentPrice) < this.ticker.getQuoteQuantity(this._price) && !this._canLose && this._status === "FILLED")
+        ||
+        (this._side === "SHORT" && this.ticker.getQuoteQuantity(this.ticker.currentPrice) > this.ticker.getQuoteQuantity(this._price) && !this._canLose && this._status === "FILLED")
       ) await this.close();
 
       this._baseAmountIn = this.trader._baseAmountIn;

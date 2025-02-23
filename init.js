@@ -22,6 +22,20 @@ cron.schedule(`0 0 0 * * *`, async() => {
 
 const controller = new Controller();
 
+/*(async() => {
+    const data = {
+        symbol: "UNIUSDT",
+        baseAmountIn: Number(10),
+        takeProfit: Number(100),
+        stepSize: Number(0.05),
+        stopLoss: 0,
+        leverage: 1,
+        mode: "LIVE",
+        takeProfitStep: 1
+    }
+    await controller.createTrader(data);
+})();*/
+
 app.use(cors());
 app.use(express.json());
 

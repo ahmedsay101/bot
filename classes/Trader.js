@@ -181,13 +181,14 @@ class Trader extends DB {
 
     }
 
-    async newTransaction({side, price = null}) {
+    async newTransaction({side, price = null, canLose = true}) {
         try {
             const count = await this.getLevelCount(price);
             if(count >= 2 || this._status !== "ACTIVE") return false;
             const transaction = new Transaction(this);
             transaction._side = side;
             transaction._price = price ? price : this.ticker.currentPrice;
+            transaction._canLose = canLose;
             await transaction.sync();
             return transaction;
         }
@@ -251,7 +252,7 @@ class Trader extends DB {
             }
             await this.controller.tick();
             await this.sync();
-            await this.generateLevels();
+            //await this.generateLevels();
             await this.fill();
             await this.updateTransactions();
             await this.calculateProfit();
@@ -259,7 +260,7 @@ class Trader extends DB {
             await this.calculateProfitTaken();
             await this.calculateMoneyIn();
             this.release();
-            //this.log();
+            this.log();
         }
         catch(error) {
             console.log(error);
@@ -269,16 +270,12 @@ class Trader extends DB {
     log() {
         console.log(`--------------------${this._symbol}-----------------------`);
         console.log("CURRENT PRICE", this.ticker.currentPrice);
-        console.log("PRICES", this._levels.sort((a, b) => b - a));
         console.log("TRANSACTIONS", this.transactions.map(obj => ({price: obj._price, profit: obj._profit, side: obj._side, status: obj._status})).sort((a, b) => b.price - a.price));
         console.log("PROFIT", this._profit);
         console.log("PROFIT TAKEN", this._profitTaken);
-        console.log("MONEY IN", this._moneyIn);
-        console.log("AVG SPEED", this.ticker.avgSpeed);
-        console.log("TICKERS", this.controller.tickers.map(obj => ({symbol: obj.symbol, traders: obj.traders.length})));
     }
 
-    async fill() {
+    /*async fill() {
         try {
             for(let price of this._levels) {
                 const levelTransactions = await this.getLevel(price);
@@ -293,6 +290,26 @@ class Trader extends DB {
                     }    
                 }       
             }
+        }
+        catch(error) {
+            console.log(error);
+        }
+    }*/
+
+    async fill() {
+        try {
+            if(this.transactions.length > 0) return;
+            const currentPrice = this.ticker.currentPrice;
+            const long = await this.newTransaction({side: "LONG", price: Number(currentPrice) + Number(this._stepSize), canLose: true});
+            const longProtector = await this.newTransaction({side: "SHORT", price: Number(currentPrice) - Number(this._stepSize), canLose: false});
+            const short = await this.newTransaction({side: "SHORT", price: Number(currentPrice) - Number(this._stepSize), canLose: true});
+            const shortProtector = await this.newTransaction({side: "LONG", price: Number(currentPrice) + Number(this._stepSize), canLose: false});
+
+            this._levels = [...new Set([
+                this.ticker.getQuoteQuantity(Number(this.ticker.currentPrice) + (Number(this._stepSize) * 1)),
+                this.ticker.getQuoteQuantity(Number(this.ticker.currentPrice)), 
+                this.ticker.getQuoteQuantity(Number(this.ticker.currentPrice) - (Number(this._stepSize) * 1)),
+            ].sort((a, b) => b - a))];
         }
         catch(error) {
             console.log(error);
