@@ -200,7 +200,7 @@ class Transaction extends DB {
             side: this._side === "LONG" ? "SELL" : "BUY",
             positionSide: this._side,
             type: "MARKET",
-            quantity: this.ticker.getBaseQuantity(this._baseAmountIn),
+            quantity: this._baseAmountIn,
             recvWindow: '10000'
           });
         }
@@ -238,7 +238,7 @@ class Transaction extends DB {
         const protector = this.trader.getProtector(this._side);
         if(!protector) await this.trader.createProtector(this._side);
       }
-      
+
       if(
         this._status === "NEW"
         &&
