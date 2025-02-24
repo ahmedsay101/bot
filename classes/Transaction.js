@@ -82,7 +82,7 @@ class Transaction extends DB {
     }
   }
 
-  async takeProfit() {
+  /*async takeProfit() {
     try {
       if(this.busy) return;
       this.hold();
@@ -104,9 +104,9 @@ class Transaction extends DB {
     catch(error) {
       console.log(error);
     }
-  }
+  }*/
 
-  async stopLoss() {
+  /*async stopLoss() {
     try {
       if(this.busy) return;
       this.hold();
@@ -128,7 +128,7 @@ class Transaction extends DB {
     catch(error) {
       console.log(error);
     }
-  }
+  }*/
   
   async update() {
     try {
