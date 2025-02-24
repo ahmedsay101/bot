@@ -238,7 +238,7 @@ class Transaction extends DB {
 
       let minProfit = Number(this._currentTakeProfit) - Number(this._takeProfitStep);
       if(this._readyToTakeProfit) {
-        if(Number(this._profit) < Number(minProfit)) await this.destroy();
+        if(Number(this._profit) < Number(minProfit)) await this.close();
       }
     } 
     catch(error) {
