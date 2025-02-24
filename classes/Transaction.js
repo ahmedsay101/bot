@@ -24,8 +24,8 @@ class Transaction extends DB {
     this._side = null;
     this._orderId = null;
     this._price = null;
-    this._takeProfit = 0;
-    this._stopLoss = 0;
+    this._takeProfit = Number(this.trader._takeProfit);
+    this._stopLoss = Number(this.trader._stopLoss);
     this._closingPrice = 0;
     this._profit = 0;
     this._profitable = false;
