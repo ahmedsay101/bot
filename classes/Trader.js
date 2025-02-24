@@ -297,16 +297,17 @@ class Trader extends DB {
 
     async fill() {
         try {
-            if(this.transactions.length > 0) return;
-            const currentPrice = this.ticker.currentPrice;
-            const longPrice = Number(currentPrice) + Number(this._stepSize);
-            const shortPrice = Number(currentPrice) - Number(this._stepSize);
-            this._levels = [...new Set([
-                longPrice,
-                shortPrice,
-            ].sort((a, b) => b - a))];
-            const long = await this.newTransaction({side: "LONG", price: longPrice});
-            const short = await this.newTransaction({side: "SHORT", price: shortPrice});
+            if(this.transactions.length < 1) {
+                const currentPrice = this.ticker.currentPrice;
+                const longPrice = Number(currentPrice) + Number(this._stepSize);
+                const shortPrice = Number(currentPrice) - Number(this._stepSize);
+                this._levels = [...new Set([
+                    longPrice,
+                    shortPrice,
+                ].sort((a, b) => b - a))];
+                const long = await this.newTransaction({side: "LONG", price: longPrice});
+                const short = await this.newTransaction({side: "SHORT", price: shortPrice});    
+            }
         }
         catch(error) {
             console.log(error);

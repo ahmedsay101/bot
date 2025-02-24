@@ -27,6 +27,7 @@ const traderSchema = new mongoose.Schema(
     stepSize: { type: Number, required: false, default: 0 },
     currentTakeProfit: { type: Number, required: false, default: 0 },
     takeProfitStep: { type: Number, required: false, default: 1 },
+    readyToTakeProfit: { type: Boolean, required: false, default: false },
     fee: { type: Number, required: false, default: 0},
     type: { type: String, enum: ["UNLIMITED", "LIMITED", "RANGE", "TIMED"], default: "UNLIMITED"},
     status: { type: String, enum: ["ACTIVE", "STOPPED"], default: "ACTIVE"},
