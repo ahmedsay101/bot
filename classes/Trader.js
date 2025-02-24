@@ -143,7 +143,7 @@ class Trader extends DB {
             }
 
             let minProfit = Number(this._currentTakeProfit) - Number(this._takeProfitStep);
-            if(this._readyToTakeProfit) {
+            if(this._readyToTakeProfit || this.transactions.filter(obj => obj._status === "FILLED").length === 2) {
                 if(Number(this._profit) < Number(minProfit)) await this.revive();
             }
         } 
@@ -181,14 +181,13 @@ class Trader extends DB {
 
     }
 
-    async newTransaction({side, price = null, canLose = true}) {
+    async newTransaction({side, price = null}) {
         try {
             const count = await this.getLevelCount(price);
             if(count >= 2 || this._status !== "ACTIVE") return false;
             const transaction = new Transaction(this);
             transaction._side = side;
             transaction._price = price ? price : this.ticker.currentPrice;
-            transaction._canLose = canLose;
             await transaction.sync();
             return transaction;
         }
@@ -296,20 +295,6 @@ class Trader extends DB {
         }
     }*/
 
-    async createProtector(side = "LONG") {
-        try {
-            const price = side === "SHORT" ? this._levels.sort((a, b) => b - a)[0] : this._levels.sort((a, b) => b - a)[1];
-            const protector = await this.newTransaction({side: side === "LONG" ? "SHORT" : "LONG", price: price, canLose: false});
-        }
-        catch(error) {
-            console.log(error);
-        }
-    }
-
-    getProtector(side = "LONG") {
-        return this.transactions.find(one => !one._canLose && one._side !== side);
-    }
-
     async fill() {
         try {
             if(this.transactions.length > 0) return;
@@ -320,8 +305,8 @@ class Trader extends DB {
                 longPrice,
                 shortPrice,
             ].sort((a, b) => b - a))];
-            const long = await this.newTransaction({side: "LONG", price: longPrice, canLose: true});
-            const short = await this.newTransaction({side: "SHORT", price: shortPrice, canLose: true});
+            const long = await this.newTransaction({side: "LONG", price: longPrice});
+            const short = await this.newTransaction({side: "SHORT", price: shortPrice});
         }
         catch(error) {
             console.log(error);
