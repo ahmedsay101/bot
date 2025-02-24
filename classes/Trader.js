@@ -297,7 +297,12 @@ class Trader extends DB {
 
     async fill() {
         try {
-            if(this.transactions.length < 1) {
+            if(this.transactions.length < 2 && this.transactions.filter(obj => obj._status === "FILLED").length === 0) {
+                if(this.transactions.length > 0) {
+                    await Promise.all(this.transactions.map(async (transaction) => {
+                        await transaction.close();
+                    }));
+                }
                 const currentPrice = this.ticker.currentPrice;
                 const longPrice = Number(currentPrice) + Number(this._stepSize);
                 const shortPrice = Number(currentPrice) - Number(this._stepSize);
