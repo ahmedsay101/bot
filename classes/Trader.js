@@ -116,7 +116,7 @@ class Trader extends DB {
 
     async sync() {
         try {
-            if(this._status === "ACTIVE") await this.takeProfit();
+            //if(this._status === "ACTIVE") await this.takeProfit();
             await this.dbSync();
             if(this.transactions.length < 1) {
                 const transactions = await Transactions.aggregate([
