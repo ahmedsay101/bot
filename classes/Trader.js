@@ -137,6 +137,7 @@ class Trader extends DB {
 
     async takeProfit() {
         try {
+            if(!this._takeProfit) return;
             if(Number(this._profit) >= Number(this._currentTakeProfit)) {
                 this._readyToTakeProfit = true;
                 this._currentTakeProfit = Number(this._currentTakeProfit) + Number(this._takeProfitStep);
@@ -181,13 +182,14 @@ class Trader extends DB {
 
     }
 
-    async newTransaction({side, price = null}) {
+    async newTransaction({side, price = null, baseAmountIn = null}) {
         try {
             const count = await this.getLevelCount(price);
-            if(count >= 2 || this._status !== "ACTIVE") return false;
+            if(this._status !== "ACTIVE") return false;
             const transaction = new Transaction(this);
             transaction._side = side;
             transaction._price = price ? price : this.ticker.currentPrice;
+            transaction._baseAmountIn = baseAmountIn ? baseAmountIn : this._baseAmountIn;
             await transaction.sync();
             return transaction;
         }
@@ -297,12 +299,7 @@ class Trader extends DB {
 
     async fill() {
         try {
-            if(this.transactions.length < 2 && this.transactions.filter(obj => obj._status === "FILLED").length === 0) {
-                if(this.transactions.length > 0) {
-                    await Promise.all(this.transactions.map(async (transaction) => {
-                        await transaction.close();
-                    }));
-                }
+            if(this.transactions.length === 0) {
                 const currentPrice = this.ticker.currentPrice;
                 const longPrice = Number(currentPrice) + Number(this._stepSize);
                 const shortPrice = Number(currentPrice) - Number(this._stepSize);
@@ -310,8 +307,27 @@ class Trader extends DB {
                     longPrice,
                     shortPrice,
                 ].sort((a, b) => b - a))];
-                const long = await this.newTransaction({side: "LONG", price: longPrice});
-                const short = await this.newTransaction({side: "SHORT", price: shortPrice});    
+                const baseAmountIn = this._baseAmountIn;
+                const long = await this.newTransaction({side: "LONG", price: longPrice, baseAmountIn});
+                const short = await this.newTransaction({side: "SHORT", price: shortPrice, baseAmountIn});    
+            }
+            else {
+                const longLevel = this._levels.sort((a, b) => b - a)[0];
+                const shortLevel = this._levels.sort((a, b) => b - a)[1];
+                const isAllLongFilled = this.transactions.filter(obj => obj._price === longLevel && obj._status === "FILLED").length === this.transactions.filter(obj => obj._price === longLevel).length;
+                const isAllShortFilled = this.transactions.filter(obj => obj._price === shortLevel && obj._status === "FILLED").length === this.transactions.filter(obj => obj._price === shortLevel).length;
+                const longAmount = this.transactions.filter(obj => obj._price === longLevel).map(obj => Number(obj._baseAmountIn)).reduce((total, current) => total + current);
+                const shortAmount = this.transactions.filter(obj => obj._price === shortLevel).map(obj => Number(obj._baseAmountIn)).reduce((total, current) => total + current);
+                if(isAllLongFilled && (shortAmount <= longAmount)) {
+                    const lastBaseAmountIn = this.transactions.filter(obj => obj._price === longLevel).sort((a, b) => b._baseAmountIn - a._baseAmountIn)[0]?._baseAmountIn;
+                    const baseAmountIn = Number(lastBaseAmountIn * 2);
+                    const newShort = await this.newTransaction({side: "SHORT", price: shortLevel, baseAmountIn});    
+                }
+                if(isAllShortFilled && (longAmount <= shortAmount)) {
+                    const lastBaseAmountIn = this.transactions.filter(obj => obj._price === shortLevel).sort((a, b) => b._baseAmountIn - a._baseAmountIn)[0]?._baseAmountIn;
+                    const baseAmountIn = Number(lastBaseAmountIn * 2);
+                    const newLong = await this.newTransaction({side: "LONG", price: longLevel, baseAmountIn});    
+                }
             }
         }
         catch(error) {
@@ -424,8 +440,8 @@ class Trader extends DB {
     async getLevel(price) {
         try {
             const transactions = await Transactions.aggregate([
-            {$match: {traderId: this._id, price, status: {$ne: "CLOSED"}}},
-            {$project: {_id: 1, price: 1, side: 1}}
+                {$match: {traderId: this._id, price, status: {$ne: "CLOSED"}}},
+                {$project: {_id: 1, price: 1, side: 1}}
             ]);
             return transactions;
         }  
