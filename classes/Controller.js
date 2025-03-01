@@ -35,6 +35,7 @@ class Controller {
         if(data.accumulatedProfit) traderData["accumulatedProfit"] = data.accumulatedProfit;
         if(data.maxMoneyIn) traderData["maxMoneyIn"] = data.maxMoneyIn;
         if(data.baseAmountIn) traderData["baseAmountIn"] = data.baseAmountIn;
+        if(data.maxBaseAmountIn) traderData["maxBaseAmountIn"] = data.maxBaseAmountIn;
         if(data.quoteAmountIn) traderData["quoteAmountIn"] = data.quoteAmountIn;
         if(data.type !== "UNLIMITED") {
             traderData["type"] = data.type;

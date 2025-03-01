@@ -10,6 +10,7 @@ class Trader extends DB {
         symbol,
         baseAmountIn = 0,
         quoteAmountIn = 0,
+        maxBaseAmountIn = 0,
         takeProfit = 0,
         stopLoss = 0,
         takeProfitStep = 1,
@@ -40,6 +41,7 @@ class Trader extends DB {
         this.transactions = [];
         this._baseAmountIn = baseAmountIn;
         this._quoteAmountIn = quoteAmountIn;
+        this._maxBaseAmountIn = maxBaseAmountIn;
         this._aim = aim;
         this._hours = hours;
         this._profit = 0;
@@ -116,7 +118,7 @@ class Trader extends DB {
 
     async sync() {
         try {
-            //if(this._status === "ACTIVE") await this.takeProfit();
+            if(this._status === "ACTIVE") await this.takeProfit();
             await this.dbSync();
             if(this.transactions.length < 1) {
                 const transactions = await Transactions.aggregate([
@@ -137,6 +139,23 @@ class Trader extends DB {
 
     async takeProfit() {
         try {
+            if(this.transactions.length === 0 || this._levels.length === 0 || !this._takeProfit) return;
+            const currentPrice = this.ticker.currentPrice;
+            const longLevel = this._levels.sort((a, b) => b - a)[0];
+            const shortLevel = this._levels.sort((a, b) => b - a)[1];
+            if(
+                ((Math.abs(currentPrice - longLevel) >= this._takeProfit)  && currentPrice > longLevel)
+                || 
+                ((Math.abs(currentPrice - shortLevel) >= this._takeProfit) && currentPrice < shortLevel)
+            ) await this.revive();
+        } 
+        catch(error) {
+          console.log(error);
+        }
+    }
+
+    /*async takeProfit() {
+        try {
             if(!this._takeProfit) return;
             if(Number(this._profit) >= Number(this._currentTakeProfit)) {
                 this._readyToTakeProfit = true;
@@ -151,7 +170,7 @@ class Trader extends DB {
         catch(error) {
           console.log(error);
         }
-    }
+    }*/
 
     async updateTransactions() {
         try {
@@ -320,12 +339,12 @@ class Trader extends DB {
                 const shortAmount = this.transactions.filter(obj => obj._price === shortLevel).map(obj => Number(obj._baseAmountIn)).reduce((total, current) => total + current);
                 if(isAllLongFilled && (shortAmount <= longAmount)) {
                     const lastBaseAmountIn = this.transactions.filter(obj => obj._price === longLevel).sort((a, b) => b._baseAmountIn - a._baseAmountIn)[0]?._baseAmountIn;
-                    const baseAmountIn = Number(lastBaseAmountIn * 2);
+                    const baseAmountIn = Number(lastBaseAmountIn * (lastBaseAmountIn > this._maxBaseAmountIn && this._maxBaseAmountIn !== 0 ? 1 : 2));
                     const newShort = await this.newTransaction({side: "SHORT", price: shortLevel, baseAmountIn});    
                 }
                 if(isAllShortFilled && (longAmount <= shortAmount)) {
                     const lastBaseAmountIn = this.transactions.filter(obj => obj._price === shortLevel).sort((a, b) => b._baseAmountIn - a._baseAmountIn)[0]?._baseAmountIn;
-                    const baseAmountIn = Number(lastBaseAmountIn * 2);
+                    const baseAmountIn = Number(lastBaseAmountIn * (lastBaseAmountIn > this._maxBaseAmountIn && this._maxBaseAmountIn !== 0 ? 1 : 2));
                     const newLong = await this.newTransaction({side: "LONG", price: longLevel, baseAmountIn});    
                 }
             }
@@ -341,6 +360,8 @@ class Trader extends DB {
             await Promise.all(this.transactions.map(async (transaction) => {
                 await transaction.close();
             }));
+            this.transactions = [];
+            this.levels = [];
             this.controller.removeTrader(this);
             this.ticker.removeTrader(this);
             await this.sync();

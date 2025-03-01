@@ -5,6 +5,7 @@ const traderSchema = new mongoose.Schema(
     symbol: { type: String, required: true },
     baseAmountIn: { type: Number, required: true },
     quoteAmountIn: { type: Number, required: false, default: 0},
+    maxBaseAmountIn: { type: Number, required: false, default: 0 },
     levels: { type: [Number], "default": [] },
     leverage: { type: Number, required: false, default: 1},
     profit: { type: Number, required: false, default: 0},

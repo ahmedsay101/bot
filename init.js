@@ -102,6 +102,7 @@ app.get('/api', authenticate, (req, res) => {
                     baseAmountIn: obj._baseAmountIn,
                     quoteAmountIn: obj._quoteAmountIn,
                     moneyIn: obj._moneyIn,
+                    maxBaseAmountIn: obj._maxBaseAmountIn,
                     maxMoneyIn: obj._maxMoneyIn,
                     coverage: obj._coverage,
                     requiredTransactions: obj._requiredTransactions,
@@ -157,6 +158,7 @@ app.post('/api', authenticate, async(req, res) => {
         const {
             symbol, 
             baseAmountIn, 
+            maxBaseAmountIn, 
             takeProfit, 
             stepSize, 
             stopLoss, 
@@ -174,6 +176,7 @@ app.post('/api', authenticate, async(req, res) => {
         const data = {
             symbol,
             baseAmountIn: Number(baseAmountIn),
+            maxBaseAmountIn: Number(maxBaseAmountIn),
             takeProfit: Number(takeProfit),
             stepSize: Number(stepSize),
             stopLoss: Number(stopLoss),
