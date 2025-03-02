@@ -337,6 +337,12 @@ class Trader extends DB {
                 const isAllShortFilled = this.transactions.filter(obj => obj._price === shortLevel && obj._status === "FILLED").length === this.transactions.filter(obj => obj._price === shortLevel).length;
                 const longAmount = this.transactions.filter(obj => obj._price === longLevel).map(obj => Number(obj._baseAmountIn)).reduce((total, current) => total + current);
                 const shortAmount = this.transactions.filter(obj => obj._price === shortLevel).map(obj => Number(obj._baseAmountIn)).reduce((total, current) => total + current);
+
+                /*if(this.transactions.filter(obj => obj._baseAmountIn >= this._maxBaseAmountIn).length > 4) {
+                    await this.revive();
+                    return;
+                }*/
+
                 if(isAllLongFilled && (shortAmount <= longAmount)) {
                     const lastBaseAmountIn = this.transactions.filter(obj => obj._price === longLevel).sort((a, b) => b._baseAmountIn - a._baseAmountIn)[0]?._baseAmountIn;
                     const baseAmountIn = Number(lastBaseAmountIn * (lastBaseAmountIn > this._maxBaseAmountIn && this._maxBaseAmountIn !== 0 ? 1 : 2));
@@ -379,6 +385,7 @@ class Trader extends DB {
                 takeProfit: this._takeProfit,
                 baseAmountIn: this._baseAmountIn,
                 quoteAmountIn: this._quoteAmountIn,
+                maxBaseAmountIn: this._maxBaseAmountIn,
                 stepSize: this._stepSize,
                 stopLoss: this._stopLoss,
                 mode: this._mode,
