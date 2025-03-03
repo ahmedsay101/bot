@@ -365,10 +365,10 @@ class Trader extends DB {
                 const longAmount = this.transactions.filter(obj => obj._price === longLevel).map(obj => Number(obj._baseAmountIn)).reduce((total, current) => total + current);
                 const shortAmount = this.transactions.filter(obj => obj._price === shortLevel).map(obj => Number(obj._baseAmountIn)).reduce((total, current) => total + current);
 
-                /*if(this.transactions.filter(obj => obj._baseAmountIn >= this._maxBaseAmountIn).length > 4) {
+                if(this.transactions.filter(obj => obj._baseAmountIn >= this._maxBaseAmountIn).length > 1) {
                     await this.revive();
                     return;
-                }*/
+                }
 
                 if(isAllLongFilled && (shortAmount <= longAmount)) {
                     const lastBaseAmountIn = this.transactions.filter(obj => obj._price === longLevel).sort((a, b) => b._baseAmountIn - a._baseAmountIn)[0]?._baseAmountIn;
