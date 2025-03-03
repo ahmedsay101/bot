@@ -151,10 +151,9 @@ class Trader extends DB {
                 || 
                     ((Math.abs(currentPrice - shortLevel) >= this._takeProfit) && currentPrice < shortLevel)
                 )
-                && (
+                && 
+                (
                     this._profit >= fee 
-                    ||
-                    this.transactions.filter(obj => obj._baseAmountIn >= this._maxBaseAmountIn).length >= 2
                 )
             ) await this.revive();
 
@@ -371,12 +370,12 @@ class Trader extends DB {
                     return;
                 }*/
 
-                if(isAllLongFilled && (shortAmount <= longAmount) && this.transactions.filter(obj => obj._baseAmountIn >= this._maxBaseAmountIn).length < 2) {
+                if(isAllLongFilled && (shortAmount <= longAmount)) {
                     const lastBaseAmountIn = this.transactions.filter(obj => obj._price === longLevel).sort((a, b) => b._baseAmountIn - a._baseAmountIn)[0]?._baseAmountIn;
                     const baseAmountIn = Number(lastBaseAmountIn * (lastBaseAmountIn > this._maxBaseAmountIn && this._maxBaseAmountIn !== 0 ? 1 : 2));
                     const newShort = await this.newTransaction({side: "SHORT", price: shortLevel, baseAmountIn});    
                 }
-                if(isAllShortFilled && (longAmount <= shortAmount) && this.transactions.filter(obj => obj._baseAmountIn >= this._maxBaseAmountIn).length < 2) {
+                if(isAllShortFilled && (longAmount <= shortAmount)) {
                     const lastBaseAmountIn = this.transactions.filter(obj => obj._price === shortLevel).sort((a, b) => b._baseAmountIn - a._baseAmountIn)[0]?._baseAmountIn;
                     const baseAmountIn = Number(lastBaseAmountIn * (lastBaseAmountIn > this._maxBaseAmountIn && this._maxBaseAmountIn !== 0 ? 1 : 2));
                     const newLong = await this.newTransaction({side: "LONG", price: longLevel, baseAmountIn});    
