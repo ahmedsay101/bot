@@ -275,28 +275,6 @@ class Trader extends DB {
             if(this._mode === "LIVE" && this.transactions.length < 1) await this.setLeverage();
             if(this._baseAmountIn === 0 || !this._baseAmountIn) this._baseAmountIn = this._quoteAmountIn / this.ticker.currentPrice;
             if(this._quoteAmountIn === 0 || !this._quoteAmountIn) this._quoteAmountIn = this.ticker.getQuoteQuantity(this._baseAmountIn * this.ticker.currentPrice);
-            if(this._type === "LIMITED" && this._profit >= this._aim) {
-                await this.destroy();
-                return;
-            }
-            if(this._type === "RANGE") {
-                if(this._coverage === 0) this._coverage = Number(this.ticker.currentPrice) / Number(this._leverage);
-                if(this._requiredTransactions === 0) this._requiredTransactions = Math.ceil(this._coverage / Number(this._stepSize));
-                if(this._requiredBalance === 0) this._requiredBalance = (this._requiredTransactions * this._quoteAmountIn) / Number(this._leverage);
-                if(this.transactions.filter(one => Math.abs(one._price - this.ticker.currentPrice) >= this._coverage).length > 0) {
-                    await this.destroy();
-                    return;
-                }
-            }
-            if(this._type === "TIMED") {
-                console.log("HOURS:::", hoursPassed(this._createdAt));
-                this._timeLeft = Number(this._hours) - Math.floor(hoursPassed(this._createdAt));
-                console.log("TIME LEFT: ", this._timeLeft);
-                if(Number(this._timeLeft) <= 0 && this._profit > 0) {
-                    await this.destroy();
-                    return;
-                }
-            }
             await this.controller.tick();
             await this.sync();
             //await this.generateLevels();
@@ -365,7 +343,7 @@ class Trader extends DB {
                 const longAmount = this.transactions.filter(obj => obj._price === longLevel).map(obj => Number(obj._baseAmountIn)).reduce((total, current) => total + current);
                 const shortAmount = this.transactions.filter(obj => obj._price === shortLevel).map(obj => Number(obj._baseAmountIn)).reduce((total, current) => total + current);
 
-                if(this.transactions.filter(obj => obj._baseAmountIn >= this._maxBaseAmountIn).length > 1) {
+                if(this.transactions.filter(obj => Number(obj._baseAmountIn) >= Number(this._maxBaseAmountIn)).length > 1) {
                     await this.revive();
                     return;
                 }
