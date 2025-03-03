@@ -47,7 +47,7 @@ class Trader extends DB {
         this._profit = 0;
         this._totalProfit = 0;
         this._leverage = leverage;
-        this._fee = 0;
+        this._fee = 0.0005;
         this._stepSize = stepSize;
         this._takeProfit = Number(takeProfit);
         this._stopLoss = Number(stopLoss);
@@ -140,6 +140,34 @@ class Trader extends DB {
     async takeProfit() {
         try {
             if(this.transactions.length === 0 || this._levels.length === 0 || !this._takeProfit) return;
+
+            const currentPrice = this.ticker.currentPrice;
+            const longLevel = this._levels.sort((a, b) => b - a)[0];
+            const shortLevel = this._levels.sort((a, b) => b - a)[1];
+            const fee = Number(this._moneyIn) * Number(this._fee);
+            if(
+                (
+                    ((Math.abs(currentPrice - longLevel) >= this._takeProfit)  && currentPrice > longLevel)
+                || 
+                    ((Math.abs(currentPrice - shortLevel) >= this._takeProfit) && currentPrice < shortLevel)
+                )
+                && (
+                    this._profit >= (fee * 2)
+                    ||
+                    this.transactions.filter(obj => obj._baseAmountIn >= this._maxBaseAmountIn).length >= 2
+                )
+            ) await this.revive();
+
+
+        } 
+        catch(error) {
+          console.log(error);
+        }
+    }
+
+    /*async takeProfit() {
+        try {
+            if(this.transactions.length === 0 || this._levels.length === 0 || !this._takeProfit) return;
             const currentPrice = this.ticker.currentPrice;
             const longLevel = this._levels.sort((a, b) => b - a)[0];
             const shortLevel = this._levels.sort((a, b) => b - a)[1];
@@ -152,7 +180,7 @@ class Trader extends DB {
         catch(error) {
           console.log(error);
         }
-    }
+    }*/
 
     /*async takeProfit() {
         try {
@@ -280,7 +308,7 @@ class Trader extends DB {
             await this.calculateProfitTaken();
             await this.calculateMoneyIn();
             this.release();
-            this.log();
+            //this.log();
         }
         catch(error) {
             console.log(error);
@@ -343,12 +371,12 @@ class Trader extends DB {
                     return;
                 }*/
 
-                if(isAllLongFilled && (shortAmount <= longAmount)) {
+                if(isAllLongFilled && (shortAmount <= longAmount) && this.transactions.filter(obj => obj._baseAmountIn >= this._maxBaseAmountIn).length < 2) {
                     const lastBaseAmountIn = this.transactions.filter(obj => obj._price === longLevel).sort((a, b) => b._baseAmountIn - a._baseAmountIn)[0]?._baseAmountIn;
                     const baseAmountIn = Number(lastBaseAmountIn * (lastBaseAmountIn > this._maxBaseAmountIn && this._maxBaseAmountIn !== 0 ? 1 : 2));
                     const newShort = await this.newTransaction({side: "SHORT", price: shortLevel, baseAmountIn});    
                 }
-                if(isAllShortFilled && (longAmount <= shortAmount)) {
+                if(isAllShortFilled && (longAmount <= shortAmount) && this.transactions.filter(obj => obj._baseAmountIn >= this._maxBaseAmountIn).length < 2) {
                     const lastBaseAmountIn = this.transactions.filter(obj => obj._price === shortLevel).sort((a, b) => b._baseAmountIn - a._baseAmountIn)[0]?._baseAmountIn;
                     const baseAmountIn = Number(lastBaseAmountIn * (lastBaseAmountIn > this._maxBaseAmountIn && this._maxBaseAmountIn !== 0 ? 1 : 2));
                     const newLong = await this.newTransaction({side: "LONG", price: longLevel, baseAmountIn});    
