@@ -228,34 +228,6 @@ class Transaction extends DB {
     }
   } 
 
-  async takeProfit() {
-    try {
-      if(!this._takeProfit) return;
-      if(Number(this._profit) >= Number(this._currentTakeProfit)) {
-        this._readyToTakeProfit = true;
-        this._currentTakeProfit = Number(this._currentTakeProfit) + Number(this.trader._takeProfitStep);
-      }
-
-      let minProfit = Number(this._currentTakeProfit) - Number(this._takeProfitStep);
-      if(this._readyToTakeProfit) {
-        if(Number(this._profit) < Number(minProfit)) await this.close();
-      }
-    } 
-    catch(error) {
-      console.log(error);
-    }
-  }
-
-  async stopLoss() {
-    try {
-      if(!this._stopLoss) return;
-      if(Number(this._profit) < 0 && Math.abs(this._profit) >= Number(this._stopLoss)) await this.close();
-    } 
-    catch(error) {
-      console.log(error);
-    }
-  }
-
   async tick() {
     try {
       if(!this._price && this._type === "MARKET") this._price = this.ticker.currentPrice;
@@ -271,9 +243,7 @@ class Transaction extends DB {
       ) {
         await this.fill();
       }
-      
-      await this.takeProfit();
-      await this.stopLoss();
+
       /*if(
         (this._side === "LONG" && this.ticker.getQuoteQuantity(this.ticker.currentPrice) >= this.ticker.getQuoteQuantity(this._takeProfit) && this.ticker.getQuoteQuantity(this._takeProfit) !== 0 && this._status === "FILLED")
         ||
