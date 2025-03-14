@@ -145,15 +145,14 @@ class Trader extends DB {
             const longLevel = this._levels.sort((a, b) => b - a)[0];
             const shortLevel = this._levels.sort((a, b) => b - a)[1];
             const fee = Number(this._moneyIn) * Number(this._fee);
-            const currentAmount = this.transactions.filter((obj) => obj._status === "FILLED").map(obj => obj._baseAmountIn).reduce((total, current) => total + current);
-
+            const currentAmount = this.transactions.filter((obj) => obj._status === "FILLED").length > 0 ? this.transactions.filter((obj) => obj._status === "FILLED").map(obj => obj._baseAmountIn).reduce((total, current) => total + current) : 0;
             if(
                 (
                     ((Math.abs(currentPrice - longLevel) >= this._takeProfit)  && currentPrice > longLevel)
                 || 
                     ((Math.abs(currentPrice - shortLevel) >= this._takeProfit) && currentPrice < shortLevel)
                 ||  
-                    (Math.abs(percentageBetweenTwoNumbers(Number(currentAmount), Number(this._maxBaseAmountIn))) > 60)
+                    (Math.abs(percentageBetweenTwoNumbers(Number(currentAmount), Number(this._maxBaseAmountIn))) < 60 && currentAmount > 0 && this._maxBaseAmountIn > 0)
                 )
                 && 
                 (
@@ -167,41 +166,6 @@ class Trader extends DB {
           console.log(error);
         }
     }
-
-    /*async takeProfit() {
-        try {
-            if(this.transactions.length === 0 || this._levels.length === 0 || !this._takeProfit) return;
-            const currentPrice = this.ticker.currentPrice;
-            const longLevel = this._levels.sort((a, b) => b - a)[0];
-            const shortLevel = this._levels.sort((a, b) => b - a)[1];
-            if(
-                ((Math.abs(currentPrice - longLevel) >= this._takeProfit)  && currentPrice > longLevel)
-                || 
-                ((Math.abs(currentPrice - shortLevel) >= this._takeProfit) && currentPrice < shortLevel)
-            ) await this.revive();
-        } 
-        catch(error) {
-          console.log(error);
-        }
-    }*/
-
-    /*async takeProfit() {
-        try {
-            if(!this._takeProfit) return;
-            if(Number(this._profit) >= Number(this._currentTakeProfit)) {
-                this._readyToTakeProfit = true;
-                this._currentTakeProfit = Number(this._currentTakeProfit) + Number(this._takeProfitStep);
-            }
-
-            let minProfit = Number(this._currentTakeProfit) - Number(this._takeProfitStep);
-            if(this._readyToTakeProfit || this.transactions.filter(obj => obj._status === "FILLED").length === 2) {
-                if(Number(this._profit) < Number(minProfit)) await this.revive();
-            }
-        } 
-        catch(error) {
-          console.log(error);
-        }
-    }*/
 
     async updateTransactions() {
         try {
@@ -234,7 +198,6 @@ class Trader extends DB {
 
     async newTransaction({side, price = null, baseAmountIn = null}) {
         try {
-            const count = await this.getLevelCount(price);
             if(this._status !== "ACTIVE") return false;
             const transaction = new Transaction(this);
             transaction._side = side;
@@ -281,7 +244,6 @@ class Trader extends DB {
             if(this._quoteAmountIn === 0 || !this._quoteAmountIn) this._quoteAmountIn = this.ticker.getQuoteQuantity(this._baseAmountIn * this.ticker.currentPrice);
             await this.controller.tick();
             await this.sync();
-            //await this.generateLevels();
             await this.fill();
             await this.updateTransactions();
             await this.calculateProfit();
@@ -289,7 +251,6 @@ class Trader extends DB {
             await this.calculateProfitTaken();
             await this.calculateMoneyIn();
             this.release();
-            //this.log();
         }
         catch(error) {
             console.log(error);
@@ -303,27 +264,6 @@ class Trader extends DB {
         console.log("PROFIT", this._profit);
         console.log("PROFIT TAKEN", this._profitTaken);
     }
-
-    /*async fill() {
-        try {
-            for(let price of this._levels) {
-                const levelTransactions = await this.getLevel(price);
-                if(levelTransactions.length < 2) {
-                    const long = levelTransactions.find(transaction => transaction.side === "LONG") || null;
-                    const short = levelTransactions.find(transaction => transaction.side === "SHORT") || null;
-                    if(this.ticker.currentPrice <= (Number(price) - Number(this._stepSize)) && !long) {
-                        await this.newTransaction({side: "LONG", price});
-                    }
-                    else if(this.ticker.currentPrice >= (Number(price) + Number(this._stepSize)) && !short) {
-                        await this.newTransaction({side: "SHORT", price});
-                    }    
-                }       
-            }
-        }
-        catch(error) {
-            console.log(error);
-        }
-    }*/
 
     async fill() {
         try {
@@ -340,6 +280,7 @@ class Trader extends DB {
                 const short = await this.newTransaction({side: "SHORT", price: shortPrice, baseAmountIn});    
             }
             else {
+                const currentPrice = this.ticker.currentPrice;
                 const longLevel = this._levels.sort((a, b) => b - a)[0];
                 const shortLevel = this._levels.sort((a, b) => b - a)[1];
                 const isAllLongFilled = this.transactions.filter(obj => obj._price === longLevel && obj._status === "FILLED").length === this.transactions.filter(obj => obj._price === longLevel).length;
@@ -347,19 +288,18 @@ class Trader extends DB {
                 const longAmount = this.transactions.filter(obj => obj._price === longLevel).map(obj => Number(obj._baseAmountIn)).reduce((total, current) => total + current);
                 const shortAmount = this.transactions.filter(obj => obj._price === shortLevel).map(obj => Number(obj._baseAmountIn)).reduce((total, current) => total + current);
 
-                /*if(this.transactions.filter(obj => Number(obj._baseAmountIn) >= Number(this._maxBaseAmountIn)).length > 1 && this._maxBaseAmountIn > 0) {
-                    await this.revive();
-                    return;
-                }*/
-
-                /*if(longAmount > this._maxBaseAmountIn || shortAmount > this._maxBaseAmountIn) {
-                    await this.revive();
-                    return;
-                }*/
-
-                if(Number(longAmount) + Number(shortAmount) > Number(this._maxBaseAmountIn) && this._maxBaseAmountIn > 0 && isAllLongFilled && isAllLongFilled) {
-                    await this.revive();
-                    return;
+                const currentAmount = this.transactions.filter((obj) => obj._status === "FILLED").length > 0 ? this.transactions.filter((obj) => obj._status === "FILLED").map(obj => obj._baseAmountIn).reduce((total, current) => total + current) : 0;
+                if(Number(currentAmount) > Number(this._maxBaseAmountIn) && this._maxBaseAmountIn > 0) {
+                    const currentLongAmount = this.transactions.filter((obj) => obj._status === "FILLED" && obj._price === longLevel).length > 0 ? this.transactions.filter((obj) => obj._status === "FILLED" && obj._price === longLevel).map(obj => obj._baseAmountIn).reduce((total, current) => total + current) : 0;
+                    const currentShortAmount = this.transactions.filter((obj) => obj._status === "FILLED" && obj._price === shortLevel).length > 0 ? this.transactions.filter((obj) => obj._status === "FILLED" && obj._price === shortLevel).map(obj => obj._baseAmountIn).reduce((total, current) => total + current) : 0;
+                    if(
+                        (currentLongAmount > currentShortAmount && currentPrice <= (Number(longLevel) - 0))
+                        ||
+                        (currentShortAmount > currentLongAmount && currentPrice >= (Number(shortLevel) + 0))
+                    ) {
+                        await this.revive();
+                        return;
+                    }
                 }
 
                 if(isAllLongFilled && (shortAmount <= longAmount)) {
