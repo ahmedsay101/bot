@@ -348,6 +348,16 @@ class Trader extends DB {
                     return;
                 }*/
 
+                /*if(longAmount > this._maxBaseAmountIn || shortAmount > this._maxBaseAmountIn) {
+                    await this.revive();
+                    return;
+                }*/
+
+                if(Number(longAmount) + Number(shortAmount) > Number(this._maxBaseAmountIn) && this._maxBaseAmountIn > 0) {
+                    await this.revive();
+                    return;
+                }
+
                 if(isAllLongFilled && (shortAmount <= longAmount)) {
                     const lastBaseAmountIn = this.transactions.filter(obj => obj._price === longLevel).sort((a, b) => b._baseAmountIn - a._baseAmountIn)[0]?._baseAmountIn;
                     const baseAmountIn = Number(lastBaseAmountIn * (lastBaseAmountIn > this._maxBaseAmountIn && this._maxBaseAmountIn !== 0 ? 1 : 2));
