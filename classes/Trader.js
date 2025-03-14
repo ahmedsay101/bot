@@ -353,7 +353,7 @@ class Trader extends DB {
                     return;
                 }*/
 
-                if(Number(longAmount) + Number(shortAmount) > Number(this._maxBaseAmountIn) && this._maxBaseAmountIn > 0) {
+                if(Number(longAmount) + Number(shortAmount) > Number(this._maxBaseAmountIn) && this._maxBaseAmountIn > 0 && isAllLongFilled && isAllLongFilled) {
                     await this.revive();
                     return;
                 }
