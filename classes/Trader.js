@@ -3,7 +3,7 @@ const { Transactions } = require("../schema/transaction.schema");
 const { Transaction } = require("./Transaction");
 const { Traders } = require("../schema/trader.schema");
 const { DB } = require("./DB");
-const { hoursPassed } = require('../lib/utils');
+const { hoursPassed, percentageBetweenTwoNumbers } = require('../lib/utils');
 
 class Trader extends DB {
     constructor(controller, {
@@ -145,11 +145,15 @@ class Trader extends DB {
             const longLevel = this._levels.sort((a, b) => b - a)[0];
             const shortLevel = this._levels.sort((a, b) => b - a)[1];
             const fee = Number(this._moneyIn) * Number(this._fee);
+            const currentAmount = this.transactions.filter((obj) => obj._status === "FILLED").map(obj => obj._baseAmountIn).reduce((total, current) => total + current);
+
             if(
                 (
                     ((Math.abs(currentPrice - longLevel) >= this._takeProfit)  && currentPrice > longLevel)
                 || 
                     ((Math.abs(currentPrice - shortLevel) >= this._takeProfit) && currentPrice < shortLevel)
+                ||  
+                    (Math.abs(percentageBetweenTwoNumbers(Number(currentAmount), Number(this._maxBaseAmountIn))) > 60)
                 )
                 && 
                 (
