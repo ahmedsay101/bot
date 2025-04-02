@@ -48,6 +48,10 @@ class Transaction extends DB {
 
   async fill() {
     try {
+      if(this._baseAmountIn >= this.trader._maxBaseAmountIn) {
+        await this.trader.revive();
+        return;
+      }
       if(this._mode === "LIVE") await this.order();
       else this._status = "FILLED";
     } 

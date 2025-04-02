@@ -150,8 +150,8 @@ class Trader extends DB {
                     ((Math.abs(currentPrice - longLevel) >= this._takeProfit)  && currentPrice > longLevel)
                 || 
                     ((Math.abs(currentPrice - shortLevel) >= this._takeProfit) && currentPrice < shortLevel)
-                ||  
-                    (Math.abs(percentageBetweenTwoNumbers(Number(currentAmount), Number(this._maxBaseAmountIn))) < 60 && currentAmount > 0 && this._maxBaseAmountIn > 0)
+                //||  
+                    //(Math.abs(percentageBetweenTwoNumbers(Number(currentAmount), Number(this._maxBaseAmountIn))) < 60 && currentAmount > 0 && this._maxBaseAmountIn > 0)
                 )
                 && 
                 (
@@ -287,7 +287,7 @@ class Trader extends DB {
                 const longAmount = this.transactions.filter(obj => obj._price === longLevel).map(obj => Number(obj._baseAmountIn)).reduce((total, current) => total + current);
                 const shortAmount = this.transactions.filter(obj => obj._price === shortLevel).map(obj => Number(obj._baseAmountIn)).reduce((total, current) => total + current);
 
-                const currentAmount = this.transactions.filter((obj) => obj._status === "FILLED").length > 0 ? this.transactions.filter((obj) => obj._status === "FILLED").map(obj => obj._baseAmountIn).reduce((total, current) => total + current) : 0;
+                /*const currentAmount = this.transactions.filter((obj) => obj._status === "FILLED").length > 0 ? this.transactions.filter((obj) => obj._status === "FILLED").map(obj => obj._baseAmountIn).reduce((total, current) => total + current) : 0;
                 if(Number(currentAmount) > Number(this._maxBaseAmountIn) && this._maxBaseAmountIn > 0) {
                     const currentLongAmount = this.transactions.filter((obj) => obj._status === "FILLED" && obj._price === longLevel).length > 0 ? this.transactions.filter((obj) => obj._status === "FILLED" && obj._price === longLevel).map(obj => obj._baseAmountIn).reduce((total, current) => total + current) : 0;
                     const currentShortAmount = this.transactions.filter((obj) => obj._status === "FILLED" && obj._price === shortLevel).length > 0 ? this.transactions.filter((obj) => obj._status === "FILLED" && obj._price === shortLevel).map(obj => obj._baseAmountIn).reduce((total, current) => total + current) : 0;
@@ -299,7 +299,7 @@ class Trader extends DB {
                         await this.revive();
                         return;
                     }
-                }
+                }*/
 
                 if(isAllLongFilled && (shortAmount <= longAmount)) {
                     const lastBaseAmountIn = this.transactions.filter(obj => obj._price === longLevel).sort((a, b) => b._baseAmountIn - a._baseAmountIn)[0]?._baseAmountIn;
