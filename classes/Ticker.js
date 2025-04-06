@@ -53,7 +53,7 @@ class Ticker {
   async updateTraders() {
     try {
       for(let trader of this.traders) {
-        if(trader._status === "ACTIVE") await trader.tick();
+        await trader.tick();
       } 
     } 
     catch(error) {
@@ -73,7 +73,7 @@ class Ticker {
       if(this.speedMemory.length >= this.speedMemoryLimit) this.avgSpeed = arrayAvg(this.speedMemory);
       this.currentPrice = price;
       //if(this.currentPrice > 80400) this.side = "SHORT";
-      //if(this.currentPrice < 79200) this.side = "LONG";
+      //if(this.currentPrice < 79600) this.side = "LONG";
       //this.currentPrice = this.side === "LONG" ? this.currentPrice += 10 : this.currentPrice -= 10;
       await this.updateTraders();
     }

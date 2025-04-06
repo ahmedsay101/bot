@@ -24,6 +24,7 @@ class Trader extends DB {
         requiredTransactions = 0,
         requiredBalance = 0,
         hours = 0,
+        starts = "NOW",
         mode = "TESTING",
         levels = []
     }) {
@@ -60,7 +61,8 @@ class Trader extends DB {
         this._requiredTransactions = requiredTransactions;
         this._requiredBalance = requiredBalance;
         this._mode = mode;
-        this._status = "ACTIVE";
+        this._status = "STOPPED";
+        this._starts = starts;
         this._type = type;
         this._lives = lives;
         this.busy = false;
@@ -116,6 +118,22 @@ class Trader extends DB {
         }
     }
 
+    start() {
+        if(this._starts === "NOW") this._status = "ACTIVE";
+        else if(this._starts === "ACTIVE_HOURS") {
+            if(this.isActive()) this._status = "ACTIVE";
+        }
+    }
+
+    isActive() {
+        const now = new Date();
+        const cairoHour = (now.getUTCHours() + 2) % 24;
+        const cairoDay = now.getUTCDay(); 
+        const isWeekday = cairoDay >= 1 && cairoDay <= 5;
+        const isWithinHour = cairoHour === 11;
+        return isWeekday && isWithinHour;
+    }
+
     async sync() {
         try {
             if(this._status === "ACTIVE") await this.takeProfit();
@@ -150,12 +168,10 @@ class Trader extends DB {
                     ((Math.abs(currentPrice - longLevel) >= this._takeProfit)  && currentPrice > longLevel)
                 || 
                     ((Math.abs(currentPrice - shortLevel) >= this._takeProfit) && currentPrice < shortLevel)
-                //||  
-                    //(Math.abs(percentageBetweenTwoNumbers(Number(currentAmount), Number(this._maxBaseAmountIn))) < 60 && currentAmount > 0 && this._maxBaseAmountIn > 0)
                 )
                 && 
                 (
-                    Number(this._profit) >= Number(fee)
+                    Number(this._profit) >= 1
                 )
             ) await this.revive();
 
@@ -197,7 +213,7 @@ class Trader extends DB {
 
     async newTransaction({side, price = null, baseAmountIn = null}) {
         try {
-            if(this._status !== "ACTIVE") return false;
+            if(this._status !== "ACTIVE" || Number(baseAmountIn).toFixed(2) > Number(this._maxBaseAmountIn).toFixed(2)) return false;
             const transaction = new Transaction(this);
             transaction._side = side;
             transaction._price = price ? price : this.ticker.currentPrice;
@@ -236,6 +252,7 @@ class Trader extends DB {
 
     async tick() {
         try {
+            this.start();
             if(!this.canTick()) return;
             this.hold();
             if(this._mode === "LIVE" && this.transactions.length < 1) await this.setLeverage();
@@ -341,7 +358,7 @@ class Trader extends DB {
         }
     }
 
-    async revive() {
+    async revive(starts = "NOW") {
         try {
             await this.destroy();
             await this.controller.createTrader({
@@ -354,6 +371,7 @@ class Trader extends DB {
                 stopLoss: this._stopLoss,
                 mode: this._mode,
                 leverage: this._leverage,
+                starts: starts,
                 takeProfitStep: this._takeProfitStep
             });
         }

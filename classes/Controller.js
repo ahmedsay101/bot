@@ -32,6 +32,7 @@ class Controller {
             hours: data.hours,
             takeProfitStep: data.takeProfitStep
         };
+        if(data.starts) traderData["starts"] = data.starts;
         if(data.accumulatedProfit) traderData["accumulatedProfit"] = data.accumulatedProfit;
         if(data.maxMoneyIn) traderData["maxMoneyIn"] = data.maxMoneyIn;
         if(data.baseAmountIn) traderData["baseAmountIn"] = data.baseAmountIn;

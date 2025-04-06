@@ -48,10 +48,6 @@ class Transaction extends DB {
 
   async fill() {
     try {
-      if(this._baseAmountIn > this.trader._maxBaseAmountIn) {
-        await this.trader.revive();
-        return;
-      }
       if(this._mode === "LIVE") await this.order();
       else this._status = "FILLED";
     } 
@@ -85,54 +81,6 @@ class Transaction extends DB {
       console.log(error);
     }
   }
-
-  /*async takeProfit() {
-    try {
-      if(this.busy) return;
-      this.hold();
-      if(this._takeProfit && this._status === "FILLED") {
-        const takeProfitOrder = await this.service.order({
-          symbol: this._symbol,
-          side: this._side === "SHORT" ? "BUY" : "SELL",
-          positionSide: this._side,
-          type: "TAKE_PROFIT_MARKET",
-          stopPrice: this.ticker.getQuoteQuantity(this._takeProfit),
-          quantity: this.ticker.getBaseQuantity(this._baseAmountIn),
-          timeInForce: "GTC",
-          workingType: "MARK_PRICE",
-          priceProtect: true,
-        });
-      }
-      this.release();
-    } 
-    catch(error) {
-      console.log(error);
-    }
-  }*/
-
-  /*async stopLoss() {
-    try {
-      if(this.busy) return;
-      this.hold();
-      if(this._stopLoss && this._status === "FILLED") {
-        const stopLossOrder = await this.service.order({
-          symbol: this._symbol,
-          side: this._side === "SHORT" ? "BUY" : "SELL",
-          positionSide: this._side,
-          type: "STOP_MARKET",
-          stopPrice: this.ticker.getQuoteQuantity(this._stopLoss),
-          quantity: this.ticker.getBaseQuantity(this._baseAmountIn),
-          timeInForce: "GTC",
-          workingType: "MARK_PRICE",
-          priceProtect: true,
-        });
-      }
-      this.release();
-    } 
-    catch(error) {
-      console.log(error);
-    }
-  }*/
   
   async update() {
     try {
@@ -159,21 +107,6 @@ class Transaction extends DB {
     try {
       if(this._mode === "LIVE") {
         if(!this.busy && this._status === "NEW") await this.update();
-        /*if(
-          !this._orderId 
-          && (
-            (this._side === "LONG" && this.ticker.getQuoteQuantity(this.ticker.currentPrice) <= this.ticker.getQuoteQuantity(Number(this._price) + (Number(this.trader._stepSize) * 2)))
-            || (this._side === "SHORT" && this.ticker.getQuoteQuantity(this.ticker.currentPrice) >= this.ticker.getQuoteQuantity(Number(this._price) - (Number(this.trader._stepSize) * 2)))
-          )
-        ) await this.order();
-        if(
-          this._orderId 
-          && this._status === "NEW"
-          && (
-            (this._side === "LONG" && this.ticker.getQuoteQuantity(this.ticker.currentPrice) > this.ticker.getQuoteQuantity(Number(this._price) + (Number(this.trader._stepSize) * 2)))
-            || (this._side === "SHORT" && this.ticker.getQuoteQuantity(this.ticker.currentPrice) < this.ticker.getQuoteQuantity(Number(this._price) - (Number(this.trader._stepSize) * 2)))
-          )
-        ) await this.cancel();*/
       }
       await this.dbSync();
     } 
@@ -244,21 +177,19 @@ class Transaction extends DB {
         ((this._position === "HIGHER" && this.ticker.currentPrice >= this._price)
         ||
         (this._position === "LOWER" && this.ticker.currentPrice <= this._price))
-      ) {
-        await this.fill();
-      }
+      ) await this.fill();
+      
 
-      /*if(
-        (this._side === "LONG" && this.ticker.getQuoteQuantity(this.ticker.currentPrice) >= this.ticker.getQuoteQuantity(this._takeProfit) && this.ticker.getQuoteQuantity(this._takeProfit) !== 0 && this._status === "FILLED")
-        ||
-        (this._side === "SHORT" && this.ticker.getQuoteQuantity(this.ticker.currentPrice) <= this.ticker.getQuoteQuantity(this._takeProfit) && this.ticker.getQuoteQuantity(this._takeProfit) !== 0 && this._status === "FILLED")
-        ||
-        (this._side === "SHORT" && this.ticker.getQuoteQuantity(this.ticker.currentPrice) >= this.ticker.getQuoteQuantity(this._stopLoss) && this.ticker.getQuoteQuantity(this._stopLoss) !== 0 && this._status === "FILLED")
-        ||
-        (this._side === "LONG" && this.ticker.getQuoteQuantity(this.ticker.currentPrice) <= this.ticker.getQuoteQuantity(this._stopLoss) && this.ticker.getQuoteQuantity(this._stopLoss) !== 0 && this._status === "FILLED")
-      ) await this.close();*/
+      if(
+        this._status === "FILLED"
+        && Number(this._baseAmountIn).toFixed(2) >= Number(this.trader._maxBaseAmountIn).toFixed(2) 
+        && (
+          (this._side === "SHORT" && this.ticker.getQuoteQuantity(this.ticker.currentPrice) >= this.ticker.getQuoteQuantity(this._price + this.trader._stopLoss))
+          ||
+          (this._side === "LONG" && this.ticker.getQuoteQuantity(this.ticker.currentPrice) <= this.ticker.getQuoteQuantity(this._price - this.trader._stopLoss))
+        )
+      ) await this.trader.revive("ACTIVE_HOURS");
 
-      //this._baseAmountIn = this.trader._baseAmountIn;
       this._quoteAmountIn = this._baseAmountIn * this._price;
       this._quoteAmountOut = this._side === "LONG" ? this._baseAmountIn * this.ticker.currentPrice : (this._quoteAmountIn + (this._quoteAmountIn - (this._baseAmountIn * this.ticker.currentPrice)));
       this._baseAmountOut = this.ticker.getBaseQuantity(this._quoteAmountOut / this.ticker.currentPrice);
