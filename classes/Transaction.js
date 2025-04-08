@@ -188,7 +188,7 @@ class Transaction extends DB {
           ||
           (this._side === "LONG" && this.ticker.getQuoteQuantity(this.ticker.currentPrice) <= this.ticker.getQuoteQuantity(this._price - this.trader._stopLoss))
         )
-      ) await this.trader.revive("ACTIVE_HOURS");
+      ) await this.trader.revive("NOW");
 
       this._quoteAmountIn = this._baseAmountIn * this._price;
       this._quoteAmountOut = this._side === "LONG" ? this._baseAmountIn * this.ticker.currentPrice : (this._quoteAmountIn + (this._quoteAmountIn - (this._baseAmountIn * this.ticker.currentPrice)));
