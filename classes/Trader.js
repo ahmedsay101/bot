@@ -169,10 +169,10 @@ class Trader extends DB {
                 || 
                     ((Math.abs(currentPrice - shortLevel) >= this._takeProfit) && currentPrice < shortLevel)
                 )
-                /*&& 
+                && 
                 (
                     Number(this._profit) >= 1
-                )*/
+                )
             ) await this.revive();
 
 
