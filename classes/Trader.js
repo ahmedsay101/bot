@@ -259,6 +259,8 @@ class Trader extends DB {
             if(this._baseAmountIn === 0 || !this._baseAmountIn) this._baseAmountIn = this._quoteAmountIn / this.ticker.currentPrice;
             if(this._quoteAmountIn === 0 || !this._quoteAmountIn) this._quoteAmountIn = this.ticker.getQuoteQuantity(this._baseAmountIn * this.ticker.currentPrice);
             await this.controller.tick();
+            const filledTransactions = this.transactions.filter(one => one._status === "FILLED").length || 1;
+            this._takeProfit = Number(this._takeProfit) * Number(filledTransactions);
             await this.sync();
             await this.fill();
             await this.updateTransactions();
