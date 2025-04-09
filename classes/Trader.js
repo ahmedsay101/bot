@@ -259,8 +259,6 @@ class Trader extends DB {
             if(this._baseAmountIn === 0 || !this._baseAmountIn) this._baseAmountIn = this._quoteAmountIn / this.ticker.currentPrice;
             if(this._quoteAmountIn === 0 || !this._quoteAmountIn) this._quoteAmountIn = this.ticker.getQuoteQuantity(this._baseAmountIn * this.ticker.currentPrice);
             await this.controller.tick();
-            const filledTransactions = this.transactions.filter(one => one._status === "FILLED").length || 1;
-            this._takeProfit = Number(this._takeProfit) * Number(filledTransactions);
             await this.sync();
             await this.fill();
             await this.updateTransactions();
@@ -324,7 +322,7 @@ class Trader extends DB {
                     const lastBaseAmountIn = this.transactions.filter(obj => obj._price === longLevel).sort((a, b) => b._baseAmountIn - a._baseAmountIn)[0]?._baseAmountIn;
                     //const baseAmountIn = Number(lastBaseAmountIn * (lastBaseAmountIn > this._maxBaseAmountIn && this._maxBaseAmountIn !== 0 ? 1 : 2));
                     //const baseAmountIn = Number(Number(longAmount) * 2) - Number(shortAmount);
-                    const baseAmountIn = Number(lastBaseAmountIn * 5);
+                    const baseAmountIn = Number(lastBaseAmountIn * 3);
                     //const baseAmountIn = (Number(longAmount) - Number(shortAmount)) + this._baseAmountIn;
                     const newShort = await this.newTransaction({side: "SHORT", price: shortLevel, baseAmountIn});    
                 }
@@ -332,7 +330,7 @@ class Trader extends DB {
                     const lastBaseAmountIn = this.transactions.filter(obj => obj._price === shortLevel).sort((a, b) => b._baseAmountIn - a._baseAmountIn)[0]?._baseAmountIn;
                     //const baseAmountIn = Number(lastBaseAmountIn * (lastBaseAmountIn > this._maxBaseAmountIn && this._maxBaseAmountIn !== 0 ? 1 : 2));
                     //const baseAmountIn = Number(Number(shortAmount) * 2) - Number(longAmount);
-                    const baseAmountIn = Number(lastBaseAmountIn * 5);
+                    const baseAmountIn = Number(lastBaseAmountIn * 3);
                     //const baseAmountIn = (Number(shortAmount) - Number(longAmount)) + this._baseAmountIn;
                     const newLong = await this.newTransaction({side: "LONG", price: longLevel, baseAmountIn});    
                 }
