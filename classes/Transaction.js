@@ -50,6 +50,7 @@ class Transaction extends DB {
     try {
       if(this._mode === "LIVE") await this.order();
       else this._status = "FILLED";
+      if(Number(this._baseAmountIn).toFixed(3) > Number(this.trader._peakBaseAmountIn).toFixed(3)) this.trader._peakBaseAmountIn = Number(this._baseAmountIn).toFixed(3);
     } 
     catch(error) {
       console.log(error);

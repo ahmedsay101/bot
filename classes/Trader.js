@@ -328,7 +328,6 @@ class Trader extends DB {
                     //const baseAmountIn = Number(Number(longAmount) * 2) - Number(shortAmount);
                     const baseAmountIn = Number(lastBaseAmountIn * this._doubles);
                     //const baseAmountIn = (Number(longAmount) - Number(shortAmount)) + this._baseAmountIn;
-                    if(Number(baseAmountIn).toFixed(3) > Number(this._peakBaseAmountIn).toFixed(3)) this._peakBaseAmountIn = Number(baseAmountIn).toFixed(3);
                     const newShort = await this.newTransaction({side: "SHORT", price: shortLevel, baseAmountIn});    
                 }
                 if(isAllShortFilled && (longAmount <= shortAmount)) {
@@ -337,7 +336,6 @@ class Trader extends DB {
                     //const baseAmountIn = Number(Number(shortAmount) * 2) - Number(longAmount);
                     const baseAmountIn = Number(lastBaseAmountIn * this._doubles);
                     //const baseAmountIn = (Number(shortAmount) - Number(longAmount)) + this._baseAmountIn;
-                    if(Number(baseAmountIn).toFixed(3) > Number(this._peakBaseAmountIn).toFixed(3)) this._peakBaseAmountIn = Number(baseAmountIn).toFixed(3);
                     const newLong = await this.newTransaction({side: "LONG", price: longLevel, baseAmountIn});    
                 }
             }
