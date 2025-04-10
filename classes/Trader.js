@@ -175,7 +175,7 @@ class Trader extends DB {
                 )
                 && 
                 (
-                    Number(this._profit) >= 0
+                    Number(this._profit) >= 1
                 )
             ) await this.revive();
 
