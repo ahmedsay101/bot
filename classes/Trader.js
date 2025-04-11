@@ -217,7 +217,7 @@ class Trader extends DB {
 
     async newTransaction({side, price = null, baseAmountIn = null}) {
         try {
-            if(this._status !== "ACTIVE" || Number(baseAmountIn).toFixed(2) > Number(this._maxBaseAmountIn).toFixed(2)) return false;
+            if(this._status !== "ACTIVE" || Number(Number(baseAmountIn).toFixed(2)) > Number(Number(this._maxBaseAmountIn).toFixed(2))) return false;
             const transaction = new Transaction(this);
             transaction._side = side;
             transaction._price = price ? price : this.ticker.currentPrice;

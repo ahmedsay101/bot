@@ -183,7 +183,7 @@ class Transaction extends DB {
 
       if(
         this._status === "FILLED"
-        && Number(this._baseAmountIn).toFixed(2) >= Number(this.trader._maxBaseAmountIn).toFixed(2) 
+        && Number(Number(this._baseAmountIn).toFixed(2)) >= Number(Number(this.trader._maxBaseAmountIn).toFixed(2))
         && (
           (this._side === "SHORT" && this.ticker.getQuoteQuantity(this.ticker.currentPrice) >= this.ticker.getQuoteQuantity(this._price + this.trader._stopLoss))
           ||
