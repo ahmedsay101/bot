@@ -125,6 +125,7 @@ app.get('/api', authenticate, (req, res) => {
                     type: obj._type,
                     totalProfit: obj._totalProfit,
                     peak: obj._peak,
+                    isMarketActive: obj._isMarketActive,
                     createdAt: obj._createdAt,
                     updatedAt: obj._updatedAt,
                     transactions: obj.transactions.map(transaction => ({
