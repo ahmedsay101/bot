@@ -26,7 +26,7 @@ class Trader extends DB {
         requiredTransactions = 0,
         requiredBalance = 0,
         hours = 0,
-        starts = "NOW",
+        starts = "MARKET_ACTIVE",
         mode = "TESTING",
         levels = []
     }) {
@@ -66,6 +66,7 @@ class Trader extends DB {
         this._requiredBalance = requiredBalance;
         this._mode = mode;
         this._status = "STOPPED";
+        this._isMarketActive = false;
         this._starts = starts;
         this._type = type;
         this._lives = lives;
@@ -77,6 +78,10 @@ class Trader extends DB {
         this._createdAt = new Date();
         this._updatedAt = new Date();
         this.overwrite = ["levels", "profit"];
+
+        this.marketActiveTask = cron.schedule('* * * * *', async() => {
+            await this.isMarketActive();
+        });
     }
 
     async generateLevels() {
@@ -122,10 +127,48 @@ class Trader extends DB {
         }
     }
 
+    async isMarketActive() {
+        try {
+            const candles = await this.service.getKlines(this.symbol, limit = 30, interval = "5m");
+            const threshold = 200;
+        
+            let ranges = [];
+            let volumes = [];
+        
+            for (let candle of candles) {
+                const high = parseFloat(candle[2]);
+                const low = parseFloat(candle[3]);
+                const volume = parseFloat(candle[5]);
+                ranges.push(high - low);
+                volumes.push(volume);
+            }
+        
+            const avgRange = ranges.slice(0, -1).reduce((a, b) => a + b, 0) / (ranges.length - 1);
+            const lastRange = ranges[ranges.length - 1];
+        
+            const avgVolume = volumes.slice(0, -1).reduce((a, b) => a + b, 0) / (volumes.length - 1);
+            const lastVolume = volumes[volumes.length - 1];
+        
+            if ((lastRange >= threshold * 0.7 || avgRange >= threshold * 0.5) && lastVolume >= avgVolume * 1.5) {
+                this._isMarketActive = true;
+                return;
+            }
+        
+            return false;
+        } catch (error) {
+            console.log(error);
+            this._isMarketActive = false;
+            return;
+        }
+    }
+
     start() {
         if(this._starts === "NOW") this._status = "ACTIVE";
         else if(this._starts === "ACTIVE_HOURS") {
             if(this.isActive()) this._status = "ACTIVE";
+        }
+        else if(this._starts === "MARKET_ACTIVE") {
+            if(this._isMarketActive) this._status = "ACTIVE";
         }
     }
 
@@ -362,7 +405,7 @@ class Trader extends DB {
         }
     }
 
-    async revive(starts = "NOW") {
+    async revive(starts = "MARKET_ACTIVE") {
         try {
             await this.destroy();
             await this.controller.createTrader({
