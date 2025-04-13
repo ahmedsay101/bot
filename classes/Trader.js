@@ -148,9 +148,16 @@ class Trader extends DB {
         
             const avgVolume = volumes.slice(0, -1).reduce((a, b) => a + b, 0) / (volumes.length - 1);
             const lastVolume = volumes[volumes.length - 1];
-        
+
+            console.log("AVERAGE RANGE: ", avgRange);
+            console.log("LAST RANGE: ", lastRange);
+
+            console.log("AVERAGE VOLUME: ", avgVolume);
+            console.log("LAST VOLUME: ", lastVolume);
+
             if ((lastRange >= threshold * 0.7 || avgRange >= threshold * 0.5) && lastVolume >= avgVolume * 1.5) {
                 this._isMarketActive = true;
+                console.log("MARKET ACTIVE", this._isMarketActive);
                 return;
             }
         
