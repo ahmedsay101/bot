@@ -1,9 +1,9 @@
+const cron = require('node-cron');
 const { v4: uuidv4 } = require('uuid');
 const { Transactions } = require("../schema/transaction.schema");
 const { Transaction } = require("./Transaction");
 const { Traders } = require("../schema/trader.schema");
 const { DB } = require("./DB");
-const { hoursPassed, percentageBetweenTwoNumbers } = require('../lib/utils');
 
 class Trader extends DB {
     constructor(controller, {
