@@ -130,7 +130,7 @@ class Trader extends DB {
     async isMarketActive() {
         try {
             const candles = await this.service.getKlines(this._symbol, 30, "5m");
-            const threshold = 400;
+            const threshold = 1000;
         
             let ranges = [];
             let volumes = [];
