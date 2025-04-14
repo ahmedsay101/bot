@@ -171,7 +171,7 @@ class Trader extends DB {
 
     async isMarketActive() {
         try {
-            const interval = "1m", limit = 30, multiplier = 3;
+            const interval = "1m", limit = 30, multiplier = 5;
             const candles = await this.service.getKlines(this._symbol, limit, interval);
         
             let highs = [], lows = [], volumes = [], bodies = [], ranges = [];
@@ -194,8 +194,9 @@ class Trader extends DB {
             const avgBody = bodies.slice(0, -1).reduce((a, b) => a + b, 0) / (bodies.length - 1);
             const avgRange = ranges.slice(0, -1).reduce((a, b) => a + b, 0) / (ranges.length - 1);
         
-            const dynamicThreshold = avgRange * multiplier;
-        
+            const newBody = avgBody * multiplier;
+            const newRange = avgRange * multiplier;
+            const newVolume = avgVolume * multiplier;
 
             const lastCandle = candles[candles.length - 1];
             const lastOpen = parseFloat(lastCandle[1]);
@@ -212,12 +213,16 @@ class Trader extends DB {
             console.log("AVERAGE BODY: ", avgBody);
             console.log("AVERAGE VOLUME: ", avgVolume);
             console.log("AVERAGE RANGE: ", avgRange);
+
+            console.log("NEW BODY: ", newBody);
+            console.log("NEW VOLUME: ", newVolume);
+            console.log("NEW RANGE: ", newRange);
         
             if (
             brokeRange &&
-            lastBody > avgBody * 2 &&
-            lastVolume > avgVolume * 2 &&
-            lastRange > dynamicThreshold
+            lastBody >= newBody &&
+            lastVolume >= newVolume &&
+            lastRange >= newRange
             ) {
                 this._isMarketActive = true;
                 console.log("MARKET ACTIVE", this._isMarketActive);
@@ -280,13 +285,14 @@ class Trader extends DB {
             const currentPrice = this.ticker.currentPrice;
             const longLevel = this._levels.sort((a, b) => b - a)[0];
             const shortLevel = this._levels.sort((a, b) => b - a)[1];
+            const filledTransactions = this.transactions.filter(one => one._status === "FILLED").length;
             const fee = Number(this._moneyIn) * Number(this._fee);
             const currentAmount = this.transactions.filter((obj) => obj._status === "FILLED").length > 0 ? this.transactions.filter((obj) => obj._status === "FILLED").map(obj => obj._baseAmountIn).reduce((total, current) => total + current) : 0;
             if(
                 (
-                    ((Math.abs(currentPrice - longLevel) >= this._takeProfit)  && currentPrice > longLevel)
+                    ((Math.abs(currentPrice - longLevel) >= (filledTransactions > 1 ? this._takeProfit : (this._takeProfit / 2)))  && currentPrice > longLevel)
                 || 
-                    ((Math.abs(currentPrice - shortLevel) >= this._takeProfit) && currentPrice < shortLevel)
+                    ((Math.abs(currentPrice - shortLevel) >= (filledTransactions > 1 ? this._takeProfit : (this._takeProfit / 2))) && currentPrice < shortLevel)
                 )
                 && 
                 (
