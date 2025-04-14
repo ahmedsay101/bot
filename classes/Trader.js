@@ -171,7 +171,7 @@ class Trader extends DB {
 
     async isMarketActive() {
         try {
-            const interval = "1m", limit = 30, multiplier = 5;
+            const interval = "1m", limit = 30, multiplier = 4;
             const candles = await this.service.getKlines(this._symbol, limit, interval);
         
             let highs = [], lows = [], volumes = [], bodies = [], ranges = [];
@@ -196,7 +196,7 @@ class Trader extends DB {
         
             const newBody = avgBody * multiplier;
             const newRange = avgRange * multiplier;
-            const newVolume = avgVolume * multiplier;
+            const newVolume = avgVolume * (multiplier * 2);
 
             const lastCandle = candles[candles.length - 1];
             const lastOpen = parseFloat(lastCandle[1]);
