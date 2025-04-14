@@ -170,60 +170,68 @@ class Trader extends DB {
     }*/
 
     async isMarketActive() {
-        const interval = "1m", limit = 30, multiplier = 3;
-        const candles = await this.service.getKlines(this._symbol, limit, interval);
-      
-        let highs = [], lows = [], volumes = [], bodies = [];
-      
-        for (let i = 0; i < candles.length; i++) {
-          const open = parseFloat(candles[i][1]);
-          const high = parseFloat(candles[i][2]);
-          const low = parseFloat(candles[i][3]);
-          const close = parseFloat(candles[i][4]);
-          const volume = parseFloat(candles[i][5]);
-      
-          highs.push(high);
-          lows.push(low);
-          volumes.push(volume);
-          bodies.push(Math.abs(close - open));
-        }
-      
-        const avgVolume = volumes.slice(0, -1).reduce((a, b) => a + b, 0) / (volumes.length - 1);
-        const avgBody = bodies.slice(0, -1).reduce((a, b) => a + b, 0) / (bodies.length - 1);
-        const avgRange = ranges.slice(0, -1).reduce((a, b) => a + b, 0) / (ranges.length - 1);
-      
-        const dynamicThreshold = avgRange * multiplier;
-      
+        try {
+            const interval = "1m", limit = 30, multiplier = 3;
+            const candles = await this.service.getKlines(this._symbol, limit, interval);
+        
+            let highs = [], lows = [], volumes = [], bodies = [];
+        
+            for (let i = 0; i < candles.length; i++) {
+            const open = parseFloat(candles[i][1]);
+            const high = parseFloat(candles[i][2]);
+            const low = parseFloat(candles[i][3]);
+            const close = parseFloat(candles[i][4]);
+            const volume = parseFloat(candles[i][5]);
+        
+            highs.push(high);
+            lows.push(low);
+            volumes.push(volume);
+            bodies.push(Math.abs(close - open));
+            }
+        
+            const avgVolume = volumes.slice(0, -1).reduce((a, b) => a + b, 0) / (volumes.length - 1);
+            const avgBody = bodies.slice(0, -1).reduce((a, b) => a + b, 0) / (bodies.length - 1);
+            const avgRange = ranges.slice(0, -1).reduce((a, b) => a + b, 0) / (ranges.length - 1);
+        
+            const dynamicThreshold = avgRange * multiplier;
+        
 
-        const lastCandle = candles[candles.length - 1];
-        const lastOpen = parseFloat(lastCandle[1]);
-        const lastClose = parseFloat(lastCandle[4]);
-        const lastHigh = parseFloat(lastCandle[2]);
-        const lastLow = parseFloat(lastCandle[3]);
-        const lastVolume = parseFloat(lastCandle[5]);
-        const lastBody = Math.abs(lastClose - lastOpen);
-        const lastRange = lastHigh - lastLow;
+            const lastCandle = candles[candles.length - 1];
+            const lastOpen = parseFloat(lastCandle[1]);
+            const lastClose = parseFloat(lastCandle[4]);
+            const lastHigh = parseFloat(lastCandle[2]);
+            const lastLow = parseFloat(lastCandle[3]);
+            const lastVolume = parseFloat(lastCandle[5]);
+            const lastBody = Math.abs(lastClose - lastOpen);
+            const lastRange = lastHigh - lastLow;
 
-        const brokeRange = lastHigh > Math.max(...highs.slice(0, -1)) || lastLow < Math.min(...lows.slice(0, -1));
+            const brokeRange = lastHigh > Math.max(...highs.slice(0, -1)) || lastLow < Math.min(...lows.slice(0, -1));
 
-        console.log("BROKE RANGE: ", brokeRange);
-        console.log("AVERAGE BODY: ", avgBody);
-        console.log("AVERAGE VOLUME: ", avgVolume);
-        console.log("AVERAGE RANGE: ", avgRange);
-      
-        if (
-          brokeRange &&
-          lastBody > avgBody * 2 &&
-          lastVolume > avgVolume * 2 &&
-          lastRange > dynamicThreshold
-        ) {
-            this._isMarketActive = true;
-            console.log("MARKET ACTIVE", this._isMarketActive);
+            console.log("BROKE RANGE: ", brokeRange);
+            console.log("AVERAGE BODY: ", avgBody);
+            console.log("AVERAGE VOLUME: ", avgVolume);
+            console.log("AVERAGE RANGE: ", avgRange);
+        
+            if (
+            brokeRange &&
+            lastBody > avgBody * 2 &&
+            lastVolume > avgVolume * 2 &&
+            lastRange > dynamicThreshold
+            ) {
+                this._isMarketActive = true;
+                console.log("MARKET ACTIVE", this._isMarketActive);
+                return;
+            }
+        
+            this._isMarketActive = false;
             return;
         }
-      
-        return false;
-      }
+        catch(error) {
+            console.log(error);
+            this._isMarketActive = false;
+            return;
+        }
+    }
 
     start() {
         if(this._starts === "NOW") this._status = "ACTIVE";
