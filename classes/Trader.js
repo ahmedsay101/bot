@@ -219,10 +219,10 @@ class Trader extends DB {
             console.log("NEW RANGE: ", newRange);
         
             if (
-            brokeRange &&
-            lastBody >= newBody &&
-            lastVolume >= newVolume &&
-            lastRange >= newRange
+                brokeRange &&
+                lastBody >= newBody &&
+                lastVolume >= newVolume &&
+                lastRange >= newRange
             ) {
                 this._isMarketActive = true;
                 console.log("MARKET ACTIVE", this._isMarketActive);
@@ -290,9 +290,9 @@ class Trader extends DB {
             const currentAmount = this.transactions.filter((obj) => obj._status === "FILLED").length > 0 ? this.transactions.filter((obj) => obj._status === "FILLED").map(obj => obj._baseAmountIn).reduce((total, current) => total + current) : 0;
             if(
                 (
-                    ((Math.abs(currentPrice - longLevel) >= (filledTransactions > 1 ? this._takeProfit : (this._takeProfit / 2)))  && currentPrice > longLevel)
+                    ((Math.abs(currentPrice - longLevel) >= (filledTransactions > 1 ? Number(this._takeProfit) : Number(this._stepSize)))  && currentPrice > longLevel)
                 || 
-                    ((Math.abs(currentPrice - shortLevel) >= (filledTransactions > 1 ? this._takeProfit : (this._takeProfit / 2))) && currentPrice < shortLevel)
+                    ((Math.abs(currentPrice - shortLevel) >= (filledTransactions > 1 ? Number(this._takeProfit) : Number(this._stepSize))) && currentPrice < shortLevel)
                 )
                 && 
                 (
