@@ -171,7 +171,14 @@ class Trader extends DB {
 
     async isMarketActive() {
         try {
-            const interval = "1m", limit = 30, multiplier = 4;
+
+            const 
+            interval = "1m", 
+            limit = 30, 
+            rangeMultiplier = 3,
+            bodyMultiplier = 2,
+            volumeMultiplier = 4;
+
             const candles = await this.service.getKlines(this._symbol, limit, interval);
         
             let highs = [], lows = [], volumes = [], bodies = [], ranges = [];
@@ -194,9 +201,9 @@ class Trader extends DB {
             const avgBody = bodies.slice(0, -1).reduce((a, b) => a + b, 0) / (bodies.length - 1);
             const avgRange = ranges.slice(0, -1).reduce((a, b) => a + b, 0) / (ranges.length - 1);
         
-            const newBody = avgBody * multiplier;
-            const newRange = avgRange * multiplier;
-            const newVolume = avgVolume * (multiplier * 2);
+            const newRange = avgRange * rangeMultiplier;
+            const newVolume = avgVolume * volumeMultiplier;
+            const newBody = avgBody * bodyMultiplier;
 
             const lastCandle = candles[candles.length - 1];
             const lastOpen = parseFloat(lastCandle[1]);
@@ -209,7 +216,6 @@ class Trader extends DB {
 
             const brokeRange = lastHigh > Math.max(...highs.slice(0, -1)) || lastLow < Math.min(...lows.slice(0, -1));
 
-            console.log("BROKE RANGE: ", brokeRange);
             console.log("AVERAGE BODY: ", avgBody);
             console.log("AVERAGE VOLUME: ", avgVolume);
             console.log("AVERAGE RANGE: ", avgRange);
@@ -218,17 +224,29 @@ class Trader extends DB {
             console.log("NEW VOLUME: ", newVolume);
             console.log("NEW RANGE: ", newRange);
         
+            console.log("BROKE RANGE: ", brokeRange);
+            console.log("BODY BREAK: ", lastBody >= newBody);
+            console.log("VOLUME BREAK: ", lastVolume >= newVolume);
+            console.log("RANGE BREAK: ", lastRange >= newRange);
+
             if (
-                brokeRange &&
-                lastBody >= newBody &&
-                lastVolume >= newVolume &&
-                lastRange >= newRange
+                (
+                    lastBody >= newBody 
+                    && lastVolume >= newVolume 
+                    && lastRange >= newRange
+                )
+                || 
+                (
+                    avgRange > (Number(this._takeProfit) + Number(this._stepSize)) 
+                    && lastRange > (Number(this._takeProfit) + Number(this._stepSize))
+                    && interval === "1m"
+                )
             ) {
                 this._isMarketActive = true;
                 console.log("MARKET ACTIVE", this._isMarketActive);
                 return;
             }
-        
+            
             this._isMarketActive = false;
             return;
         }
