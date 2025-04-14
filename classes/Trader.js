@@ -174,7 +174,7 @@ class Trader extends DB {
             const interval = "1m", limit = 30, multiplier = 3;
             const candles = await this.service.getKlines(this._symbol, limit, interval);
         
-            let highs = [], lows = [], volumes = [], bodies = [];
+            let highs = [], lows = [], volumes = [], bodies = [], ranges = [];
         
             for (let i = 0; i < candles.length; i++) {
                 const open = parseFloat(candles[i][1]);
