@@ -129,8 +129,8 @@ class Trader extends DB {
 
     async isMarketActive() {
         try {
-            const candles = await this.service.getKlines(this._symbol, 200, "1m");
-            const threshold = 400;
+            const candles = await this.service.getKlines(this._symbol, 180, "1m");
+            const threshold = 200;
         
             let ranges = [];
             let volumes = [];
@@ -155,7 +155,7 @@ class Trader extends DB {
             console.log("AVERAGE VOLUME: ", avgVolume);
             console.log("LAST VOLUME: ", lastVolume);
 
-            if ((lastRange >= threshold * 0.7 || avgRange >= threshold * 0.5) && lastVolume >= avgVolume * 5) {
+            if ((avgRange >= threshold) && lastVolume >= avgVolume * 10) {
                 this._isMarketActive = true;
                 console.log("MARKET ACTIVE", this._isMarketActive);
                 return;
