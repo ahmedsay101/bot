@@ -177,16 +177,17 @@ class Trader extends DB {
             let highs = [], lows = [], volumes = [], bodies = [];
         
             for (let i = 0; i < candles.length; i++) {
-            const open = parseFloat(candles[i][1]);
-            const high = parseFloat(candles[i][2]);
-            const low = parseFloat(candles[i][3]);
-            const close = parseFloat(candles[i][4]);
-            const volume = parseFloat(candles[i][5]);
-        
-            highs.push(high);
-            lows.push(low);
-            volumes.push(volume);
-            bodies.push(Math.abs(close - open));
+                const open = parseFloat(candles[i][1]);
+                const high = parseFloat(candles[i][2]);
+                const low = parseFloat(candles[i][3]);
+                const close = parseFloat(candles[i][4]);
+                const volume = parseFloat(candles[i][5]);
+            
+                highs.push(high);
+                lows.push(low);
+                volumes.push(volume);
+                bodies.push(Math.abs(close - open));
+                ranges.push(high - low);
             }
         
             const avgVolume = volumes.slice(0, -1).reduce((a, b) => a + b, 0) / (volumes.length - 1);
