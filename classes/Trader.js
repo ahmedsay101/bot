@@ -26,7 +26,7 @@ class Trader extends DB {
         requiredTransactions = 0,
         requiredBalance = 0,
         hours = 0,
-        starts = "MARKET_ACTIVE",
+        starts = "NOW",
         mode = "TESTING",
         levels = []
     }) {
@@ -79,9 +79,9 @@ class Trader extends DB {
         this._updatedAt = new Date();
         this.overwrite = ["levels", "profit"];
 
-        this.marketActiveTask = cron.schedule('* * * * *', async() => {
+        /*this.marketActiveTask = cron.schedule('* * * * *', async() => {
             await this.isMarketActive();
-        });
+        });*/
     }
 
     async generateLevels() {
