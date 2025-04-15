@@ -501,7 +501,7 @@ class Trader extends DB {
         }
     }
 
-    async revive(starts = "MARKET_ACTIVE") {
+    async revive(starts = "NOW") {
         try {
             await this.destroy();
             await this.controller.createTrader({
