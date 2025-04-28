@@ -26,7 +26,7 @@ class Trader extends DB {
         requiredTransactions = 0,
         requiredBalance = 0,
         hours = 0,
-        starts = "NOW",
+        starts = "MARKET_ACTIVE",
         mode = "TESTING",
         levels = []
     }) {
@@ -79,9 +79,9 @@ class Trader extends DB {
         this._updatedAt = new Date();
         this.overwrite = ["levels", "profit"];
 
-        /*this.marketActiveTask = cron.schedule('* * * * *', async() => {
+        this.marketActiveTask = cron.schedule('* * * * *', async() => {
             await this.isMarketActive();
-        });*/
+        });
     }
 
     async generateLevels() {
@@ -173,11 +173,12 @@ class Trader extends DB {
         try {
 
             const 
-            interval = "1m", 
+            interval = "5m", 
+            threshold = 300,
             limit = 30, 
             rangeMultiplier = 3,
             bodyMultiplier = 2,
-            volumeMultiplier = 3;
+            volumeMultiplier = 5;
 
             const candles = await this.service.getKlines(this._symbol, limit, interval);
         
@@ -214,36 +215,22 @@ class Trader extends DB {
             const lastBody = Math.abs(lastClose - lastOpen);
             const lastRange = lastHigh - lastLow;
 
-            const brokeRange = lastHigh > Math.max(...highs.slice(0, -1)) || lastLow < Math.min(...lows.slice(0, -1));
-
             console.log("AVERAGE BODY: ", avgBody);
             console.log("AVERAGE VOLUME: ", avgVolume);
             console.log("AVERAGE RANGE: ", avgRange);
 
-            console.log("NEW BODY: ", newBody);
-            console.log("NEW VOLUME: ", newVolume);
-            console.log("NEW RANGE: ", newRange);
+            console.log("LAST BODY: ", lastBody);
+            console.log("LAST VOLUME: ", lastVolume);
+            console.log("LAST RANGE: ", lastRange);
         
-            console.log("BROKE RANGE: ", brokeRange);
-            console.log("BODY BREAK: ", lastBody >= newBody);
-            console.log("VOLUME BREAK: ", lastVolume >= newVolume);
-            console.log("RANGE BREAK: ", lastRange >= newRange);
-
             if (
-                (
-                    lastBody >= newBody 
-                    && lastVolume >= newVolume 
-                    && lastRange >= newRange
-                )
-                || 
-                (
-                    avgRange > (Number(this._takeProfit) + Number(this._stepSize)) 
-                    && lastRange > (Number(this._takeProfit) + Number(this._stepSize))
-                    && interval === "1m"
-                )
+                lastBody >= newBody 
+                && lastVolume >= newVolume 
+                && lastRange >= newRange
+                && lastRange >= threshold
             ) {
-                this._isMarketActive = true;
                 console.log("MARKET ACTIVE", this._isMarketActive);
+                this._isMarketActive = true;
                 return;
             }
             
@@ -501,7 +488,7 @@ class Trader extends DB {
         }
     }
 
-    async revive(starts = "NOW") {
+    async revive(starts = "MARKET_ACTIVE") {
         try {
             await this.destroy();
             await this.controller.createTrader({
