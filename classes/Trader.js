@@ -174,11 +174,11 @@ class Trader extends DB {
 
             const 
             interval = "5m", 
-            threshold = 300,
+            threshold = 400,
             limit = 30, 
-            rangeMultiplier = 3,
+            rangeMultiplier = 2,
             bodyMultiplier = 2,
-            volumeMultiplier = 5;
+            volumeMultiplier = 4;
 
             const candles = await this.service.getKlines(this._symbol, limit, interval);
         
@@ -295,9 +295,9 @@ class Trader extends DB {
             const currentAmount = this.transactions.filter((obj) => obj._status === "FILLED").length > 0 ? this.transactions.filter((obj) => obj._status === "FILLED").map(obj => obj._baseAmountIn).reduce((total, current) => total + current) : 0;
             if(
                 (
-                    ((Math.abs(currentPrice - longLevel) >= Number(this._takeProfit))  && currentPrice > longLevel)
+                    ((Math.abs(currentPrice - longLevel) >= (filledTransactions === 1 ? (Number(this._takeProfit) / 2) : Number(this._takeProfit)))  && currentPrice > longLevel)
                 || 
-                    ((Math.abs(currentPrice - shortLevel) >= Number(this._takeProfit)) && currentPrice < shortLevel)
+                    ((Math.abs(currentPrice - shortLevel) >= (filledTransactions === 1 ? (Number(this._takeProfit) / 2) : Number(this._takeProfit))) && currentPrice < shortLevel)
                 )
                 && 
                 (
