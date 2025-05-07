@@ -26,7 +26,7 @@ class Trader extends DB {
         requiredTransactions = 0,
         requiredBalance = 0,
         hours = 0,
-        starts = "MARKET_ACTIVE",
+        starts = "NOW",
         mode = "TESTING",
         levels = []
     }) {
@@ -488,7 +488,7 @@ class Trader extends DB {
         }
     }
 
-    async revive(starts = "MARKET_ACTIVE") {
+    async revive(starts = "NOW") {
         try {
             await this.destroy();
             await this.controller.createTrader({
