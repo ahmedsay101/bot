@@ -80,7 +80,7 @@ class Trader extends DB {
         this.overwrite = ["levels", "profit"];
 
         this.marketActiveTask = cron.schedule('* * * * *', async() => {
-            await this.isMarketActive();
+            if(this._starts === "MARKET_ACTIVE") await this.isMarketActive();
         });
     }
 
