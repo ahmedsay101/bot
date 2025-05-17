@@ -5,6 +5,8 @@ const transactionSchema = new mongoose.Schema(
     traderId: { type: mongoose.Types.ObjectId, ref: "trader", required: true },
     symbol: { type: String, required: true },
     orderId: { type: String, required: false },
+    takeProfitOrderId: { type: String, required: false },
+    stopLossOrderId: { type: String, required: false },
     side: { type: String, enum: ["LONG", "SHORT"], required: true },
     price: { type: Number, required: true },
     closingPrice: { type: Number, required: false, default: 0},

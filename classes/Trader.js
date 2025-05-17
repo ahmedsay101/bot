@@ -13,6 +13,7 @@ class Trader extends DB {
         maxBaseAmountIn = 0,
         peakBaseAmountIn = 0,
         doubles = 4,
+        rounds = 3,
         takeProfit = 0,
         stopLoss = 0,
         takeProfitStep = 1,
@@ -26,7 +27,7 @@ class Trader extends DB {
         requiredTransactions = 0,
         requiredBalance = 0,
         hours = 0,
-        starts = "NOW",
+        starts = "ACTIVE_HOURS",
         mode = "TESTING",
         levels = []
     }) {
@@ -68,6 +69,7 @@ class Trader extends DB {
         this._status = "STOPPED";
         this._isMarketActive = false;
         this._starts = starts;
+        this._rounds = rounds;
         this._type = type;
         this._lives = lives;
         this.busy = false;
@@ -257,15 +259,18 @@ class Trader extends DB {
     isActive() {
         const now = new Date();
         const cairoHour = (now.getUTCHours() + 2) % 24;
-        const cairoDay = now.getUTCDay(); 
-        const isWeekday = cairoDay >= 1 && cairoDay <= 5;
-        const isWithinHour = cairoHour === 11;
-        return isWeekday && isWithinHour;
+        const cairoDay = now.getUTCDay(); // 0 = Sunday, 6 = Saturday
+
+        const isWeekday = cairoDay >= 1 && cairoDay <= 5; // Monday to Friday
+        const isWithinHours = cairoHour >= 11 && cairoHour <= 19; // 11 AM to 7:59 PM Cairo time
+
+        return isWeekday && isWithinHours;
     }
 
     async sync() {
         try {
-            if(this._status === "ACTIVE") await this.takeProfit();
+            //if(this._status === "ACTIVE") await this.takeProfit();
+            if(this._status === "ACTIVE") await this.shouldGetOut();
             await this.dbSync();
             if(this.transactions.length < 1) {
                 const transactions = await Transactions.aggregate([
@@ -312,6 +317,27 @@ class Trader extends DB {
         }
     }
 
+    async shouldGetOut() {
+        try {
+            const currentPrice = this.ticker.currentPrice;
+            const longLevel = this._levels.sort((a, b) => b - a)[0];
+            const shortLevel = this._levels.sort((a, b) => b - a)[1];
+            const filledTransactions = this.transactions.filter(one => one._status === "FILLED").length;
+            if(
+                (
+                    ((Math.abs(currentPrice - longLevel) >=  Number(this._takeProfit)) && currentPrice > longLevel)
+                    || 
+                    ((Math.abs(currentPrice - shortLevel) >= Number(this._takeProfit)) && currentPrice < shortLevel)
+                    && filledTransactions === 0
+                    && Number(this._takeProfit) !== 0
+                )
+            ) await this.revive();
+        } 
+        catch(error) {
+          console.log(error);
+        }
+    }
+
     async updateTransactions() {
         try {
             if(this._status === "ACTIVE") {
@@ -343,7 +369,9 @@ class Trader extends DB {
 
     async newTransaction({side, price = null, baseAmountIn = null}) {
         try {
-            if(this._status !== "ACTIVE" || Number(Number(baseAmountIn).toFixed(2)) > Number(Number(this._maxBaseAmountIn).toFixed(2))) return false;
+            if(this._status !== "ACTIVE") return false;
+            const maxAmountIn = Number(this._baseAmountIn) * (Number(this._doubles) ** Number(this._rounds));
+            if(baseAmountIn >= maxAmountIn) return false;
             const transaction = new Transaction(this);
             transaction._side = side;
             transaction._price = price ? price : this.ticker.currentPrice;
@@ -490,7 +518,7 @@ class Trader extends DB {
         }
     }
 
-    async revive(starts = "NOW") {
+    async revive(starts = "ACTIVE_HOURS") {
         try {
             await this.destroy();
             await this.controller.createTrader({
