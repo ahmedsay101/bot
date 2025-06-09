@@ -12,8 +12,9 @@ class Trader extends DB {
         quoteAmountIn = 0,
         maxBaseAmountIn = 0,
         peakBaseAmountIn = 0,
-        doubles = 4,
-        rounds = 3,
+        doubles = 5,
+        minDoubles = 2,
+        rounds = 4,
         takeProfit = 0,
         stopLoss = 0,
         takeProfitStep = 1,
@@ -27,7 +28,7 @@ class Trader extends DB {
         requiredTransactions = 0,
         requiredBalance = 0,
         hours = 0,
-        starts = "ACTIVE_HOURS",
+        starts = "NOW",
         mode = "TESTING",
         levels = []
     }) {
@@ -48,6 +49,7 @@ class Trader extends DB {
         this._maxBaseAmountIn = maxBaseAmountIn;
         this._peakBaseAmountIn = peakBaseAmountIn;
         this._doubles = doubles;
+        this._minDoubles = minDoubles;
         this._aim = aim;
         this._hours = hours;
         this._profit = 0;
@@ -70,6 +72,7 @@ class Trader extends DB {
         this._isMarketActive = false;
         this._starts = starts;
         this._rounds = rounds;
+        this._currentRounds = 0;
         this._type = type;
         this._lives = lives;
         this.busy = false;
@@ -264,6 +267,7 @@ class Trader extends DB {
         const isWeekday = cairoDay >= 1 && cairoDay <= 5; // Monday to Friday
         const isWithinHours = cairoHour >= 11 && cairoHour <= 19; // 11 AM to 7:59 PM Cairo time
 
+        return true;
         return isWeekday && isWithinHours;
     }
 
@@ -369,9 +373,7 @@ class Trader extends DB {
 
     async newTransaction({side, price = null, baseAmountIn = null}) {
         try {
-            if(this._status !== "ACTIVE") return false;
-            const maxAmountIn = Number(this._baseAmountIn) * (Number(this._doubles) ** Number(this._rounds));
-            if(baseAmountIn >= maxAmountIn) return false;
+            if(this._status !== "ACTIVE" || this._currentRounds > this._rounds) return false;
             const transaction = new Transaction(this);
             transaction._side = side;
             transaction._price = price ? price : this.ticker.currentPrice;
@@ -424,6 +426,7 @@ class Trader extends DB {
             await this.calculateTotalProfit();
             await this.calculateProfitTaken();
             await this.calculateMoneyIn();
+            this.log();
             this.release();
         }
         catch(error) {
@@ -433,10 +436,7 @@ class Trader extends DB {
 
     log() {
         console.log(`--------------------${this._symbol}-----------------------`);
-        console.log("CURRENT PRICE", this.ticker.currentPrice);
-        console.log("TRANSACTIONS", this.transactions.map(obj => ({price: obj._price, profit: obj._profit, side: obj._side, status: obj._status})).sort((a, b) => b.price - a.price));
-        console.log("PROFIT", this._profit);
-        console.log("PROFIT TAKEN", this._profitTaken);
+        console.log("ROUNDS", this._currentRounds);
     }
 
     async fill() {
@@ -478,21 +478,32 @@ class Trader extends DB {
                     }
                 }*/
 
+                let doubles = this._doubles;
+                if(this._doubles > this._minDoubles) doubles = (this._doubles - this._currentRounds) > this._minDoubles ? (this._doubles - this._currentRounds) : this._minDoubles;
+
+                console.log("DOUBLESSSS", doubles);
+
                 if(isAllLongFilled && (shortAmount <= longAmount)) {
                     const lastBaseAmountIn = this.transactions.filter(obj => obj._price === longLevel).sort((a, b) => b._baseAmountIn - a._baseAmountIn)[0]?._baseAmountIn;
                     //const baseAmountIn = Number(lastBaseAmountIn * (lastBaseAmountIn > this._maxBaseAmountIn && this._maxBaseAmountIn !== 0 ? 1 : 2));
                     //const baseAmountIn = Number(Number(longAmount) * 2) - Number(shortAmount);
-                    const baseAmountIn = Number(lastBaseAmountIn * this._doubles);
+                    const baseAmountIn = Number(lastBaseAmountIn * doubles);
                     //const baseAmountIn = (Number(longAmount) - Number(shortAmount)) + this._baseAmountIn;
-                    const newShort = await this.newTransaction({side: "SHORT", price: shortLevel, baseAmountIn});    
+                    if(this._currentRounds <= this._rounds) {
+                        this._currentRounds = this._currentRounds + 1;
+                        const newShort = await this.newTransaction({side: "SHORT", price: shortLevel, baseAmountIn});    
+                    }
                 }
                 if(isAllShortFilled && (longAmount <= shortAmount)) {
                     const lastBaseAmountIn = this.transactions.filter(obj => obj._price === shortLevel).sort((a, b) => b._baseAmountIn - a._baseAmountIn)[0]?._baseAmountIn;
                     //const baseAmountIn = Number(lastBaseAmountIn * (lastBaseAmountIn > this._maxBaseAmountIn && this._maxBaseAmountIn !== 0 ? 1 : 2));
                     //const baseAmountIn = Number(Number(shortAmount) * 2) - Number(longAmount);
-                    const baseAmountIn = Number(lastBaseAmountIn * this._doubles);
+                    const baseAmountIn = Number(lastBaseAmountIn * doubles);
                     //const baseAmountIn = (Number(shortAmount) - Number(longAmount)) + this._baseAmountIn;
-                    const newLong = await this.newTransaction({side: "LONG", price: longLevel, baseAmountIn});    
+                    if(this._currentRounds <= this._rounds) {
+                        this._currentRounds = this._currentRounds + 1;
+                        const newLong = await this.newTransaction({side: "LONG", price: longLevel, baseAmountIn});  
+                    }  
                 }
             }
         }
@@ -518,7 +529,7 @@ class Trader extends DB {
         }
     }
 
-    async revive(starts = "ACTIVE_HOURS") {
+    async revive(starts = "NOW") {
         try {
             await this.destroy();
             await this.controller.createTrader({

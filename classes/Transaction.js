@@ -32,7 +32,7 @@ class Transaction extends DB {
     this._profit = 0;
     this._profitable = false;
     this._status = null;
-    this._type = "LIMIT";
+    this._type = "STOP_MARKET";
     this._position = null;
     this.busy = false;
     this._createdAt = new Date();
@@ -50,9 +50,12 @@ class Transaction extends DB {
 
   async fill() {
     try {
-      if(this._mode === "LIVE") await this.order();
-      else this._status = "FILLED";
-      if(Number(this._baseAmountIn).toFixed(3) > Number(this.trader._peakBaseAmountIn).toFixed(3)) this.trader._peakBaseAmountIn = Number(this._baseAmountIn).toFixed(3);
+      if(this._mode === "LIVE") {
+        await this.order();
+      }
+      else {
+        this._status = "FILLED";
+      }
     } 
     catch(error) {
       console.log(error);
@@ -61,23 +64,38 @@ class Transaction extends DB {
 
   async order() {
     try {
-      if(!this._side || this._mode !== "LIVE" || this.busy || this._orderId !== null) return false;
-      if(this._type === "LIMIT" && (!this._price)) return false;
+      if(!this._side || this._mode !== "LIVE" || this.busy || this._orderId !== null ) return false;
+      console.log("PRICEEEE", this._price );
+      if((this._type === "LIMIT" || this._type === "STOP_MARKET") && (!this._price)) return false;
       this.hold();
       const orderObj = {
         symbol: this._symbol,
         side: this._side === "LONG" ? "BUY" : "SELL",
-        positionSide: this._side,
+        //positionSide: this._side,
         type: this._type,
         quantity: this._baseAmountIn,
       }
+
       if(this._type === "LIMIT") {
         orderObj["price"] = this.ticker.getQuoteQuantity(this._price);
         orderObj["timeInForce"] = "GTC";
+        orderObj["postOnly"] = true;
       }
+
+      if(this._type === "STOP_MARKET") {
+        orderObj["stopPrice"] = this.ticker.getQuoteQuantity(this._price);
+        orderObj["reduceOnly"] = false;
+      }
+
       const order = await this.service.order(orderObj);
       console.log("ORDER", order);
       if(order && order?.orderId) this._orderId = order.orderId;
+
+      if(this._type === "MARKET") {
+        await this.tp();
+        await this.sl();
+      }
+      
       this.release();
     } 
     catch(error) {
@@ -87,12 +105,12 @@ class Transaction extends DB {
 
   async tp() {
     try {
-      if(this._mode !== "LIVE" || this.busy || !this._takeProfit || this._takeProfitOrderId !== null) return false;
+      if(this._mode !== "LIVE" || !this._takeProfit || this._takeProfitOrderId !== null) return false;
       this.hold();
       const orderObj = {
         symbol: this._symbol,
         side: this._side === "LONG" ? "SELL" : "BUY",
-        positionSide: this._side,
+        //positionSide: this._side,
         type: 'TAKE_PROFIT_MARKET',
         quantity: this._baseAmountIn,
         stopPrice: this._takeProfit,
@@ -110,12 +128,12 @@ class Transaction extends DB {
 
   async sl() {
     try {
-      if(this._mode !== "LIVE" || this.busy || !this._stopLoss || this._stopLossOrderId !== null) return false;
+      if(this._mode !== "LIVE" || !this._stopLoss || this._stopLossOrderId !== null) return false;
       this.hold();
       const orderObj = {
         symbol: this._symbol,
         side: this._side === "LONG" ? "SELL" : "BUY",
-        positionSide: this._side,
+        //positionSide: this._side,
         type: 'STOP_MARKET',
         quantity: this._baseAmountIn,
         stopPrice: this._stopLoss,
@@ -135,6 +153,7 @@ class Transaction extends DB {
     try {
       if(this._orderId !== null && this._mode === "LIVE" && this._status !== "CLOSED" && !this.busy) {
         const orderResponse = await this.service.getOrderByOrderId(this._symbol, this._orderId);
+        console.log("ORDERRRRRRR:", orderResponse);
         if(orderResponse) {
           if(orderResponse?.status === "NEW" || orderResponse?.status === "FILLED") this._status = orderResponse?.status;
           if(orderResponse?.status === "CANCELED") {
@@ -162,12 +181,18 @@ class Transaction extends DB {
             if(orderResponse?.status === "FILLED") await this.destroy();
           }
         }
+        else {
+          await this.tp();
+        }
         if(this._stopLossOrderId !== null) {
           const orderResponse = await this.service.getOrderByOrderId(this._symbol, this._stopLossOrderId);
           console.log("SL UPDATE", orderResponse);
           if(orderResponse) {
             if(orderResponse?.status === "FILLED") await this.destroy();
           }
+        }
+        else {
+          await this.sl();
         }
       }
     } 
@@ -180,7 +205,7 @@ class Transaction extends DB {
     try {
       if(this._mode === "LIVE" && !this.busy) {
         if(this._status === "NEW") await this.update();
-        await this.updateTpSl();
+        if(this._status === "FILLED") await this.updateTpSl();
       }
       await this.dbSync();
     } 
@@ -191,10 +216,34 @@ class Transaction extends DB {
 
   async cancel() {
     try {
-      if(this._mode === "LIVE" && this._status === "NEW" && this._orderId) {
+      if(this._mode === "LIVE") {
         this.hold();
-        if(this._orderId) await this.service.cancelOrder({symbol: this._symbol, orderId: this._orderId});
+        if(this._orderId && this._status === "NEW") await this.service.cancelOrder({symbol: this._symbol, orderId: this._orderId});
+        this.release();
+      }
+    }  
+    catch(error) {
+      console.log(error);
+      this.release();
+    }
+  } 
+  async cancelTp() {
+    try {
+      if(this._mode === "LIVE") {
+        this.hold();
         if(this._takeProfitOrderId) await this.service.cancelOrder({symbol: this._symbol, orderId: this._takeProfitOrderId});
+        this.release();
+      }
+    }  
+    catch(error) {
+      console.log(error);
+      this.release();
+    }
+  } 
+  async cancelSl() {
+    try {
+      if(this._mode === "LIVE") {
+        this.hold();
         if(this._stopLossOrderId) await this.service.cancelOrder({symbol: this._symbol, orderId: this._stopLossOrderId});
         this.release();
       }
@@ -213,13 +262,12 @@ class Transaction extends DB {
           const closeOrder = await this.service.order({
             symbol: this._symbol,
             side: this._side === "LONG" ? "SELL" : "BUY",
-            positionSide: this._side,
+            //positionSide: this._side,
             type: "MARKET",
             quantity: this._baseAmountIn,
             recvWindow: '10000'
           });
         }
-        if(this._orderId && this._status === "NEW") await this.cancel();
       }
       this.release();
       await this.destroy();
@@ -232,6 +280,9 @@ class Transaction extends DB {
 
   async destroy() {
     try {
+      await this.cancel();
+      await this.cancelTp();
+      await this.cancelSl();
       this._status = "CLOSED";
       this.trader.removeTransaction(this);
       await this.sync();
@@ -252,21 +303,28 @@ class Transaction extends DB {
       if(
         this._status === "NEW"
         &&
-        ((this._position === "HIGHER" && this.ticker.currentPrice >= this._price)
+        ((((this._position === "HIGHER" && this.ticker.currentPrice >= this._price)
         ||
-        (this._position === "LOWER" && this.ticker.currentPrice <= this._price))
+        (this._position === "LOWER" && this.ticker.currentPrice <= this._price)))
+        ||
+        ((this._type === "LIMIT" || this._type === "STOP_MARKET") && this._mode === "LIVE")
+        )
       ) {
         await this.fill();
       }
       
       if(
-        //(this._side === "LONG" && this.ticker.getQuoteQuantity(this.ticker.currentPrice) >= this.ticker.getQuoteQuantity(this._takeProfit) && this.ticker.getQuoteQuantity(this._takeProfit) !== 0 && this._status === "FILLED")
-        //||
-        //(this._side === "SHORT" && this.ticker.getQuoteQuantity(this.ticker.currentPrice) <= this.ticker.getQuoteQuantity(this._takeProfit) && this.ticker.getQuoteQuantity(this._takeProfit) !== 0 && this._status === "FILLED")
-        //||
-        //(this._side === "SHORT" && this.ticker.getQuoteQuantity(this.ticker.currentPrice) >= this.ticker.getQuoteQuantity(this._stopLoss) && this.ticker.getQuoteQuantity(this._stopLoss) !== 0 && this._status === "FILLED")
-        //||
-        (this._side === "LONG" && this.ticker.getQuoteQuantity(this.ticker.currentPrice) <= this.ticker.getQuoteQuantity(this._stopLoss) && this.ticker.getQuoteQuantity(this._stopLoss) !== 0 && this._status === "FILLED")
+        this._mode === "TESTING" 
+        &&
+        (
+          (this._side === "LONG" && this.ticker.getQuoteQuantity(this.ticker.currentPrice) >= this.ticker.getQuoteQuantity(this._takeProfit) && this.ticker.getQuoteQuantity(this._takeProfit) !== 0 && this._status === "FILLED")
+          ||
+          (this._side === "SHORT" && this.ticker.getQuoteQuantity(this.ticker.currentPrice) <= this.ticker.getQuoteQuantity(this._takeProfit) && this.ticker.getQuoteQuantity(this._takeProfit) !== 0 && this._status === "FILLED")
+          ||
+          (this._side === "SHORT" && this.ticker.getQuoteQuantity(this.ticker.currentPrice) >= this.ticker.getQuoteQuantity(this._stopLoss) && this.ticker.getQuoteQuantity(this._stopLoss) !== 0 && this._status === "FILLED")
+          ||
+          (this._side === "LONG" && this.ticker.getQuoteQuantity(this.ticker.currentPrice) <= this.ticker.getQuoteQuantity(this._stopLoss) && this.ticker.getQuoteQuantity(this._stopLoss) !== 0 && this._status === "FILLED")
+        )
       ) await this.close();
 
       this._quoteAmountIn = this._baseAmountIn * this._price;
