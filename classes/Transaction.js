@@ -31,6 +31,7 @@ class Transaction extends DB {
     this._closingPrice = 0;
     this._profit = 0;
     this._profitable = false;
+    this._isFake = false;
     this._status = null;
     this._type = "STOP_MARKET";
     this._position = null;
@@ -50,7 +51,7 @@ class Transaction extends DB {
 
   async fill() {
     try {
-      if(this._mode === "LIVE") {
+      if(this._mode === "LIVE" && !this._isFake) {
         await this.order();
       }
       else {
@@ -64,7 +65,7 @@ class Transaction extends DB {
 
   async order() {
     try {
-      if(!this._side || this._mode !== "LIVE" || this.busy || this._orderId !== null ) return false;
+      if(!this._side || this._mode !== "LIVE" || this.busy || this._orderId !== null || this._isFake) return false;
       console.log("PRICEEEE", this._price );
       if((this._type === "LIMIT" || this._type === "STOP_MARKET") && (!this._price)) return false;
       this.hold();
@@ -105,7 +106,7 @@ class Transaction extends DB {
 
   async tp() {
     try {
-      if(this._mode !== "LIVE" || !this._takeProfit || this._takeProfitOrderId !== null) return false;
+      if(this._mode !== "LIVE" || !this._takeProfit || this._takeProfitOrderId !== null || this._isFake) return false;
       this.hold();
       const orderObj = {
         symbol: this._symbol,
@@ -128,7 +129,7 @@ class Transaction extends DB {
 
   async sl() {
     try {
-      if(this._mode !== "LIVE" || !this._stopLoss || this._stopLossOrderId !== null) return false;
+      if(this._mode !== "LIVE" || !this._stopLoss || this._stopLossOrderId !== null || this._isFake) return false;
       this.hold();
       const orderObj = {
         symbol: this._symbol,
@@ -151,7 +152,7 @@ class Transaction extends DB {
   
   async update() {
     try {
-      if(this._orderId !== null && this._mode === "LIVE" && this._status !== "CLOSED" && !this.busy) {
+      if(this._orderId !== null && this._mode === "LIVE" && this._status !== "CLOSED" && !this.busy && !this._isFake) {
         const orderResponse = await this.service.getOrderByOrderId(this._symbol, this._orderId);
         console.log("ORDERRRRRRR:", orderResponse);
         if(orderResponse) {
@@ -173,7 +174,7 @@ class Transaction extends DB {
 
   async updateTpSl() {
     try {
-      if(this._mode === "LIVE" && this._status !== "CLOSED" && !this.busy) {
+      if(this._mode === "LIVE" && this._status !== "CLOSED" && !this.busy && !this._isFake) {
         if(this._takeProfitOrderId !== null) {
           const orderResponse = await this.service.getOrderByOrderId(this._symbol, this._takeProfitOrderId);
           console.log("TP UPDATE", orderResponse);
@@ -216,7 +217,7 @@ class Transaction extends DB {
 
   async cancel() {
     try {
-      if(this._mode === "LIVE") {
+      if(this._mode === "LIVE" && !this._isFake) {
         this.hold();
         if(this._orderId && this._status === "NEW") await this.service.cancelOrder({symbol: this._symbol, orderId: this._orderId});
         this.release();
@@ -229,7 +230,7 @@ class Transaction extends DB {
   } 
   async cancelTp() {
     try {
-      if(this._mode === "LIVE") {
+      if(this._mode === "LIVE" && !this._isFake) {
         this.hold();
         if(this._takeProfitOrderId) await this.service.cancelOrder({symbol: this._symbol, orderId: this._takeProfitOrderId});
         this.release();
@@ -242,7 +243,7 @@ class Transaction extends DB {
   } 
   async cancelSl() {
     try {
-      if(this._mode === "LIVE") {
+      if(this._mode === "LIVE" && !this._isFake) {
         this.hold();
         if(this._stopLossOrderId) await this.service.cancelOrder({symbol: this._symbol, orderId: this._stopLossOrderId});
         this.release();
@@ -256,7 +257,7 @@ class Transaction extends DB {
 
   async close() {
     try {
-      if(this._mode === "LIVE" && this._status !== "CLOSED" && !this.busy) {
+      if(this._mode === "LIVE" && this._status !== "CLOSED" && !this.busy && !this._isFake) {
         this.hold();
         if(this._status === "FILLED" && this._type === "MARKET") {
           const closeOrder = await this.service.order({
@@ -307,7 +308,7 @@ class Transaction extends DB {
         ||
         (this._position === "LOWER" && this.ticker.currentPrice <= this._price)))
         ||
-        ((this._type === "LIMIT" || this._type === "STOP_MARKET") && this._mode === "LIVE")
+        ((this._type === "LIMIT" || this._type === "STOP_MARKET") && this._mode === "LIVE" && !this._isFake)
         )
       ) {
         await this.fill();

@@ -104,6 +104,7 @@ app.get('/api', authenticate, (req, res) => {
                     moneyIn: obj._moneyIn,
                     maxBaseAmountIn: obj._maxBaseAmountIn,
                     peakBaseAmountIn: obj._peakBaseAmountIn,
+                    peakRounds: obj._peakRounds,
                     maxMoneyIn: obj._maxMoneyIn,
                     coverage: obj._coverage,
                     requiredTransactions: obj._requiredTransactions,
@@ -142,6 +143,7 @@ app.get('/api', authenticate, (req, res) => {
                         takeProfit: transaction._takeProfit,
                         stopLoss: transaction._stopLoss,
                         isProfitable: transaction._isProfitable,
+                        isFake: transaction._isFake,
                         createdAt: transaction._createdAt,
                         updatedAt: transaction._createdAt,
                     }))

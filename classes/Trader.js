@@ -12,9 +12,10 @@ class Trader extends DB {
         quoteAmountIn = 0,
         maxBaseAmountIn = 0,
         peakBaseAmountIn = 0,
+        peakRounds = 0,
         doubles = 5,
         minDoubles = 2,
-        rounds = 4,
+        rounds = 7,
         takeProfit = 0,
         stopLoss = 0,
         takeProfitStep = 1,
@@ -48,6 +49,7 @@ class Trader extends DB {
         this._quoteAmountIn = quoteAmountIn;
         this._maxBaseAmountIn = maxBaseAmountIn;
         this._peakBaseAmountIn = peakBaseAmountIn;
+        this._peakRounds = peakRounds;
         this._doubles = doubles;
         this._minDoubles = minDoubles;
         this._aim = aim;
@@ -72,7 +74,7 @@ class Trader extends DB {
         this._isMarketActive = false;
         this._starts = starts;
         this._rounds = rounds;
-        this._currentRounds = 0;
+        this._currentRounds = 1;
         this._type = type;
         this._lives = lives;
         this.busy = false;
@@ -375,6 +377,7 @@ class Trader extends DB {
         try {
             if(this._status !== "ACTIVE" || this._currentRounds > this._rounds) return false;
             const transaction = new Transaction(this);
+            transaction._isFake = Math.abs(this._currentRounds - this._rounds) <= 3;
             transaction._side = side;
             transaction._price = price ? price : this.ticker.currentPrice;
             transaction._baseAmountIn = baseAmountIn ? baseAmountIn : this._baseAmountIn;
@@ -482,13 +485,15 @@ class Trader extends DB {
                 if(this._doubles > this._minDoubles) doubles = (this._doubles - this._currentRounds) > this._minDoubles ? (this._doubles - this._currentRounds) : this._minDoubles;
 
                 console.log("DOUBLESSSS", doubles);
-
                 if(isAllLongFilled && (shortAmount <= longAmount)) {
                     const lastBaseAmountIn = this.transactions.filter(obj => obj._price === longLevel).sort((a, b) => b._baseAmountIn - a._baseAmountIn)[0]?._baseAmountIn;
                     //const baseAmountIn = Number(lastBaseAmountIn * (lastBaseAmountIn > this._maxBaseAmountIn && this._maxBaseAmountIn !== 0 ? 1 : 2));
                     //const baseAmountIn = Number(Number(longAmount) * 2) - Number(shortAmount);
                     const baseAmountIn = Number(lastBaseAmountIn * doubles);
                     //const baseAmountIn = (Number(longAmount) - Number(shortAmount)) + this._baseAmountIn;
+
+                    if((this._currentRounds + 1) > this._peakRounds) this._peakRounds = this._currentRounds + 1;
+
                     if(this._currentRounds <= this._rounds) {
                         this._currentRounds = this._currentRounds + 1;
                         const newShort = await this.newTransaction({side: "SHORT", price: shortLevel, baseAmountIn});    
@@ -500,6 +505,9 @@ class Trader extends DB {
                     //const baseAmountIn = Number(Number(shortAmount) * 2) - Number(longAmount);
                     const baseAmountIn = Number(lastBaseAmountIn * doubles);
                     //const baseAmountIn = (Number(shortAmount) - Number(longAmount)) + this._baseAmountIn;
+
+                    if((this._currentRounds + 1) > this._peakRounds) this._peakRounds = this._currentRounds + 1;
+
                     if(this._currentRounds <= this._rounds) {
                         this._currentRounds = this._currentRounds + 1;
                         const newLong = await this.newTransaction({side: "LONG", price: longLevel, baseAmountIn});  
@@ -539,6 +547,7 @@ class Trader extends DB {
                 quoteAmountIn: this._quoteAmountIn,
                 maxBaseAmountIn: this._maxBaseAmountIn,
                 peakBaseAmountIn: this._peakBaseAmountIn,
+                peakRounds: this._peakRounds,
                 stepSize: this._stepSize,
                 stopLoss: this._stopLoss,
                 mode: this._mode,
@@ -555,7 +564,7 @@ class Trader extends DB {
     async calculateProfit() {
         try {
             const results = await Transactions.aggregate([
-                {$match: {traderId: this._id}},
+                {$match: {traderId: this._id, isFake: false}},
                 {$group: {
                   _id: null,
                   totalProfit: { $sum: "$profit" },
@@ -572,7 +581,7 @@ class Trader extends DB {
     async calculateTotalProfit() {
         try {
             const results = await Transactions.aggregate([
-                {$match: {symbol: this._symbol}},
+                {$match: {symbol: this._symbol, isFake: false}},
                 {$group: {
                   _id: null,
                   totalProfit: { $sum: "$profit" },
@@ -588,7 +597,7 @@ class Trader extends DB {
     async calculateProfitTaken() {
         try {
             const results = await Transactions.aggregate([
-                {$match: {traderId: this._id, status: "CLOSED"}},
+                {$match: {traderId: this._id, isFake: false, status: "CLOSED"}},
                 {$group: {
                   _id: null,
                   totalProfit: { $sum: "$profit" },
@@ -604,7 +613,7 @@ class Trader extends DB {
     async calculateMoneyIn() {
         try {
             const results = await Transactions.aggregate([
-                {$match: {traderId: this._id, status: "FILLED"}},
+                {$match: {traderId: this._id, isFake: false, status: "FILLED"}},
                 {$group: {
                     _id: null,
                     moneyIn: { $sum: "$quoteAmountIn" },

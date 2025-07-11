@@ -27,6 +27,7 @@ const transactionSchema = new mongoose.Schema(
     mode: { type: String, enum: ["TESTING", "LIVE"], default: "TESTING"},
     position: { type: String, enum: ["HIGHER", "LOWER"], required: false },
     isProfitable: { type: Boolean, required: false, default: false },
+    isFake: { type: Boolean, required: false, default: false },
     closedAt: { type: Date, default: Date.now },
   },
   {
