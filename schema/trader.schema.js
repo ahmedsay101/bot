@@ -35,6 +35,7 @@ const traderSchema = new mongoose.Schema(
     startsAt: { type: Number, required: false, default: 0},
     endsAt: { type: Number, required: false, default: 0},
     currentRounds: { type: Number, required: false, default: 0},
+    peakRounds: { type: Number, required: false, default: 0},
     type: { type: String, enum: ["UNLIMITED", "LIMITED", "RANGE", "TIMED"], default: "UNLIMITED"},
     starts: { type: String, enum: ["NOW", "ACTIVE_HOURS", "MARKET_ACTIVE"], default: "MARKET_ACTIVE"},
     status: { type: String, enum: ["ACTIVE", "STOPPED"], default: "STOPPED"},

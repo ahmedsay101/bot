@@ -35,6 +35,7 @@ class Controller {
             endsAt: data.endsAt,            
             doubles: data.doubles,
         };
+        if(data.peakRounds) traderData["peakRounds"] = data.peakRounds;
         if(data.starts) traderData["starts"] = data.starts;
         if(data.accumulatedProfit) traderData["accumulatedProfit"] = data.accumulatedProfit;
         if(data.maxMoneyIn) traderData["maxMoneyIn"] = data.maxMoneyIn;
