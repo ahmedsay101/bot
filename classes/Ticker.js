@@ -20,7 +20,7 @@ class Ticker {
 
     this.bidPrice = 0;
     this.askPrice = 0;
-    this.currentPrice = 90000;
+    this.currentPrice = 0;
     this.bidPercentage = 0;
     this.askPercentage = 0;
     this.side = "LONG";
@@ -71,10 +71,10 @@ class Ticker {
       if(this.priceMemory.length > this.priceMemoryLimit) this.priceMemory.shift();
       if(this.speedMemory.length > this.speedMemoryLimit) this.speedMemory.shift();
       if(this.speedMemory.length >= this.speedMemoryLimit) this.avgSpeed = arrayAvg(this.speedMemory);
-      //this.currentPrice = price;
-      if(this.currentPrice > 90250) this.side = "SHORT";
-      if(this.currentPrice < 89750) this.side = "LONG";
-      this.currentPrice = this.side === "LONG" ? this.currentPrice += 10 : this.currentPrice -= 10;
+      this.currentPrice = price;
+      //if(this.currentPrice > 90250) this.side = "SHORT";
+      //if(this.currentPrice < 89750) this.side = "LONG";
+      //this.currentPrice = this.side === "LONG" ? this.currentPrice += 10 : this.currentPrice -= 10;
       await this.updateTraders();
     }
     catch(error) {
