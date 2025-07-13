@@ -174,7 +174,10 @@ app.post('/api', authenticate, async(req, res) => {
             type = "UNLIMITED", 
             mode = "LIVE", 
             direction = "ONEWAY",
-            takeProfitStep = 1
+            takeProfitStep = 1,
+            startsAt = 0,
+            endsAt = 0,
+            doubles,
         } = req.body;
         if(!symbol || !baseAmountIn) return res.status(400).json({success: false, message: "Missing Data!"});
         const data = {
@@ -189,7 +192,10 @@ app.post('/api', authenticate, async(req, res) => {
             mode,
             direction,
             coverage,
-            takeProfitStep
+            takeProfitStep,
+            startsAt,
+            endsAt,
+            doubles
         }
         if(type === "LIMITED") data["aim"] = aim;
         if(type !== "UNLIMITED") data["lives"] = lives;

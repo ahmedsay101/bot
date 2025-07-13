@@ -13,9 +13,10 @@ class Trader extends DB {
         maxBaseAmountIn = 0,
         peakBaseAmountIn = 0,
         peakRounds = 0,
-        doubles = 5,
+        doubles = 3,
         minDoubles = 2,
-        rounds = 7,
+        startsAt = 0, 
+        endsAt = 0,
         takeProfit = 0,
         stopLoss = 0,
         takeProfitStep = 1,
@@ -73,8 +74,9 @@ class Trader extends DB {
         this._status = "STOPPED";
         this._isMarketActive = false;
         this._starts = starts;
-        this._rounds = rounds;
         this._currentRounds = 1;
+        this._startsAt = startsAt;
+        this._endsAt = endsAt;
         this._type = type;
         this._lives = lives;
         this.busy = false;
@@ -373,11 +375,11 @@ class Trader extends DB {
 
     }
 
-    async newTransaction({side, price = null, baseAmountIn = null}) {
+    async newTransaction({side, price = null, baseAmountIn = null, isFake = false}) {
         try {
-            if(this._status !== "ACTIVE" || this._currentRounds > this._rounds) return false;
+            if(this._status !== "ACTIVE") return false;
             const transaction = new Transaction(this);
-            transaction._isFake = Math.abs(this._currentRounds - this._rounds) <= 3;
+            transaction._isFake = isFake;
             transaction._side = side;
             transaction._price = price ? price : this.ticker.currentPrice;
             transaction._baseAmountIn = baseAmountIn ? baseAmountIn : this._baseAmountIn;
@@ -438,8 +440,6 @@ class Trader extends DB {
     }
 
     log() {
-        console.log(`--------------------${this._symbol}-----------------------`);
-        console.log("ROUNDS", this._currentRounds);
     }
 
     async fill() {
@@ -453,65 +453,47 @@ class Trader extends DB {
                     shortPrice,
                 ].sort((a, b) => b - a))];
                 const baseAmountIn = this._baseAmountIn;
-                const long = await this.newTransaction({side: "LONG", price: longPrice, baseAmountIn});
-                const short = await this.newTransaction({side: "SHORT", price: shortPrice, baseAmountIn});    
+                this._currentRounds = this._currentRounds + 1;
+                if(this._currentRounds > this._peakRounds) this._peakRounds = this._currentRounds;
+                let isFake = false;
+                if((this._currentRounds < this._startsAt || !this._startsAt) || (this._currentRounds > this._endsAt || !this._endsAt)) isFake = true;
+                const long = await this.newTransaction({side: "LONG", price: longPrice, baseAmountIn, isFake});
+                const short = await this.newTransaction({side: "SHORT", price: shortPrice, baseAmountIn, isFake});    
             }
             else {
-                const currentPrice = this.ticker.currentPrice;
                 const longLevel = this._levels.sort((a, b) => b - a)[0];
                 const shortLevel = this._levels.sort((a, b) => b - a)[1];
                 const isAllLongFilled = this.transactions.filter(obj => obj._price === longLevel && obj._status === "FILLED").length === this.transactions.filter(obj => obj._price === longLevel).length;
                 const isAllShortFilled = this.transactions.filter(obj => obj._price === shortLevel && obj._status === "FILLED").length === this.transactions.filter(obj => obj._price === shortLevel).length;
                 const longAmount = this.transactions.filter(obj => obj._price === longLevel).length < 1 ? 0 :
-                this.transactions.filter(obj => obj._price === longLevel).map(obj => Number(obj._baseAmountIn)).reduce((total, current) => total + current);
+                this.transactions.filter(obj => obj._price === longLevel).map(obj => Number(obj._baseAmountIn)).sort((a, b) => b._baseAmountIn - a._baseAmountIn)[0];
                 const shortAmount = this.transactions.filter(obj => obj._price === shortLevel).length < 1 ? 0 :
-                this.transactions.filter(obj => obj._price === shortLevel).map(obj => Number(obj._baseAmountIn)).reduce((total, current) => total + current);
+                this.transactions.filter(obj => obj._price === shortLevel).map(obj => Number(obj._baseAmountIn)).sort((a, b) => b._baseAmountIn - a._baseAmountIn)[0];
 
-                /*const currentAmount = this.transactions.filter((obj) => obj._status === "FILLED").length > 0 ? this.transactions.filter((obj) => obj._status === "FILLED").map(obj => obj._baseAmountIn).reduce((total, current) => total + current) : 0;
-                if(Number(currentAmount) > Number(this._maxBaseAmountIn) && this._maxBaseAmountIn > 0) {
-                    const currentLongAmount = this.transactions.filter((obj) => obj._status === "FILLED" && obj._price === longLevel).length > 0 ? this.transactions.filter((obj) => obj._status === "FILLED" && obj._price === longLevel).map(obj => obj._baseAmountIn).reduce((total, current) => total + current) : 0;
-                    const currentShortAmount = this.transactions.filter((obj) => obj._status === "FILLED" && obj._price === shortLevel).length > 0 ? this.transactions.filter((obj) => obj._status === "FILLED" && obj._price === shortLevel).map(obj => obj._baseAmountIn).reduce((total, current) => total + current) : 0;
-                    if(
-                        (currentLongAmount > currentShortAmount && currentPrice <= (Number(longLevel) - 0))
-                        ||
-                        (currentShortAmount > currentLongAmount && currentPrice >= (Number(shortLevel) + 0))
-                    ) {
-                        await this.revive();
-                        return;
-                    }
-                }*/
+                const longTransactions = this.transactions.filter(obj => obj._price === longLevel).length;
+                const shortTransactions = this.transactions.filter(obj => obj._price === shortLevel).length;
 
                 let doubles = this._doubles;
-                if(this._doubles > this._minDoubles) doubles = (this._doubles - this._currentRounds) > this._minDoubles ? (this._doubles - this._currentRounds) : this._minDoubles;
 
-                console.log("DOUBLESSSS", doubles);
-                if(isAllLongFilled && (shortAmount <= longAmount)) {
-                    const lastBaseAmountIn = this.transactions.filter(obj => obj._price === longLevel).sort((a, b) => b._baseAmountIn - a._baseAmountIn)[0]?._baseAmountIn;
-                    //const baseAmountIn = Number(lastBaseAmountIn * (lastBaseAmountIn > this._maxBaseAmountIn && this._maxBaseAmountIn !== 0 ? 1 : 2));
-                    //const baseAmountIn = Number(Number(longAmount) * 2) - Number(shortAmount);
-                    const baseAmountIn = Number(lastBaseAmountIn * doubles);
-                    //const baseAmountIn = (Number(longAmount) - Number(shortAmount)) + this._baseAmountIn;
-
-                    if((this._currentRounds + 1) > this._peakRounds) this._peakRounds = this._currentRounds + 1;
-
-                    if(this._currentRounds <= this._rounds) {
-                        this._currentRounds = this._currentRounds + 1;
-                        const newShort = await this.newTransaction({side: "SHORT", price: shortLevel, baseAmountIn});    
-                    }
+                if(isAllLongFilled && (shortAmount < longAmount) && shortTransactions < 1) {
+                    const lastBaseAmountIn = this.transactions.filter(obj => obj._price === longLevel && !obj._isFake).sort((a, b) => b._baseAmountIn - a._baseAmountIn)[0]?._baseAmountIn;
+                    let baseAmountIn = lastBaseAmountIn ? Number(lastBaseAmountIn * doubles) : this._baseAmountIn;
+                    this._currentRounds = this._currentRounds + 1;
+                    if(this._currentRounds > this._peakRounds) this._peakRounds = this._currentRounds;
+                    let isFake = false;
+                    if((this._currentRounds < this._startsAt || !this._startsAt) || (this._currentRounds > this._endsAt || !this._endsAt)) isFake = true;
+                    if(isFake) baseAmountIn = this._baseAmountIn;
+                    const newShort = await this.newTransaction({side: "SHORT", price: shortLevel, baseAmountIn, isFake});     
                 }
-                if(isAllShortFilled && (longAmount <= shortAmount)) {
-                    const lastBaseAmountIn = this.transactions.filter(obj => obj._price === shortLevel).sort((a, b) => b._baseAmountIn - a._baseAmountIn)[0]?._baseAmountIn;
-                    //const baseAmountIn = Number(lastBaseAmountIn * (lastBaseAmountIn > this._maxBaseAmountIn && this._maxBaseAmountIn !== 0 ? 1 : 2));
-                    //const baseAmountIn = Number(Number(shortAmount) * 2) - Number(longAmount);
-                    const baseAmountIn = Number(lastBaseAmountIn * doubles);
-                    //const baseAmountIn = (Number(shortAmount) - Number(longAmount)) + this._baseAmountIn;
-
-                    if((this._currentRounds + 1) > this._peakRounds) this._peakRounds = this._currentRounds + 1;
-
-                    if(this._currentRounds <= this._rounds) {
-                        this._currentRounds = this._currentRounds + 1;
-                        const newLong = await this.newTransaction({side: "LONG", price: longLevel, baseAmountIn});  
-                    }  
+                if(isAllShortFilled && (longAmount < shortAmount) && longTransactions < 1) {
+                    const lastBaseAmountIn = this.transactions.filter(obj => obj._price === shortLevel && !obj._isFake).sort((a, b) => b._baseAmountIn - a._baseAmountIn)[0]?._baseAmountIn;
+                    let baseAmountIn = lastBaseAmountIn ? Number(lastBaseAmountIn * doubles) : this._baseAmountIn;
+                    this._currentRounds = this._currentRounds + 1;
+                    if(this._currentRounds > this._peakRounds) this._peakRounds = this._currentRounds;
+                    let isFake = false;
+                    if((this._currentRounds < this._startsAt || !this._startsAt) || (this._currentRounds > this._endsAt || !this._endsAt)) isFake = true;
+                    if(isFake) baseAmountIn = this._baseAmountIn;
+                    const newLong = await this.newTransaction({side: "LONG", price: longLevel, baseAmountIn, isFake});   
                 }
             }
         }

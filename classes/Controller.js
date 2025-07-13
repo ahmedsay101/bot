@@ -30,7 +30,10 @@ class Controller {
             direction: data.direction,
             coverage: data.coverage,
             hours: data.hours,
-            takeProfitStep: data.takeProfitStep
+            takeProfitStep: data.takeProfitStep,
+            startsAt: data.startsAt,
+            endsAt: data.endsAt,            
+            doubles: data.doubles,
         };
         if(data.starts) traderData["starts"] = data.starts;
         if(data.accumulatedProfit) traderData["accumulatedProfit"] = data.accumulatedProfit;
@@ -96,6 +99,7 @@ class Controller {
     async calculateProfit() {
         try {
             const results = await Transactions.aggregate([
+                {$match: {isFake: false}},
                 {$group: {
                   _id: null,
                   totalProfit: { $sum: "$profit" },
