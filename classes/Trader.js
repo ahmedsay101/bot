@@ -529,7 +529,9 @@ class Trader extends DB {
                 mode: this._mode,
                 leverage: this._leverage,
                 starts: starts,
-                takeProfitStep: this._takeProfitStep
+                takeProfitStep: this._takeProfitStep,
+                startsAt: this._startsAt,
+                endsAt: this._endsAt,
             });
         }
         catch(error) {
