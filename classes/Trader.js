@@ -74,7 +74,7 @@ class Trader extends DB {
         this._status = "STOPPED";
         this._isMarketActive = false;
         this._starts = starts;
-        this._currentRounds = 1;
+        this._currentRounds = 0;
         this._startsAt = startsAt;
         this._endsAt = endsAt;
         this._type = type;
