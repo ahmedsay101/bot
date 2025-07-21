@@ -453,8 +453,6 @@ class Trader extends DB {
                     shortPrice,
                 ].sort((a, b) => b - a))];
                 const baseAmountIn = this._baseAmountIn;
-                this._currentRounds = this._currentRounds + 1;
-                if(this._currentRounds > this._peakRounds) this._peakRounds = this._currentRounds;
                 let isFake = false;
                 if((this._currentRounds < this._startsAt || !this._startsAt) || (this._currentRounds > this._endsAt || !this._endsAt)) isFake = true;
                 const long = await this.newTransaction({side: "LONG", price: longPrice, baseAmountIn, isFake});
@@ -478,8 +476,6 @@ class Trader extends DB {
                 if(isAllLongFilled && (shortAmount < longAmount) && shortTransactions < 1) {
                     const lastBaseAmountIn = this.transactions.filter(obj => obj._price === longLevel && !obj._isFake).sort((a, b) => b._baseAmountIn - a._baseAmountIn)[0]?._baseAmountIn;
                     let baseAmountIn = lastBaseAmountIn ? Number(lastBaseAmountIn * doubles) : this._baseAmountIn;
-                    this._currentRounds = this._currentRounds + 1;
-                    if(this._currentRounds > this._peakRounds) this._peakRounds = this._currentRounds;
                     let isFake = false;
                     if((this._currentRounds < this._startsAt || !this._startsAt) || (this._currentRounds > this._endsAt || !this._endsAt)) isFake = true;
                     if(isFake) baseAmountIn = this._baseAmountIn;
@@ -488,8 +484,6 @@ class Trader extends DB {
                 if(isAllShortFilled && (longAmount < shortAmount) && longTransactions < 1) {
                     const lastBaseAmountIn = this.transactions.filter(obj => obj._price === shortLevel && !obj._isFake).sort((a, b) => b._baseAmountIn - a._baseAmountIn)[0]?._baseAmountIn;
                     let baseAmountIn = lastBaseAmountIn ? Number(lastBaseAmountIn * doubles) : this._baseAmountIn;
-                    this._currentRounds = this._currentRounds + 1;
-                    if(this._currentRounds > this._peakRounds) this._peakRounds = this._currentRounds;
                     let isFake = false;
                     if((this._currentRounds < this._startsAt || !this._startsAt) || (this._currentRounds > this._endsAt || !this._endsAt)) isFake = true;
                     if(isFake) baseAmountIn = this._baseAmountIn;

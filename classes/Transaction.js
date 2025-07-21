@@ -57,6 +57,9 @@ class Transaction extends DB {
       else {
         this._status = "FILLED";
       }
+
+      this.trader._currentRounds = this.trader._currentRounds + 1;
+      if(this.trader._currentRounds > this.trader._peakRounds) this.trader._peakRounds = this.trader._currentRounds;
     } 
     catch(error) {
       console.log(error);
