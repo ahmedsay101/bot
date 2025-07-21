@@ -13,7 +13,7 @@ class Trader extends DB {
         maxBaseAmountIn = 0,
         peakBaseAmountIn = 0,
         peakRounds = 0,
-        doubles = 3,
+        doubles = 4,
         minDoubles = 2,
         startsAt = 0, 
         endsAt = 0,
@@ -532,6 +532,7 @@ class Trader extends DB {
                 takeProfitStep: this._takeProfitStep,
                 startsAt: this._startsAt,
                 endsAt: this._endsAt,
+                doubles: this._doubles
             });
         }
         catch(error) {
