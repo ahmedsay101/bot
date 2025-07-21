@@ -454,7 +454,7 @@ class Trader extends DB {
                 ].sort((a, b) => b - a))];
                 const baseAmountIn = this._baseAmountIn;
                 let isFake = false;
-                if((this._currentRounds < this._startsAt || !this._startsAt) || (this._currentRounds > this._endsAt || !this._endsAt)) isFake = true;
+                if(((this._currentRounds + 1) < this._startsAt || !this._startsAt) || ((this._currentRounds + 1) > this._endsAt || !this._endsAt)) isFake = true;
                 const long = await this.newTransaction({side: "LONG", price: longPrice, baseAmountIn, isFake});
                 const short = await this.newTransaction({side: "SHORT", price: shortPrice, baseAmountIn, isFake});    
             }
@@ -477,7 +477,7 @@ class Trader extends DB {
                     const lastBaseAmountIn = this.transactions.filter(obj => obj._price === longLevel && !obj._isFake).sort((a, b) => b._baseAmountIn - a._baseAmountIn)[0]?._baseAmountIn;
                     let baseAmountIn = lastBaseAmountIn ? Number(lastBaseAmountIn * doubles) : this._baseAmountIn;
                     let isFake = false;
-                    if((this._currentRounds < this._startsAt || !this._startsAt) || (this._currentRounds > this._endsAt || !this._endsAt)) isFake = true;
+                    if(((this._currentRounds + 1) < this._startsAt || !this._startsAt) || ((this._currentRounds + 1) > this._endsAt || !this._endsAt)) isFake = true;
                     if(isFake) baseAmountIn = this._baseAmountIn;
                     const newShort = await this.newTransaction({side: "SHORT", price: shortLevel, baseAmountIn, isFake});     
                 }
@@ -485,7 +485,7 @@ class Trader extends DB {
                     const lastBaseAmountIn = this.transactions.filter(obj => obj._price === shortLevel && !obj._isFake).sort((a, b) => b._baseAmountIn - a._baseAmountIn)[0]?._baseAmountIn;
                     let baseAmountIn = lastBaseAmountIn ? Number(lastBaseAmountIn * doubles) : this._baseAmountIn;
                     let isFake = false;
-                    if((this._currentRounds < this._startsAt || !this._startsAt) || (this._currentRounds > this._endsAt || !this._endsAt)) isFake = true;
+                    if(((this._currentRounds + 1) < this._startsAt || !this._startsAt) || ((this._currentRounds + 1) > this._endsAt || !this._endsAt)) isFake = true;
                     if(isFake) baseAmountIn = this._baseAmountIn;
                     const newLong = await this.newTransaction({side: "LONG", price: longLevel, baseAmountIn, isFake});   
                 }
