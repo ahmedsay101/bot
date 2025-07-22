@@ -58,7 +58,7 @@ class Trader extends DB {
         this._profit = 0;
         this._totalProfit = 0;
         this._leverage = leverage;
-        this._fee = 0.0005;
+        this._fee = 0.001;
         this._stepSize = stepSize;
         this._takeProfit = Number(takeProfit);
         this._stopLoss = Number(stopLoss);
