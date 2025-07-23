@@ -51,6 +51,8 @@ class Transaction extends DB {
 
   async fill() {
     try {
+      if(this.trader._currentRounds === 1) 
+        this._baseAmountIn = this.trader._baseAmountIn * this.trader._doubles;
       if(this._mode === "LIVE" && !this._isFake) {
         await this.order();
       }
@@ -69,7 +71,7 @@ class Transaction extends DB {
   async order() {
     try {
       if(!this._side || this._mode !== "LIVE" || this.busy || this._orderId !== null || this._isFake) return false;
-      console.log("PRICEEEE", this._price );
+      console.log("PRICEEEE", this._price);
       if((this._type === "LIMIT" || this._type === "STOP_MARKET") && (!this._price)) return false;
       this.hold();
       const orderObj = {
