@@ -292,7 +292,6 @@ class Transaction extends DB {
       this._status = "CLOSED";
       this.trader.removeTransaction(this);
       await this.sync();
-      if(this._profit > 0) await this.trader.revive();
     }  
     catch(error) {
       console.log(error);
