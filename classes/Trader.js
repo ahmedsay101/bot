@@ -515,6 +515,7 @@ class Trader extends DB {
 
     async revive(starts = "NOW") {
         try {
+            if(this._status === "STOPPED") return;
             await this.destroy();
             await this.controller.createTrader({
                 symbol: this._symbol,

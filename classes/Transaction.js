@@ -51,9 +51,7 @@ class Transaction extends DB {
 
   async fill() {
     try {
-      if(this.trader._currentRounds === 1) 
-        this._baseAmountIn = this.trader._baseAmountIn * this.trader._doubles;
-
+      if(this.trader._currentRounds === 1) this._baseAmountIn = this.trader._baseAmountIn * this.trader._doubles;
       if(this._baseAmountIn > this.trader._peakBaseAmountIn) this.trader._peakBaseAmountIn = this._baseAmountIn;
       if(this._mode === "LIVE" && !this._isFake) {
         await this.order();
@@ -294,6 +292,7 @@ class Transaction extends DB {
       this._status = "CLOSED";
       this.trader.removeTransaction(this);
       await this.sync();
+      if(this._profit > 0) await this.trader.revive();
     }  
     catch(error) {
       console.log(error);
