@@ -47,6 +47,7 @@ class Trader extends DB {
         this._levels = levels;
         this.transactions = [];
         this._baseAmountIn = baseAmountIn;
+        this._currentAmountIn = this._baseAmountIn;
         this._quoteAmountIn = quoteAmountIn;
         this._maxBaseAmountIn = maxBaseAmountIn;
         this._peakBaseAmountIn = peakBaseAmountIn;
@@ -476,6 +477,7 @@ class Trader extends DB {
                 if(isAllLongFilled && (shortAmount < longAmount) && shortTransactions < 1) {
                     const lastBaseAmountIn = this.transactions.filter(obj => obj._price === longLevel && !obj._isFake).sort((a, b) => b._baseAmountIn - a._baseAmountIn)[0]?._baseAmountIn;
                     let baseAmountIn = lastBaseAmountIn ? Number(lastBaseAmountIn * doubles) : this._baseAmountIn;
+                    baseAmountIn = this._currentAmountIn;
                     let isFake = false;
                     if(((this._currentRounds + 1) < this._startsAt || !this._startsAt) || ((this._currentRounds + 1) > this._endsAt || !this._endsAt)) isFake = true;
                     if(isFake) baseAmountIn = this._baseAmountIn;
@@ -484,6 +486,7 @@ class Trader extends DB {
                 if(isAllShortFilled && (longAmount < shortAmount) && longTransactions < 1) {
                     const lastBaseAmountIn = this.transactions.filter(obj => obj._price === shortLevel && !obj._isFake).sort((a, b) => b._baseAmountIn - a._baseAmountIn)[0]?._baseAmountIn;
                     let baseAmountIn = lastBaseAmountIn ? Number(lastBaseAmountIn * doubles) : this._baseAmountIn;
+                    baseAmountIn = this._currentAmountIn;
                     let isFake = false;
                     if(((this._currentRounds + 1) < this._startsAt || !this._startsAt) || ((this._currentRounds + 1) > this._endsAt || !this._endsAt)) isFake = true;
                     if(isFake) baseAmountIn = this._baseAmountIn;

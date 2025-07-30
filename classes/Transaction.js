@@ -51,7 +51,8 @@ class Transaction extends DB {
 
   async fill() {
     try {
-      if(this.trader._currentRounds === 1) this._baseAmountIn = this.trader._baseAmountIn * this.trader._doubles;
+      //if(this.trader._currentRounds === 1) this._baseAmountIn = this.trader._baseAmountIn * this.trader._doubles;
+      this._baseAmountIn = this.trader._currentAmountIn;
       if(this._baseAmountIn > this.trader._peakBaseAmountIn) this.trader._peakBaseAmountIn = this._baseAmountIn;
       if(this._mode === "LIVE" && !this._isFake) {
         await this.order();
@@ -59,9 +60,14 @@ class Transaction extends DB {
       else {
         this._status = "FILLED";
       }
-
       this.trader._currentRounds = this.trader._currentRounds + 1;
       if(this.trader._currentRounds > this.trader._peakRounds) this.trader._peakRounds = this.trader._currentRounds;
+
+      if(this.trader._currentAmountIn < this.trader._maxBaseAmountIn) {
+        this.trader._currentAmountIn = this.trader._currentAmountIn * this.trader._doubles;
+        if(this.trader._currentAmountIn > this.trader._peakBaseAmountIn) this.trader._peakBaseAmountIn = this.trader._currentAmountIn;
+      }
+      else if(this.trader._currentAmountIn >= this.trader._maxBaseAmountIn) this.trader._currentAmountIn = this.trader._baseAmountIn;
     } 
     catch(error) {
       console.log(error);
@@ -305,7 +311,7 @@ class Transaction extends DB {
       if(this._position === null) this._position = this.ticker.currentPrice > this._price ? "LOWER" : "HIGHER";
       this._takeProfit = this.trader._takeProfit > 0 ? this._side === "LONG" ? this._price + this.trader._takeProfit : this._price  - this.trader._takeProfit : 0;
       this._stopLoss = this.trader._stopLoss > 0 ? this._side === "LONG" ? this._price - this.trader._stopLoss : this._price + this.trader._stopLoss : 0;
-
+      this._baseAmountIn = this.trader._currentAmountIn;
       if(
         this._status === "NEW"
         &&
