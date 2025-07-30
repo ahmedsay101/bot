@@ -33,8 +33,9 @@ class Controller {
             takeProfitStep: data.takeProfitStep,
             startsAt: data.startsAt,
             endsAt: data.endsAt,            
-            doubles: data.doubles,
+            doubles: data.doubles
         };
+        if(data.currentAmountIn) traderData["currentAmountIn"] = data.currentAmountIn;
         if(data.peakRounds) traderData["peakRounds"] = data.peakRounds;
         if(data.starts) traderData["starts"] = data.starts;
         if(data.accumulatedProfit) traderData["accumulatedProfit"] = data.accumulatedProfit;
