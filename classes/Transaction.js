@@ -67,7 +67,9 @@ class Transaction extends DB {
         this.trader._currentAmountIn = this.trader._currentAmountIn * this.trader._doubles;
         if(this.trader._currentAmountIn > this.trader._peakBaseAmountIn) this.trader._peakBaseAmountIn = this.trader._currentAmountIn;
       }
-      else if(this.trader._currentAmountIn >= this.trader._maxBaseAmountIn) this.trader._currentAmountIn = this.trader._baseAmountIn;
+      else if(this.trader._currentAmountIn >= this.trader._maxBaseAmountIn) {
+        this.trader._currentAmountIn = this.trader._baseAmountIn;
+      }
     } 
     catch(error) {
       console.log(error);
