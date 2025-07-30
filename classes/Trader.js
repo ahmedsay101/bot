@@ -425,6 +425,7 @@ class Trader extends DB {
             if(this._mode === "LIVE" && this.transactions.length < 1) await this.setLeverage();
             if(this._baseAmountIn === 0 || !this._baseAmountIn) this._baseAmountIn = this._quoteAmountIn / this.ticker.currentPrice;
             if(this._quoteAmountIn === 0 || !this._quoteAmountIn) this._quoteAmountIn = this.ticker.getQuoteQuantity(this._baseAmountIn * this.ticker.currentPrice);
+            if(this._currentAmountIn === 0) this._currentAmountIn = this._baseAmountIn;
             await this.controller.tick();
             await this.sync();
             await this.fill();
