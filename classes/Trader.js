@@ -521,6 +521,7 @@ class Trader extends DB {
         try {
             if(this._status === "STOPPED") return;
             await this.destroy();
+            if(this._profit > 0) this._currentAmountIn = this._baseAmountIn;
             await this.controller.createTrader({
                 symbol: this._symbol,
                 takeProfit: this._takeProfit,
