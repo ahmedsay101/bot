@@ -9,6 +9,7 @@ class Trader extends DB {
     constructor(controller, {
         symbol,
         baseAmountIn = 0,
+        currentAmountIn = 0,
         quoteAmountIn = 0,
         maxBaseAmountIn = 0,
         peakBaseAmountIn = 0,
@@ -47,7 +48,7 @@ class Trader extends DB {
         this._levels = levels;
         this.transactions = [];
         this._baseAmountIn = baseAmountIn;
-        this._currentAmountIn = this._baseAmountIn;
+        this._currentAmountIn = currentAmountIn;
         this._quoteAmountIn = quoteAmountIn;
         this._maxBaseAmountIn = maxBaseAmountIn;
         this._peakBaseAmountIn = peakBaseAmountIn;
@@ -536,7 +537,8 @@ class Trader extends DB {
                 takeProfitStep: this._takeProfitStep,
                 startsAt: this._startsAt,
                 endsAt: this._endsAt,
-                doubles: this._doubles
+                doubles: this._doubles,
+                currentAmountIn: this._currentAmountIn
             });
         }
         catch(error) {
