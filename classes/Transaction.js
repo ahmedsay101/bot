@@ -53,7 +53,7 @@ class Transaction extends DB {
     try {
       //if(this.trader._currentRounds === 1) this._baseAmountIn = this.trader._baseAmountIn * this.trader._doubles;
       this._baseAmountIn = this.trader._currentAmountIn;
-      if(this._baseAmountIn > this.trader._peakBaseAmountIn) this.trader._peakBaseAmountIn = this._baseAmountIn;
+      if(this._baseAmountIn > this.trader._peakBaseAmountIn && !this._isFake) this.trader._peakBaseAmountIn = this._baseAmountIn;
       if(this._mode === "LIVE" && !this._isFake) {
         await this.order();
       }
