@@ -142,7 +142,7 @@ class MarketActivityDetector {
     }
 
     const score = [volSpike||volPct, freqHigh, depthHigh, oiHigh].filter(b=>b).length;
-    const active = score >= 2;
+    const active = score >= 3;
 
     const reasons = [];
     if (volSpike) reasons.push('volume spike');
