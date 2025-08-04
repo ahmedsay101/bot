@@ -4,6 +4,7 @@ const { Transactions } = require("../schema/transaction.schema");
 const { Transaction } = require("./Transaction");
 const { Traders } = require("../schema/trader.schema");
 const { DB } = require("./DB");
+const MarketActivityDetector = require('./MarketDetector');
 
 class Trader extends DB {
     constructor(controller, {
@@ -31,7 +32,7 @@ class Trader extends DB {
         requiredTransactions = 0,
         requiredBalance = 0,
         hours = 0,
-        starts = "NOW",
+        starts = "MARKET_ACTIVE",
         mode = "TESTING",
         levels = []
     }) {
@@ -74,7 +75,6 @@ class Trader extends DB {
         this._requiredBalance = requiredBalance;
         this._mode = mode;
         this._status = "STOPPED";
-        this._isMarketActive = false;
         this._starts = starts;
         this._currentRounds = 0;
         this._startsAt = startsAt;
@@ -89,10 +89,7 @@ class Trader extends DB {
         this._createdAt = new Date();
         this._updatedAt = new Date();
         this.overwrite = ["levels", "profit"];
-
-        this.marketActiveTask = cron.schedule('* * * * *', async() => {
-            if(this._starts === "MARKET_ACTIVE") await this.isMarketActive();
-        });
+        this.marketDetector = new MarketActivityDetector(this.symbol);
     }
 
     async generateLevels() {
@@ -138,148 +135,14 @@ class Trader extends DB {
         }
     }
 
-    /*async isMarketActive() {
-        try {
-            const candles = await this.service.getKlines(this._symbol, 30, "5m");
-            const threshold = 400;
-        
-            let ranges = [];
-            let volumes = [];
-        
-            for (let candle of candles) {
-                const high = parseFloat(candle[2]);
-                const low = parseFloat(candle[3]);
-                const volume = parseFloat(candle[5]);
-                ranges.push(high - low);
-                volumes.push(volume);
-            }
-        
-            const avgRange = ranges.slice(0, -1).reduce((a, b) => a + b, 0) / (ranges.length - 1);
-            const lastRange = ranges[ranges.length - 1];
-        
-            const avgVolume = volumes.slice(0, -1).reduce((a, b) => a + b, 0) / (volumes.length - 1);
-            const lastVolume = volumes[volumes.length - 1];
-
-            console.log("AVERAGE RANGE: ", avgRange);
-            console.log("LAST RANGE: ", lastRange);
-
-            console.log("AVERAGE VOLUME: ", avgVolume);
-            console.log("LAST VOLUME: ", lastVolume);
-
-            if ((lastRange >= threshold * 0.7 || avgRange >= threshold * 0.5) && lastVolume >= avgVolume * 2) {
-                this._isMarketActive = true;
-                console.log("MARKET ACTIVE", this._isMarketActive);
-                return;
-            }
-        
-            return false;
-        } catch (error) {
-            console.log(error);
-            this._isMarketActive = false;
-            return;
-        }
-    }*/
-
-    async isMarketActive() {
-        try {
-
-            const 
-            interval = "5m", 
-            threshold = 400,
-            limit = 30, 
-            rangeMultiplier = 2,
-            bodyMultiplier = 2,
-            volumeMultiplier = 4;
-
-            const candles = await this.service.getKlines(this._symbol, limit, interval);
-        
-            let highs = [], lows = [], volumes = [], bodies = [], ranges = [];
-        
-            for (let i = 0; i < candles.length; i++) {
-                const open = parseFloat(candles[i][1]);
-                const high = parseFloat(candles[i][2]);
-                const low = parseFloat(candles[i][3]);
-                const close = parseFloat(candles[i][4]);
-                const volume = parseFloat(candles[i][5]);
-            
-                highs.push(high);
-                lows.push(low);
-                volumes.push(volume);
-                bodies.push(Math.abs(close - open));
-                ranges.push(high - low);
-            }
-        
-            const avgVolume = volumes.slice(0, -1).reduce((a, b) => a + b, 0) / (volumes.length - 1);
-            const avgBody = bodies.slice(0, -1).reduce((a, b) => a + b, 0) / (bodies.length - 1);
-            const avgRange = ranges.slice(0, -1).reduce((a, b) => a + b, 0) / (ranges.length - 1);
-        
-            const newRange = avgRange * rangeMultiplier;
-            const newVolume = avgVolume * volumeMultiplier;
-            const newBody = avgBody * bodyMultiplier;
-
-            const lastCandle = candles[candles.length - 1];
-            const lastOpen = parseFloat(lastCandle[1]);
-            const lastClose = parseFloat(lastCandle[4]);
-            const lastHigh = parseFloat(lastCandle[2]);
-            const lastLow = parseFloat(lastCandle[3]);
-            const lastVolume = parseFloat(lastCandle[5]);
-            const lastBody = Math.abs(lastClose - lastOpen);
-            const lastRange = lastHigh - lastLow;
-
-            console.log("AVERAGE BODY: ", avgBody);
-            console.log("AVERAGE VOLUME: ", avgVolume);
-            console.log("AVERAGE RANGE: ", avgRange);
-
-            console.log("LAST BODY: ", lastBody);
-            console.log("LAST VOLUME: ", lastVolume);
-            console.log("LAST RANGE: ", lastRange);
-        
-            if (
-                lastBody >= newBody 
-                && lastVolume >= newVolume 
-                && lastRange >= newRange
-                && lastRange >= threshold
-            ) {
-                console.log("MARKET ACTIVE", this._isMarketActive);
-                this._isMarketActive = true;
-                return;
-            }
-            
-            this._isMarketActive = false;
-            return;
-        }
-        catch(error) {
-            console.log(error);
-            this._isMarketActive = false;
-            return;
-        }
-    }
-
     start() {
-        if(this._starts === "NOW") this._status = "ACTIVE";
-        else if(this._starts === "ACTIVE_HOURS") {
-            if(this.isActive()) this._status = "ACTIVE";
-        }
-        else if(this._starts === "MARKET_ACTIVE") {
-            if(this._isMarketActive) this._status = "ACTIVE";
-        }
-    }
-
-    isActive() {
-        const now = new Date();
-        const cairoHour = (now.getUTCHours() + 2) % 24;
-        const cairoDay = now.getUTCDay(); // 0 = Sunday, 6 = Saturday
-
-        const isWeekday = cairoDay >= 1 && cairoDay <= 5; // Monday to Friday
-        const isWithinHours = cairoHour >= 11 && cairoHour <= 19; // 11 AM to 7:59 PM Cairo time
-
-        return true;
-        return isWeekday && isWithinHours;
+        const data = this.marketDetector.compute();
+        console.log("ACTIVITY", data);
+        if(data?.active) this._status = "ACTIVE";
     }
 
     async sync() {
         try {
-            //if(this._status === "ACTIVE") await this.takeProfit();
             if(this._status === "ACTIVE") await this.shouldGetOut();
             await this.dbSync();
             if(this.transactions.length < 1) {
@@ -479,7 +342,7 @@ class Trader extends DB {
                 if(isAllLongFilled && (shortAmount < longAmount) && shortTransactions < 1) {
                     const lastBaseAmountIn = this.transactions.filter(obj => obj._price === longLevel && !obj._isFake).sort((a, b) => b._baseAmountIn - a._baseAmountIn)[0]?._baseAmountIn;
                     let baseAmountIn = lastBaseAmountIn ? Number(lastBaseAmountIn * doubles) : this._baseAmountIn;
-                    baseAmountIn = this._currentAmountIn;
+                    //baseAmountIn = this._currentAmountIn;
                     let isFake = false;
                     if(((this._currentRounds + 1) < this._startsAt || !this._startsAt) || ((this._currentRounds + 1) > this._endsAt || !this._endsAt)) isFake = true;
                     if(isFake) baseAmountIn = this._baseAmountIn;
@@ -488,7 +351,7 @@ class Trader extends DB {
                 if(isAllShortFilled && (longAmount < shortAmount) && longTransactions < 1) {
                     const lastBaseAmountIn = this.transactions.filter(obj => obj._price === shortLevel && !obj._isFake).sort((a, b) => b._baseAmountIn - a._baseAmountIn)[0]?._baseAmountIn;
                     let baseAmountIn = lastBaseAmountIn ? Number(lastBaseAmountIn * doubles) : this._baseAmountIn;
-                    baseAmountIn = this._currentAmountIn;
+                    //baseAmountIn = this._currentAmountIn;
                     let isFake = false;
                     if(((this._currentRounds + 1) < this._startsAt || !this._startsAt) || ((this._currentRounds + 1) > this._endsAt || !this._endsAt)) isFake = true;
                     if(isFake) baseAmountIn = this._baseAmountIn;
