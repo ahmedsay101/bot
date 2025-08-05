@@ -4,7 +4,7 @@ const axios = require('axios');
 class MarketActivityDetector {
   constructor(symbol = 'UNIUSDT', opts = {}) {
     this.symbol = symbol;
-    this.mode = opts.mode || 'strict';
+    this.mode = opts.mode || 'medium';
     this.client = axios.create({ baseURL: 'https://fapi.binance.com' });
 
     this.wsKline = null;
