@@ -4,16 +4,15 @@ const axios = require('axios');
 class MarketActivityDetector {
   constructor(symbol = 'UNIUSDT', opts = {}) {
     this.symbol = symbol;
-    this.mode = opts.mode || 'medium';
+    this.mode = opts.mode || 'strict';
     this.client = axios.create({ baseURL: 'https://fapi.binance.com' });
 
-    // WebSocket references
     this.wsKline = null;
     this.wsAgg = null;
     this.wsDepth = null;
 
-    this.reconnectDelays = { kline: 5000, agg: 5000, depth: 5000 }; // 5 sec retry
-    this.maxRetries = 10; // prevent infinite loops
+    this.reconnectDelays = { kline: 5000, agg: 5000, depth: 5000 };
+    this.maxRetries = 10;
     this.retryCount = { kline: 0, agg: 0, depth: 0 };
 
     this.reset();
