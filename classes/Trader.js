@@ -90,7 +90,7 @@ class Trader extends DB {
         this._createdAt = new Date();
         this._updatedAt = new Date();
         this.overwrite = ["levels", "profit"];
-        this.breakoutDetector = new BreakoutDetector(this._symbol, this._takeProfit + this._stepSize);
+        this.breakoutDetector = new BreakoutDetector(this._symbol, Number(this._takeProfit + this._stepSize));
     }
 
     async generateLevels() {
