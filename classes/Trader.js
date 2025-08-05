@@ -143,7 +143,7 @@ class Trader extends DB {
             const threshold = Number(this._takeProfit + this._stepSize);
             console.log("THRESHOLD", threshold);
             console.log("LAST CANDLE", body);
-            if(body > threshold) {
+            if(body >= threshold) {
                 this._status = "ACTIVE";
             }
         } catch (err) {
