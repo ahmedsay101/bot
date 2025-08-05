@@ -22,6 +22,8 @@ class MarketActivityDetector {
       oiChangeThreshold: opts.oiChangeThreshold || 5, // require >5% open interest shift
       scoreThreshold: opts.scoreThreshold || 5      // minimum weighted score
     };
+
+    this.init();
   }
 
   reset() {
