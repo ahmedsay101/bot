@@ -51,9 +51,13 @@ class Transaction extends DB {
 
   async fill() {
     try {
-      if(this.trader._currentRounds === 1) this._baseAmountIn = this.trader._baseAmountIn * this.trader._doubles;
+      if(this.trader._currentRounds === 0) this.trader._takeProfit = this.trader._takeProfit / 2;
+      if(this.trader._currentRounds === 1) {
+        this._baseAmountIn = this.trader._baseAmountIn * this.trader._doubles;
+        this.trader._takeProfit = this.trader._takeProfit * 2;
+      }
       if(this.trader._currentRounds === 1 && this.trader._startsAt === 1 && this.trader._endsAt === 1) this._isFake = true;
-      //this._baseAmountIn = this.trader._currentAmountIn;
+      if(this.trader.currentRounds )
       if(this._baseAmountIn > this.trader._peakBaseAmountIn && !this._isFake) this.trader._peakBaseAmountIn = this._baseAmountIn;
       if(this._mode === "LIVE" && !this._isFake) {
         await this.order();
@@ -63,13 +67,6 @@ class Transaction extends DB {
       }
       this.trader._currentRounds = this.trader._currentRounds + 1;
       if(this.trader._currentRounds > this.trader._peakRounds) this.trader._peakRounds = this.trader._currentRounds;
-
-      if(this.trader._currentAmountIn < this.trader._maxBaseAmountIn && !this._isFake) {
-        this.trader._currentAmountIn = this.trader._currentAmountIn * this.trader._doubles;
-      }
-      else if(this.trader._currentAmountIn >= this.trader._maxBaseAmountIn && !this._isFake) {
-        this.trader._currentAmountIn = this.trader._baseAmountIn;
-      }
     } 
     catch(error) {
       console.log(error);
