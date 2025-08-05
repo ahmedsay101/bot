@@ -89,7 +89,7 @@ class Trader extends DB {
         this._createdAt = new Date();
         this._updatedAt = new Date();
         this.overwrite = ["levels", "profit"];
-        this.marketDetector = new MarketActivityDetector(this.symbol);
+        this.marketDetector = new MarketActivityDetector(this._symbol);
     }
 
     async generateLevels() {
