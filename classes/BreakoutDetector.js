@@ -1,7 +1,7 @@
 const WebSocket = require('ws');
 const axios = require('axios');
 
-class MomentumBreakoutDetector {
+class BreakoutDetector {
   constructor(symbol = 'UNIUSDT', targetMove = 0.06, opts = {}) {
     this.symbol = symbol;
     this.targetMove = targetMove;
@@ -184,4 +184,4 @@ class MomentumBreakoutDetector {
   }
 }
 
-module.exports = MomentumBreakoutDetector;
+module.exports = BreakoutDetector;
