@@ -5,10 +5,16 @@ class MarketActivityDetector {
   constructor(symbol = 'UNIUSDT', opts = {}) {
     this.symbol = symbol;
     this.mode = opts.mode || 'medium';
+    this.client = axios.create({ baseURL: 'https://fapi.binance.com' });
+
+    // WebSocket references
     this.wsKline = null;
     this.wsAgg = null;
     this.wsDepth = null;
-    this.client = axios.create({ baseURL: 'https://fapi.binance.com' });
+
+    this.reconnectDelays = { kline: 5000, agg: 5000, depth: 5000 }; // 5 sec retry
+    this.maxRetries = 10; // prevent infinite loops
+    this.retryCount = { kline: 0, agg: 0, depth: 0 };
 
     this.reset();
 
@@ -69,9 +75,31 @@ class MarketActivityDetector {
     }
   }
 
+  /** 🔄 Generic Reconnect Logic */
+  reconnect(type) {
+    if (this.retryCount[type] >= this.maxRetries) {
+      console.error(`❌ [${type}] Max retries reached. Giving up.`);
+      return;
+    }
+    this.retryCount[type]++;
+    console.log(`🔄 [${type}] Reconnecting in ${this.reconnectDelays[type] / 1000}s...`);
+    setTimeout(() => {
+      if (type === 'kline') this.startKline();
+      if (type === 'agg') this.startAggTrade();
+      if (type === 'depth') this.startDepth();
+    }, this.reconnectDelays[type]);
+  }
+
   startKline() {
     const url = `wss://fstream.binance.com/ws/${this.symbol.toLowerCase()}@kline_1m`;
+    console.log(`▶️ Connecting to KLINE WS: ${url}`);
     this.wsKline = new WebSocket(url);
+
+    this.wsKline.on('open', () => {
+      console.log('✅ KLINE WS connected');
+      this.retryCount.kline = 0;
+    });
+
     this.wsKline.on('message', msg => {
       const json = JSON.parse(msg);
       if (json.k && json.k.x) {
@@ -80,21 +108,62 @@ class MarketActivityDetector {
         if (this.klineHistory.length > this.params.volWindow) this.klineHistory.shift();
       }
     });
+
+    this.wsKline.on('error', err => {
+      console.error('⚠️ KLINE WS error:', err.message);
+    });
+
+    this.wsKline.on('close', () => {
+      console.warn('⚠️ KLINE WS closed');
+      this.reconnect('kline');
+    });
   }
 
   startAggTrade() {
     const url = `wss://fstream.binance.com/ws/${this.symbol.toLowerCase()}@aggTrade`;
+    console.log(`▶️ Connecting to AGG WS: ${url}`);
     this.wsAgg = new WebSocket(url);
+
+    this.wsAgg.on('open', () => {
+      console.log('✅ AGG WS connected');
+      this.retryCount.agg = 0;
+    });
+
     this.wsAgg.on('message', () => this.tradeCount++);
+
+    this.wsAgg.on('error', err => {
+      console.error('⚠️ AGG WS error:', err.message);
+    });
+
+    this.wsAgg.on('close', () => {
+      console.warn('⚠️ AGG WS closed');
+      this.reconnect('agg');
+    });
   }
 
   startDepth() {
     const url = `wss://fstream.binance.com/ws/${this.symbol.toLowerCase()}@depth20@100ms`;
+    console.log(`▶️ Connecting to DEPTH WS: ${url}`);
     this.wsDepth = new WebSocket(url);
+
+    this.wsDepth.on('open', () => {
+      console.log('✅ DEPTH WS connected');
+      this.retryCount.depth = 0;
+    });
+
     this.wsDepth.on('message', msg => {
       const json = JSON.parse(msg);
       this.depth.bids = json.b;
       this.depth.asks = json.a;
+    });
+
+    this.wsDepth.on('error', err => {
+      console.error('⚠️ DEPTH WS error:', err.message);
+    });
+
+    this.wsDepth.on('close', () => {
+      console.warn('⚠️ DEPTH WS closed');
+      this.reconnect('depth');
     });
   }
 
@@ -118,6 +187,14 @@ class MarketActivityDetector {
     return arr.reduce((sum, x) => sum + (key ? x[key] : x), 0) / arr.length;
   }
 
+  computeEMA(period) {
+    if (this.klineHistory.length < period) return null;
+    const k = 2 / (period + 1);
+    return this.klineHistory
+      .slice(-period)
+      .reduce((ema, candle, i) => (i === 0 ? candle.c : candle.c * k + ema * (1 - k)), 0);
+  }
+
   compute() {
     if (this.klineHistory.length === 0) {
       return { active: false, reason: 'no data yet' };
@@ -130,7 +207,6 @@ class MarketActivityDetector {
     const pctMove = Math.abs((last.c - last.o) / last.o) * 100;
     const volPct = pctMove > this.params.volPctThreshold;
 
-    // ✅ Check 5-minute fast move
     const recent = this.klineHistory.slice(-5);
     let fastMove = false;
     if (recent.length === 5) {
@@ -150,14 +226,29 @@ class MarketActivityDetector {
       oiHigh = Math.abs(this.oiDelta) > this.params.oiChangeThreshold;
     }
 
-    // ✅ Calculate final activity score
+    const emaShort = this.computeEMA(this.params.emaShort);
+    const emaLong = this.computeEMA(this.params.emaLong);
+    let trendDirection = "NONE";
+    let emaTrend = false;
+
+    if (emaShort && emaLong) {
+      if (emaShort > emaLong * 1.002) {
+        trendDirection = "UP";
+        emaTrend = true;
+      } else if (emaShort < emaLong * 0.998) {
+        trendDirection = "DOWN";
+        emaTrend = true;
+      }
+    }
+
     const score =
       (volSpike ? 2 : 0) +
       (volPct ? 1.5 : 0) +
       (fastMove ? 2 : 0) +
       (freqHigh ? 1.5 : 0) +
       (depthHigh ? 1 : 0) +
-      (oiHigh ? 2 : 0);
+      (oiHigh ? 2 : 0) +
+      (emaTrend ? 1.5 : 0);
 
     const active = score >= this.params.scoreThreshold;
 
@@ -168,10 +259,12 @@ class MarketActivityDetector {
     if (freqHigh) reasons.push('high trade frequency');
     if (depthHigh) reasons.push('order book imbalance');
     if (oiHigh) reasons.push('open interest change');
+    if (emaTrend) reasons.push(`EMA trend (${trendDirection})`);
 
     return {
       active,
       score,
+      trendDirection,
       reasons: reasons.length ? reasons : ['low activity'],
       lastPrice: last.c
     };
