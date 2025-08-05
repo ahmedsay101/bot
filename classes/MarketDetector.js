@@ -4,6 +4,7 @@ const axios = require('axios');
 class MarketActivityDetector {
   constructor(symbol = 'UNIUSDT', opts = {}) {
     this.symbol = symbol;
+    this.mode = opts.mode || 'medium';
     this.wsKline = null;
     this.wsAgg = null;
     this.wsDepth = null;
@@ -11,16 +12,24 @@ class MarketActivityDetector {
 
     this.reset();
 
-    // 🔥 Stricter thresholds for stronger signals
+    const modes = {
+      medium: { volThreshold: 2, volPctThreshold: 0.6, scoreThreshold: 3.5, fastMovePct: 1.0 },
+      strict: { volThreshold: 3, volPctThreshold: 1.2, scoreThreshold: 5, fastMovePct: 2.0 }
+    };
+
+    const paramsMode = modes[this.mode];
     this.params = {
-      volWindow: opts.volWindow || 20,              // number of candles for average
-      volThreshold: opts.volThreshold || 3,         // require >3x avg volume
-      volPctThreshold: opts.volPctThreshold || 1.2, // require >1.2% candle move
-      freqThreshold: opts.freqThreshold || 30,      // require >30 trades/sec
-      depthImbalanceThreshold: opts.depthImbalanceThreshold || 2.5, // strong imbalance
-      oiChangeWindow: opts.oiChangeWindow || 60,    // seconds
-      oiChangeThreshold: opts.oiChangeThreshold || 5, // require >5% open interest shift
-      scoreThreshold: opts.scoreThreshold || 5      // minimum weighted score
+      volWindow: opts.volWindow || 20,
+      volThreshold: opts.volThreshold || paramsMode.volThreshold,
+      volPctThreshold: opts.volPctThreshold || paramsMode.volPctThreshold,
+      freqThreshold: opts.freqThreshold || 30,
+      depthImbalanceThreshold: opts.depthImbalanceThreshold || 2.5,
+      oiChangeWindow: opts.oiChangeWindow || 60,
+      oiChangeThreshold: opts.oiChangeThreshold || 5,
+      scoreThreshold: opts.scoreThreshold || paramsMode.scoreThreshold,
+      emaShort: opts.emaShort || 5,
+      emaLong: opts.emaLong || 20,
+      fastMovePct: opts.fastMovePct || paramsMode.fastMovePct
     };
 
     this.init();
@@ -32,11 +41,11 @@ class MarketActivityDetector {
     this.depth = { bids: {}, asks: {} };
     this.openInterest = null;
     this.oiTimestamp = null;
-    setInterval(() => (this.tradeCount = 0), 1000); // reset trade counter every sec
+    setInterval(() => (this.tradeCount = 0), 1000);
   }
 
   async init() {
-    await this.preloadKlines(); // ✅ preload historical candles for instant readiness
+    await this.preloadKlines();
     this.startKline();
     this.startAggTrade();
     this.startDepth();
@@ -54,8 +63,9 @@ class MarketActivityDetector {
         c: parseFloat(k[4]),
         volume: parseFloat(k[5])
       }));
+      console.log(`✅ [${this.symbol}] Preloaded ${this.klineHistory.length} candles`);
     } catch (err) {
-      console.error("⚠️ Failed to preload klines:", err.message);
+      console.error("❌ Failed to preload klines:", err.message);
     }
   }
 
@@ -109,48 +119,62 @@ class MarketActivityDetector {
   }
 
   compute() {
-    if (this.klineHistory.length === 0) return { active: false, reason: 'no data yet' };
+    if (this.klineHistory.length === 0) {
+      return { active: false, reason: 'no data yet' };
+    }
 
-    // --- Volume & Price Volatility ---
     const avgVol = this.average(this.klineHistory, 'volume');
     const last = this.klineHistory[this.klineHistory.length - 1];
+
     const volSpike = last.volume > avgVol * this.params.volThreshold;
     const pctMove = Math.abs((last.c - last.o) / last.o) * 100;
     const volPct = pctMove > this.params.volPctThreshold;
 
-    // --- Trade Frequency ---
+    // ✅ Check 5-minute fast move
+    const recent = this.klineHistory.slice(-5);
+    let fastMove = false;
+    if (recent.length === 5) {
+      const move5m = ((recent[4].c - recent[0].c) / recent[0].c) * 100;
+      fastMove = Math.abs(move5m) >= this.params.fastMovePct;
+    }
+
     const freqHigh = this.tradeCount > this.params.freqThreshold;
 
-    // --- Order Book Imbalance ---
     const topBid = parseFloat(this.depth.bids?.[0]?.[1] || 0);
     const topAsk = parseFloat(this.depth.asks?.[0]?.[1] || 0);
     const imbalance = topBid && topAsk ? topBid / topAsk : 1;
     const depthHigh = imbalance > this.params.depthImbalanceThreshold || imbalance < 1 / this.params.depthImbalanceThreshold;
 
-    // --- Open Interest Change ---
     let oiHigh = false;
     if (this.oiDelta && this.oiTimeDelta) {
       oiHigh = Math.abs(this.oiDelta) > this.params.oiChangeThreshold;
     }
 
-    // --- Weighted Composite Score ---
+    // ✅ Calculate final activity score
     const score =
-      (volSpike ? 2.5 : 0) +
-      (volPct ? 2 : 0) +
-      (freqHigh ? 2 : 0) +
-      (depthHigh ? 1.5 : 0) +
-      (oiHigh ? 2.5 : 0);
+      (volSpike ? 2 : 0) +
+      (volPct ? 1.5 : 0) +
+      (fastMove ? 2 : 0) +
+      (freqHigh ? 1.5 : 0) +
+      (depthHigh ? 1 : 0) +
+      (oiHigh ? 2 : 0);
 
     const active = score >= this.params.scoreThreshold;
 
     const reasons = [];
-    if (volSpike) reasons.push('massive volume spike');
-    if (volPct) reasons.push('large price move');
-    if (freqHigh) reasons.push('extremely high trade frequency');
-    if (depthHigh) reasons.push('strong order book imbalance');
-    if (oiHigh) reasons.push('significant open interest change');
+    if (volSpike) reasons.push('volume spike');
+    if (volPct) reasons.push('large 1m candle');
+    if (fastMove) reasons.push('fast 5m move');
+    if (freqHigh) reasons.push('high trade frequency');
+    if (depthHigh) reasons.push('order book imbalance');
+    if (oiHigh) reasons.push('open interest change');
 
-    return { active, score, reasons };
+    return {
+      active,
+      score,
+      reasons: reasons.length ? reasons : ['low activity'],
+      lastPrice: last.c
+    };
   }
 }
 
