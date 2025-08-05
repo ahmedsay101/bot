@@ -4,8 +4,6 @@ const { Transactions } = require("../schema/transaction.schema");
 const { Transaction } = require("./Transaction");
 const { Traders } = require("../schema/trader.schema");
 const { DB } = require("./DB");
-const MarketActivityDetector = require('./MarketDetector');
-const BreakoutDetector = require('./BreakoutDetector');
 
 class Trader extends DB {
     constructor(controller, {
@@ -90,7 +88,6 @@ class Trader extends DB {
         this._createdAt = new Date();
         this._updatedAt = new Date();
         this.overwrite = ["levels", "profit"];
-        this.breakoutDetector = new BreakoutDetector(this._symbol, Number(this._takeProfit + this._stepSize));
     }
 
     async generateLevels() {
@@ -136,10 +133,23 @@ class Trader extends DB {
         }
     }
 
-    start() {
-        const data = this.breakoutDetector.getBreakoutProbability();
-        console.log("Breakout", data);
-        if(data?.likely) this._status = "ACTIVE";
+    async start() {
+        try {
+            const candles = await this.service.getKlines(this._symbol, 1, "5m");
+            console.log("LAST CANDLE", candles);
+            const candle = candles[0];
+            const open = parseFloat(candle[1]);
+            const close = parseFloat(candle[4]);
+            const body = Math.abs(close - open);
+
+            const threshold = Number(this._takeProfit + this._stepSize);
+            if(body > threshold) {
+                this._status = "ACTIVE";
+            }
+        } catch (err) {
+            console.error("❌ Error fetching candle data:", err.message);
+            return false;
+        }
     }
 
     async sync() {
