@@ -5,6 +5,7 @@ const { Transaction } = require("./Transaction");
 const { Traders } = require("../schema/trader.schema");
 const { DB } = require("./DB");
 const MarketActivityDetector = require('./MarketDetector');
+const BreakoutDetector = require('./BreakoutDetector');
 
 class Trader extends DB {
     constructor(controller, {
@@ -89,7 +90,7 @@ class Trader extends DB {
         this._createdAt = new Date();
         this._updatedAt = new Date();
         this.overwrite = ["levels", "profit"];
-        this.marketDetector = new MarketActivityDetector(this._symbol);
+        this.breakoutDetector = new BreakoutDetector(this._symbol, this._takeProfit + this._stepSize);
     }
 
     async generateLevels() {
@@ -136,9 +137,9 @@ class Trader extends DB {
     }
 
     start() {
-        const data = this.marketDetector.compute();
-        console.log("ACTIVITY", data);
-        if(data?.active) this._status = "ACTIVE";
+        const data = this.breakoutDetector.getBreakoutProbability();
+        console.log("Breakout", data);
+        if(data?.likely) this._status = "ACTIVE";
     }
 
     async sync() {
