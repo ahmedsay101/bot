@@ -137,13 +137,17 @@ class Trader extends DB {
         try {
             const candles = await this.service.getKlines(this._symbol, 1, "5m");
             const candle = candles[0];
+            const open = parseFloat(candle[1]);
             const high = parseFloat(candle[2]);
             const low = parseFloat(candle[3]);
+            const close = parseFloat(candle[4]);
+
             const range = high - low;
+            const body = Math.abs(close - open);
+
             const threshold = Number(this._takeProfit + this._stepSize);
-            console.log("THRESHOLD", threshold);
-            console.log("LAST CANDLE", range);
-            if(range >= threshold) {
+
+            if((range >= threshold) && (body >= 0.7 * range)) {
                 this._status = "ACTIVE";
             }
         } catch (err) {
