@@ -73,7 +73,7 @@ class Trader extends DB {
         this._requiredTransactions = requiredTransactions;
         this._requiredBalance = requiredBalance;
         this._mode = mode;
-        this._status = "STOPPED";
+        this._status = "ACTIVE";
         this._starts = starts;
         this._currentRounds = 0;
         this._startsAt = startsAt;
@@ -135,6 +135,7 @@ class Trader extends DB {
 
     async start() {
         try {
+            if(this._status === "ACTIVE") return;
             const candles = await this.service.getKlines(this._symbol, 1, "5m");
             const candle = candles[0];
             const open = parseFloat(candle[1]);
@@ -145,9 +146,9 @@ class Trader extends DB {
             const range = high - low;
             const body = Math.abs(close - open);
 
-            const threshold = Number(this._takeProfit + this._stepSize);
+            const threshold = Number(this._takeProfit + this._stepSize) * 1.2;
 
-            if((range >= threshold) && (body >= 0.7 * range)) {
+            if((range >= threshold) && (body >= 0.8 * range)) {
                 this._status = "ACTIVE";
             }
         } catch (err) {
