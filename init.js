@@ -162,7 +162,7 @@ app.post('/api', authenticate, async(req, res) => {
         const {
             symbol, 
             baseAmountIn, 
-            maxBaseAmountIn, 
+            maxBaseAmountIn = 0, 
             takeProfit, 
             stepSize, 
             stopLoss, 
