@@ -160,6 +160,10 @@ class Trader extends DB {
     async sync() {
         try {
             if(this._status === "ACTIVE") await this.shouldGetOut();
+            if(this._currentRounds > this._endsAt) {
+                this._startsAt = this._startsAt + 1;
+                this._endsAt = this._endsAt + 1;
+            }
             await this.dbSync();
             if(this.transactions.length < 1) {
                 const transactions = await Transactions.aggregate([
