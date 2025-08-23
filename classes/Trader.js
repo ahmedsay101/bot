@@ -209,7 +209,6 @@ class Trader extends DB {
             await this.calculateTotalProfit();
             await this.calculateProfitTaken();
             await this.calculateMoneyIn();
-            this.log();
             this.release();
         }
         catch(error) {
