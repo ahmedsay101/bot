@@ -9,29 +9,17 @@ class Trader extends DB {
     constructor(controller, {
         symbol,
         baseAmountIn = 0,
-        currentAmountIn = 0,
         quoteAmountIn = 0,
         maxBaseAmountIn = 0,
-        peakBaseAmountIn = 0,
-        peakRounds = 0,
-        doubles = 4,
-        minDoubles = 2,
-        startsAt = 0, 
-        endsAt = 0,
         takeProfit = 0,
         stopLoss = 0,
         takeProfitStep = 1,
         stepSize = 0,
-        type = "UNLIMITED",
         aim = 0,
         leverage = 10,
         lives = 0,
         accumulatedProfit = 0,
-        maxMoneyIn = 0,
-        requiredTransactions = 0,
-        requiredBalance = 0,
-        hours = 0,
-        starts = "MARKET_ACTIVE",
+        starts = "NOW",
         mode = "TESTING",
         levels = []
     }) {
@@ -48,15 +36,9 @@ class Trader extends DB {
         this._levels = levels;
         this.transactions = [];
         this._baseAmountIn = baseAmountIn;
-        this._currentAmountIn = currentAmountIn;
         this._quoteAmountIn = quoteAmountIn;
         this._maxBaseAmountIn = maxBaseAmountIn;
-        this._peakBaseAmountIn = peakBaseAmountIn;
-        this._peakRounds = peakRounds;
-        this._doubles = doubles;
-        this._minDoubles = minDoubles;
         this._aim = aim;
-        this._hours = hours;
         this._profit = 0;
         this._totalProfit = 0;
         this._leverage = leverage;
@@ -69,21 +51,12 @@ class Trader extends DB {
         this._readyToTakeProfit = false;
         this._profitTaken = 0;
         this._maxLevels = 1000;
-        this._coverage = 0;
-        this._requiredTransactions = requiredTransactions;
-        this._requiredBalance = requiredBalance;
         this._mode = mode;
         this._status = "ACTIVE";
         this._starts = starts;
         this._currentRounds = 0;
-        this._startsAt = startsAt;
-        this._endsAt = endsAt;
-        this._type = type;
-        this._lives = lives;
         this.busy = false;
         this._peak = 0;
-        this._timeLeft = 0;
-        this._maxMoneyIn = maxMoneyIn;
         this._accumulatedProfit = accumulatedProfit;
         this._createdAt = new Date();
         this._updatedAt = new Date();
@@ -133,37 +106,8 @@ class Trader extends DB {
         }
     }
 
-    async start() {
-        try {
-            if(this._status === "ACTIVE") return;
-            const candles = await this.service.getKlines(this._symbol, 1, "5m");
-            const candle = candles[0];
-            const open = parseFloat(candle[1]);
-            const high = parseFloat(candle[2]);
-            const low = parseFloat(candle[3]);
-            const close = parseFloat(candle[4]);
-
-            const range = high - low;
-            const body = Math.abs(close - open);
-
-            const threshold = Number(this._takeProfit + this._stepSize) * 1.2;
-
-            if((range >= threshold) && (body >= 0.8 * range)) {
-                this._status = "ACTIVE";
-            }
-        } catch (err) {
-            console.error("❌ Error fetching candle data:", err.message);
-            return false;
-        }
-    }
-
     async sync() {
         try {
-            if(this._status === "ACTIVE") await this.shouldGetOut();
-            if(this._currentRounds > this._endsAt) {
-                this._startsAt = this._startsAt + 1;
-                this._endsAt = this._endsAt + 1;
-            }
             await this.dbSync();
             if(this.transactions.length < 1) {
                 const transactions = await Transactions.aggregate([
@@ -176,55 +120,6 @@ class Trader extends DB {
                     await transaction.fromId(obj._id);
                 }
             }
-        } 
-        catch(error) {
-          console.log(error);
-        }
-    }
-
-    async takeProfit() {
-        try {
-            if(this.transactions.length === 0 || this._levels.length === 0 || !this._takeProfit) return;
-            const currentPrice = this.ticker.currentPrice;
-            const longLevel = this._levels.sort((a, b) => b - a)[0];
-            const shortLevel = this._levels.sort((a, b) => b - a)[1];
-            const filledTransactions = this.transactions.filter(one => one._status === "FILLED").length;
-            const fee = Number(this._moneyIn) * Number(this._fee);
-            const currentAmount = this.transactions.filter((obj) => obj._status === "FILLED").length > 0 ? this.transactions.filter((obj) => obj._status === "FILLED").map(obj => obj._baseAmountIn).reduce((total, current) => total + current) : 0;
-            if(
-                (
-                    ((Math.abs(currentPrice - longLevel) >= (filledTransactions === 1 ? (Number(this._takeProfit) / 2) : Number(this._takeProfit)))  && currentPrice > longLevel)
-                || 
-                    ((Math.abs(currentPrice - shortLevel) >= (filledTransactions === 1 ? (Number(this._takeProfit) / 2) : Number(this._takeProfit))) && currentPrice < shortLevel)
-                )
-                && 
-                (
-                    Number(this._profit) >= 1
-                )
-            ) await this.revive();
-
-
-        } 
-        catch(error) {
-          console.log(error);
-        }
-    }
-
-    async shouldGetOut() {
-        try {
-            const currentPrice = this.ticker.currentPrice;
-            const longLevel = this._levels.sort((a, b) => b - a)[0];
-            const shortLevel = this._levels.sort((a, b) => b - a)[1];
-            const filledTransactions = this.transactions.filter(one => one._status === "FILLED").length;
-            if(
-                (
-                    ((Math.abs(currentPrice - longLevel) >=  Number(this._takeProfit)) && currentPrice > longLevel)
-                    || 
-                    ((Math.abs(currentPrice - shortLevel) >= Number(this._takeProfit)) && currentPrice < shortLevel)
-                    && filledTransactions === 0
-                    && Number(this._takeProfit) !== 0
-                )
-            ) await this.revive();
         } 
         catch(error) {
           console.log(error);
@@ -302,7 +197,6 @@ class Trader extends DB {
 
     async tick() {
         try {
-            this.start();
             if(!this.canTick()) return;
             this.hold();
             if(this._mode === "LIVE" && this.transactions.length < 1) await this.setLeverage();
@@ -310,6 +204,7 @@ class Trader extends DB {
             if(this._quoteAmountIn === 0 || !this._quoteAmountIn) this._quoteAmountIn = this.ticker.getQuoteQuantity(this._baseAmountIn * this.ticker.currentPrice);
             if(this._currentAmountIn === 0) this._currentAmountIn = this._baseAmountIn;
             await this.controller.tick();
+            await this.generateLevels();
             await this.sync();
             await this.fill();
             await this.updateTransactions();
