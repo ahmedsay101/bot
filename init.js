@@ -102,13 +102,6 @@ app.get('/api', authenticate, (req, res) => {
                     baseAmountIn: obj._baseAmountIn,
                     quoteAmountIn: obj._quoteAmountIn,
                     moneyIn: obj._moneyIn,
-                    maxBaseAmountIn: obj._maxBaseAmountIn,
-                    peakBaseAmountIn: obj._peakBaseAmountIn,
-                    peakRounds: obj._peakRounds,
-                    maxMoneyIn: obj._maxMoneyIn,
-                    coverage: obj._coverage,
-                    requiredTransactions: obj._requiredTransactions,
-                    requiredBalance: obj._requiredBalance,
                     accumulatedProfit: obj._accumulatedProfit,
                     profit: obj._profit,
                     profitTaken: obj._profitTaken,
@@ -121,12 +114,9 @@ app.get('/api', authenticate, (req, res) => {
                     stepSize: obj._stepSize,
                     speed: obj.ticker.avgSpeed,
                     status: obj._status,
-                    aim: obj._aim,
                     lives: obj._lives,
-                    type: obj._type,
                     totalProfit: obj._totalProfit,
                     peak: obj._peak,
-                    isMarketActive: obj._isMarketActive,
                     createdAt: obj._createdAt,
                     updatedAt: obj._updatedAt,
                     transactions: obj.transactions.map(transaction => ({
@@ -162,18 +152,12 @@ app.post('/api', authenticate, async(req, res) => {
         const {
             symbol, 
             baseAmountIn, 
-            maxBaseAmountIn = 0, 
             takeProfit, 
             stepSize, 
             stopLoss, 
             leverage = 10, 
-            aim = 1, 
-            lives = 0, 
-            hours = 0,
-            coverage = 0,
-            type = "UNLIMITED", 
+            aim = 100, 
             mode = "LIVE", 
-            direction = "ONEWAY",
             takeProfitStep = 1,
             startsAt = 0,
             endsAt = 0,
@@ -183,24 +167,13 @@ app.post('/api', authenticate, async(req, res) => {
         const data = {
             symbol,
             baseAmountIn: Number(baseAmountIn),
-            maxBaseAmountIn: Number(maxBaseAmountIn),
             takeProfit: Number(takeProfit),
             stepSize: Number(stepSize),
             stopLoss: Number(stopLoss),
             leverage: Number(leverage),
-            type,
             mode,
-            direction,
-            coverage,
             takeProfitStep,
-            startsAt,
-            endsAt,
-            doubles
         }
-        if(type === "LIMITED") data["aim"] = aim;
-        if(type !== "UNLIMITED") data["lives"] = lives;
-        if(type === "TIMED") data["hours"] = hours;
-        if(coverage) data["coverage"] = coverage;
         await controller.createTrader(data);
         res.status(200).json({success: true, message: "Trader Created Successfully"});
     }

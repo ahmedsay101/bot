@@ -10,14 +10,12 @@ class Trader extends DB {
         symbol,
         baseAmountIn = 0,
         quoteAmountIn = 0,
-        maxBaseAmountIn = 0,
         takeProfit = 0,
         stopLoss = 0,
         takeProfitStep = 1,
         stepSize = 0,
         aim = 0,
         leverage = 10,
-        lives = 0,
         accumulatedProfit = 0,
         starts = "NOW",
         mode = "TESTING",
@@ -37,7 +35,6 @@ class Trader extends DB {
         this.transactions = [];
         this._baseAmountIn = baseAmountIn;
         this._quoteAmountIn = quoteAmountIn;
-        this._maxBaseAmountIn = maxBaseAmountIn;
         this._aim = aim;
         this._profit = 0;
         this._totalProfit = 0;
@@ -220,58 +217,20 @@ class Trader extends DB {
         }
     }
 
-    log() {
-    }
-
     async fill() {
         try {
-            if(this.transactions.length === 0) {
-                const currentPrice = this.ticker.currentPrice;
-                const longPrice = Number(currentPrice) + Number(this._stepSize);
-                const shortPrice = Number(currentPrice) - Number(this._stepSize);
-                this._levels = [...new Set([
-                    longPrice,
-                    shortPrice,
-                ].sort((a, b) => b - a))];
-                const baseAmountIn = this._baseAmountIn;
-                let isFake = false;
-                if(((this._currentRounds + 1) < this._startsAt || !this._startsAt) || ((this._currentRounds + 1) > this._endsAt || !this._endsAt)) isFake = true;
-                const long = await this.newTransaction({side: "LONG", price: longPrice, baseAmountIn, isFake});
-                const short = await this.newTransaction({side: "SHORT", price: shortPrice, baseAmountIn, isFake});    
-            }
-            else {
-                const longLevel = this._levels.sort((a, b) => b - a)[0];
-                const shortLevel = this._levels.sort((a, b) => b - a)[1];
-                const isAllLongFilled = this.transactions.filter(obj => obj._price === longLevel && obj._status === "FILLED").length === this.transactions.filter(obj => obj._price === longLevel).length;
-                const isAllShortFilled = this.transactions.filter(obj => obj._price === shortLevel && obj._status === "FILLED").length === this.transactions.filter(obj => obj._price === shortLevel).length;
-                const longAmount = this.transactions.filter(obj => obj._price === longLevel).length < 1 ? 0 :
-                this.transactions.filter(obj => obj._price === longLevel).map(obj => Number(obj._baseAmountIn)).sort((a, b) => b._baseAmountIn - a._baseAmountIn)[0];
-                const shortAmount = this.transactions.filter(obj => obj._price === shortLevel).length < 1 ? 0 :
-                this.transactions.filter(obj => obj._price === shortLevel).map(obj => Number(obj._baseAmountIn)).sort((a, b) => b._baseAmountIn - a._baseAmountIn)[0];
-
-                const longTransactions = this.transactions.filter(obj => obj._price === longLevel).length;
-                const shortTransactions = this.transactions.filter(obj => obj._price === shortLevel).length;
-
-                let doubles = this._doubles;
-
-                if(isAllLongFilled && (shortAmount < longAmount) && shortTransactions < 1) {
-                    const lastBaseAmountIn = this.transactions.filter(obj => obj._price === longLevel && !obj._isFake).sort((a, b) => b._baseAmountIn - a._baseAmountIn)[0]?._baseAmountIn;
-                    let baseAmountIn = lastBaseAmountIn ? Number(lastBaseAmountIn * doubles) : this._baseAmountIn;
-                    //baseAmountIn = this._currentAmountIn;
-                    let isFake = false;
-                    if(((this._currentRounds + 1) < this._startsAt || !this._startsAt) || ((this._currentRounds + 1) > this._endsAt || !this._endsAt)) isFake = true;
-                    if(isFake) baseAmountIn = this._baseAmountIn;
-                    const newShort = await this.newTransaction({side: "SHORT", price: shortLevel, baseAmountIn, isFake});     
-                }
-                if(isAllShortFilled && (longAmount < shortAmount) && longTransactions < 1) {
-                    const lastBaseAmountIn = this.transactions.filter(obj => obj._price === shortLevel && !obj._isFake).sort((a, b) => b._baseAmountIn - a._baseAmountIn)[0]?._baseAmountIn;
-                    let baseAmountIn = lastBaseAmountIn ? Number(lastBaseAmountIn * doubles) : this._baseAmountIn;
-                    //baseAmountIn = this._currentAmountIn;
-                    let isFake = false;
-                    if(((this._currentRounds + 1) < this._startsAt || !this._startsAt) || ((this._currentRounds + 1) > this._endsAt || !this._endsAt)) isFake = true;
-                    if(isFake) baseAmountIn = this._baseAmountIn;
-                    const newLong = await this.newTransaction({side: "LONG", price: longLevel, baseAmountIn, isFake});   
-                }
+            for(let price of this._levels) {
+                const levelTransactions = await this.getLevel(price);
+                if(levelTransactions.length < 2) {
+                    const long = levelTransactions.find(transaction => transaction.side === "LONG") || null;
+                    const short = levelTransactions.find(transaction => transaction.side === "SHORT") || null;
+                    if(this.ticker.currentPrice <= (Number(price) - Number(this._stepSize)) && !long) {
+                        await this.newTransaction({side: "LONG", price});
+                    }
+                    else if(this.ticker.currentPrice >= (Number(price) + Number(this._stepSize)) && !short) {
+                        await this.newTransaction({side: "SHORT", price});
+                    }    
+                }       
             }
         }
         catch(error) {
@@ -296,29 +255,20 @@ class Trader extends DB {
         }
     }
 
-    async revive(starts = "NOW") {
+    async revive() {
         try {
             if(this._status === "STOPPED") return;
             await this.destroy();
-            if(this._profit > 0) this._currentAmountIn = this._baseAmountIn;
             await this.controller.createTrader({
                 symbol: this._symbol,
                 takeProfit: this._takeProfit,
                 baseAmountIn: this._baseAmountIn,
                 quoteAmountIn: this._quoteAmountIn,
-                maxBaseAmountIn: this._maxBaseAmountIn,
-                peakBaseAmountIn: this._peakBaseAmountIn,
-                peakRounds: this._peakRounds,
                 stepSize: this._stepSize,
                 stopLoss: this._stopLoss,
                 mode: this._mode,
                 leverage: this._leverage,
-                starts: starts,
                 takeProfitStep: this._takeProfitStep,
-                startsAt: this._startsAt,
-                endsAt: this._endsAt,
-                doubles: this._doubles,
-                currentAmountIn: this._currentAmountIn
             });
         }
         catch(error) {
