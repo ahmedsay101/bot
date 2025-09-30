@@ -103,6 +103,11 @@ class Trader extends DB {
         }
     }
 
+    shouldGetOut() {
+        const out = this._levels.some(price => Math.abs(this.ticker.currentPrice - price) >= this._aim);
+        return out;
+    }
+
     async sync() {
         try {
             await this.dbSync();
