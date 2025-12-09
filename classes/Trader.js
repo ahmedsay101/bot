@@ -1,408 +1,404 @@
-const cron = require('node-cron');
 const { v4: uuidv4 } = require('uuid');
-const { Transactions } = require("../schema/transaction.schema");
-const { Transaction } = require("./Transaction");
-const { Traders } = require("../schema/trader.schema");
-const { DB } = require("./DB");
 
-class Trader extends DB {
-    constructor(controller, {
-        symbol,
-        baseAmountIn = 0,
-        quoteAmountIn = 0,
-        takeProfit = 0,
-        stopLoss = 0,
-        takeProfitStep = 1,
-        stepSize = 0,
-        aim = 0,
-        leverage = 10,
-        accumulatedProfit = 0,
-        starts = "NOW",
-        mode = "TESTING",
-        levels = []
-    }) {
-        super(Traders);
-        this.id = uuidv4();
-        this._id = null;
-        this._symbol = symbol;
+class Trader {
+    constructor(controller, config) {
+        // Link to controller
         this.controller = controller;
-        this.controller.addTrader(this);
-        this.service = this.controller.service;
-        this.ticker = this.controller.tickers.find(one => one.symbol === this._symbol);
-        this.ticker.addTrader(this);
-        this._moneyIn = 0;
-        this._levels = levels;
-        this.transactions = [];
-        this._baseAmountIn = baseAmountIn;
-        this._quoteAmountIn = quoteAmountIn;
-        this._aim = aim;
-        this._profit = 0;
-        this._totalProfit = 0;
-        this._leverage = leverage;
-        this._fee = 0.001;
-        this._stepSize = stepSize;
-        this._takeProfit = Number(takeProfit);
-        this._stopLoss = Number(stopLoss);
-        this._currentTakeProfit = Number(takeProfit);
-        this._takeProfitStep = Number(takeProfitStep);
-        this._readyToTakeProfit = false;
-        this._profitTaken = 0;
-        this._maxLevels = 1000;
-        this._mode = mode;
-        this._status = "ACTIVE";
-        this._starts = starts;
-        this._currentRounds = 0;
-        this.busy = false;
-        this._peak = 0;
-        this._accumulatedProfit = accumulatedProfit;
-        this._createdAt = new Date();
-        this._updatedAt = new Date();
-        this.overwrite = ["levels", "profit"];
+        this.id = uuidv4();
+        
+        // Store configuration data
+        this.symbol = config.symbol;
+        this.startPercentage = config.percentage;  // Starting percentage when trader was created
+        this.price = config.price;
+        this.priceChange = config.priceChange;
+        this.volume = config.volume;
+        this.contractAge = config.contractAge;
+        
+        // Trading configuration
+        this.amount = 10;                    // Amount per order
+        this.percentageStep = 10;            // Percentage step for new orders
+        this.takeProfit = config.takeProfit || 20;  // Take profit percentage
+        this.testingMode = config.testingMode !== undefined ? config.testingMode : true;
+        
+        // Trading state
+        this.transactions = [];              // All transactions for this trader
+        this.executedLevels = new Set();     // Track which percentage levels have been executed
+        this.highestPercentage = this.startPercentage;  // Track highest percentage reached
+        this.averagePrice = 0;               // Average position price
+        this.totalPosition = 0;              // Total position size
+        this.takeProfitPrice = 0;            // Calculated take profit price
+        
+        // Trading properties
+        this.status = 'ACTIVE';
+        this.createdAt = new Date();
+        this.updatedAt = new Date();
+        
+        // Performance tracking
+        this.profit = 0;
+        this.totalTrades = 0;
+        this.successfulTrades = 0;
+        
+        // Initialize first level as executed (starting percentage)
+        this.executedLevels.add(Math.floor(this.startPercentage / this.percentageStep) * this.percentageStep);
+        
+        console.log(`Trader created for ${this.symbol} starting at ${this.startPercentage}% with ${this.amount} amount per level (${this.testingMode ? 'TESTING' : 'LIVE'} mode)`);
+        
+        // Create initial transaction at starting percentage
+        this.createTransaction(this.startPercentage);
     }
 
-    async generateLevels() {
+    // Get live price data from controller's WebSocket feed
+    getCurrentPrice() {
+        if (this.controller.tickerData.has(this.symbol)) {
+            return this.controller.tickerData.get(this.symbol);
+        }
+        return null;
+    }
+
+    // Get current market data from controller
+    getMarketData() {
+        return {
+            topGainers: this.controller.tickerData.size > 0 ? 
+                Array.from(this.controller.tickerData.values())
+                    .filter(ticker => parseFloat(ticker.priceChangePercent) > 0)
+                    .sort((a, b) => parseFloat(b.priceChangePercent) - parseFloat(a.priceChangePercent))
+                    .slice(0, 10) : [],
+            currentPrice: this.getCurrentPrice(),
+            totalActiveTraders: this.controller.getActiveTraders().length
+        };
+    }
+
+    // Access controller's API service
+    getApiService() {
+        return this.controller.service;
+    }
+
+    // Get other traders from controller
+    getOtherTraders() {
+        return this.controller.traders.filter(trader => trader.id !== this.id);
+    }
+
+    // Get controller settings
+    getControllerSettings() {
+        return {
+            maxTraders: this.controller.maxTraders,
+            minContractPrice: this.controller.minContractPrice,
+            minContractDays: this.controller.minContractDays
+        };
+    }
+
+    // Check if this trader should be active based on current market conditions
+    shouldBeActive() {
+        const currentData = this.getCurrentPrice();
+        if (!currentData) return false;
+        
+        const currentPercentage = parseFloat(currentData.priceChangePercent);
+        const settings = this.getControllerSettings();
+        
+        // Stay active if still gaining and above minimum price
+        return currentPercentage > 0 && 
+               parseFloat(currentData.price) >= settings.minContractPrice;
+    }
+
+    // Update trader status
+    updateStatus() {
+        if (!this.shouldBeActive() && this.status === 'ACTIVE') {
+            this.status = 'INACTIVE';
+            this.updatedAt = new Date();
+            console.log(`Trader ${this.symbol} set to inactive`);
+        } else if (this.shouldBeActive() && this.status === 'INACTIVE') {
+            this.status = 'ACTIVE';
+            this.updatedAt = new Date();
+            console.log(`Trader ${this.symbol} reactivated`);
+        }
+    }
+
+    // Create a new transaction
+    createTransaction(percentageLevel) {
         try {
-            if(this._levels.length < 1) {
-                this._levels = [...new Set([
-                    this.ticker.getQuoteQuantity(Number(this.ticker.currentPrice) + (Number(this._stepSize) * 5)),
-                    this.ticker.getQuoteQuantity(Number(this.ticker.currentPrice) + (Number(this._stepSize) * 4)),
-                    this.ticker.getQuoteQuantity(Number(this.ticker.currentPrice) + (Number(this._stepSize) * 3)),
-                    this.ticker.getQuoteQuantity(Number(this.ticker.currentPrice) + (Number(this._stepSize) * 2)),
-                    this.ticker.getQuoteQuantity(Number(this.ticker.currentPrice) + (Number(this._stepSize) * 1)),
-                    this.ticker.getQuoteQuantity(Number(this.ticker.currentPrice)), 
-                    this.ticker.getQuoteQuantity(Number(this.ticker.currentPrice) - (Number(this._stepSize) * 1)),
-                    this.ticker.getQuoteQuantity(Number(this.ticker.currentPrice) - (Number(this._stepSize) * 2)),
-                    this.ticker.getQuoteQuantity(Number(this.ticker.currentPrice) - (Number(this._stepSize) * 3)),
-                    this.ticker.getQuoteQuantity(Number(this.ticker.currentPrice) - (Number(this._stepSize) * 4)),
-                    this.ticker.getQuoteQuantity(Number(this.ticker.currentPrice) - (Number(this._stepSize) * 5)),
-                ].sort((a, b) => b - a))];
+            const { Transaction } = require('./Transaction');
+            const currentPrice = this.getCurrentPrice();
+            
+            if (!currentPrice) {
+                console.log(`Cannot create transaction for ${this.symbol}: No current price data`);
+                return null;
             }
-            else if(this._levels.length < this._maxLevels && this._levels.length > 1) {
-                const highestPrice = this._levels.sort((a, b) => b - a)[1];
-                const lowestPrice = this._levels.sort((a, b) => a - b)[1];
-                if(this.ticker.currentPrice >= highestPrice) this._levels = [...new Set([
-                    ...this._levels, 
-                    this.ticker.getQuoteQuantity(Number(highestPrice) + Number(this._stepSize)),
-                    this.ticker.getQuoteQuantity(Number(highestPrice) + (Number(this._stepSize) * 2)),
-                    this.ticker.getQuoteQuantity(Number(highestPrice) + (Number(this._stepSize) * 3)),
-                    this.ticker.getQuoteQuantity(Number(highestPrice) + (Number(this._stepSize) * 4)),
-                    this.ticker.getQuoteQuantity(Number(highestPrice) + (Number(this._stepSize) * 5)),
-                ].sort((a, b) => b - a))]; 
-                else if(this.ticker.currentPrice <= lowestPrice) this._levels = [...new Set([
-                    ...this._levels, 
-                    this.ticker.getQuoteQuantity(Number(lowestPrice) - Number(this._stepSize)),
-                    this.ticker.getQuoteQuantity(Number(lowestPrice) - (Number(this._stepSize) * 2)),
-                    this.ticker.getQuoteQuantity(Number(lowestPrice) - (Number(this._stepSize) * 3)),
-                    this.ticker.getQuoteQuantity(Number(lowestPrice) - (Number(this._stepSize) * 4)),
-                    this.ticker.getQuoteQuantity(Number(lowestPrice) - (Number(this._stepSize) * 5)),
-                ].sort((a, b) => b - a))];
-            }
-        }
-        catch(error) {
-            console.log(error);
-        }
-    }
 
-    shouldGetOut() {
-        const out = this._levels.some(price => Math.abs(this.ticker.currentPrice - price) >= this._aim);
-        return out;
-    }
+            const transaction = new Transaction(this, {
+                symbol: this.symbol,
+                amount: this.amount,
+                price: parseFloat(currentPrice.price),
+                percentageLevel: percentageLevel,
+                side: 'BUY',  // Always buying on upward momentum
+                testingMode: this.testingMode
+            });
 
-    async sync() {
-        try {
-            await this.dbSync();
-            if(this.transactions.length < 1) {
-                const transactions = await Transactions.aggregate([
-                    {$match: {traderId: this._id, status: {$ne: "CLOSED"}}},
-                    {$project: {_id: 1}}
-                ]).exec();
-
-                for(let obj of transactions) {
-                    const transaction = new Transaction(this);
-                    await transaction.fromId(obj._id);
-                }
-            }
-        } 
-        catch(error) {
-          console.log(error);
-        }
-    }
-
-    async updateTransactions() {
-        try {
-            if(this._status === "ACTIVE") {
-                for(let transaction of this.transactions) {
-                    await transaction.tick();
-                }
-            }
-        } 
-        catch(error) {
-          console.log(error);
-        }
-    }
-
-    addTransaction(transaction) {
-        if(this.transactions.filter(one => one.id === transaction.id).length < 1) {
-            this.transactions = [...this.transactions, transaction];
-        }
-    }
-
-    removeTransaction(transaction) {
-        try {
-            this.transactions = this.transactions.filter(obj => obj.id !== transaction.id);
-        }
-        catch(error) {
-            console.log(error);
-        }
-
-    }
-
-    async newTransaction({side, price = null, baseAmountIn = null, isFake = false}) {
-        try {
-            if(this._status !== "ACTIVE") return false;
-            const transaction = new Transaction(this);
-            transaction._isFake = isFake;
-            transaction._side = side;
-            transaction._price = price ? price : this.ticker.currentPrice;
-            transaction._baseAmountIn = baseAmountIn ? baseAmountIn : this._baseAmountIn;
-            await transaction.sync();
+            this.transactions.push(transaction);
+            this.totalTrades++;
+            
+            // Update position tracking
+            this.calculateAveragePrice();
+            this.calculateTakeProfitPrice();
+            
+            console.log(`${this.symbol}: Created transaction at ${percentageLevel}% (Price: $${currentPrice.price})`);
             return transaction;
-        }
-        catch(error) {
-            console.log(error);
+            
+        } catch (error) {
+            console.log(`Error creating transaction for ${this.symbol}:`, error.message);
+            return null;
         }
     }
 
-    async setLeverage() {
+    // Calculate average price of all open positions (local calculation)
+    calculateAveragePrice() {
+        const openTransactions = this.transactions.filter(t => t.status === 'FILLED' || t.status === 'OPEN');
+        
+        if (openTransactions.length === 0) {
+            this.averagePrice = 0;
+            this.totalPosition = 0;
+            return;
+        }
+
+        let totalValue = 0;
+        let totalAmount = 0;
+
+        openTransactions.forEach(transaction => {
+            totalValue += transaction.executedPrice * transaction.executedAmount;
+            totalAmount += transaction.executedAmount;
+        });
+
+        this.averagePrice = totalValue / totalAmount;
+        this.totalPosition = totalAmount;
+    }
+
+    // Get average price from Binance positionRisk endpoint
+    async getBinanceAveragePrice() {
         try {
-            if(!this._symbol || this._mode !== "LIVE") return;
-            await this.service.leverage(this._symbol, this._leverage);
-            console.log(`Leverage set for ${this._symbol}: ${this._leverage}`);
+            const apiService = this.getApiService();
+            const positionInfo = await apiService.getPositionInfo(this.symbol);
+            
+            const binanceAverage = parseFloat(positionInfo.entryPrice);
+            const binancePosition = parseFloat(positionInfo.positionAmt);
+            const unrealizedProfit = parseFloat(positionInfo.unRealizedProfit);
+            
+            return {
+                entryPrice: binanceAverage,
+                positionSize: Math.abs(binancePosition),
+                unrealizedProfit: unrealizedProfit,
+                markPrice: parseFloat(positionInfo.markPrice)
+            };
+        } catch (error) {
+            console.log(`Error getting Binance position for ${this.symbol}:`, error.message);
+            return null;
         }
-        catch(error) {
-            console.log(error);
+    }
+
+    // Verify local calculation with Binance data
+    async verifyAveragePrice() {
+        const binanceData = await this.getBinanceAveragePrice();
+        
+        if (!binanceData) return false;
+
+        const localAverage = this.averagePrice;
+        const binanceAverage = binanceData.entryPrice;
+        
+        const difference = Math.abs(localAverage - binanceAverage);
+        const percentageDiff = binanceAverage > 0 ? (difference / binanceAverage) * 100 : 0;
+
+        console.log(`${this.symbol} Price Verification:`);
+        console.log(`  Local Average: $${localAverage.toFixed(6)}`);
+        console.log(`  Binance Average: $${binanceAverage.toFixed(6)}`);
+        console.log(`  Difference: ${percentageDiff.toFixed(4)}%`);
+        console.log(`  Position Size - Local: ${this.totalPosition}, Binance: ${binanceData.positionSize}`);
+        
+        // If there's a significant difference (>0.1%), use Binance data
+        if (percentageDiff > 0.1 && binanceAverage > 0) {
+            console.log(`${this.symbol}: Using Binance average price due to significant difference`);
+            this.averagePrice = binanceAverage;
+            this.totalPosition = binanceData.positionSize;
+            return false; // Indicates correction was needed
+        }
+
+        return true; // Indicates local calculation is accurate
+    }
+
+    // Calculate take profit price based on average position
+    calculateTakeProfitPrice() {
+        if (this.averagePrice > 0) {
+            this.takeProfitPrice = this.averagePrice * (1 + (this.takeProfit / 100));
         }
     }
 
-    hold() {
-        this.busy = true;
+    // Check if current price hits take profit
+    async checkTakeProfit() {
+        const currentPrice = this.getCurrentPrice();
+        if (!currentPrice || this.takeProfitPrice === 0) return false;
+
+        const currentPriceValue = parseFloat(currentPrice.price);
+        
+        if (currentPriceValue >= this.takeProfitPrice) {
+            console.log(`${this.symbol}: Take profit hit! Current: $${currentPriceValue}, Target: $${this.takeProfitPrice.toFixed(6)}`);
+            await this.closeAllPositions();
+            this.destroy();
+            return true;
+        }
+        
+        return false;
     }
 
-    release() {
-        this.busy = false;
+    // Close all open positions
+    async closeAllPositions() {
+        console.log(`${this.symbol}: Closing all positions for take profit`);
+        
+        const openTransactions = this.transactions.filter(t => t.status === 'FILLED' || t.status === 'OPEN');
+        
+        // Close all positions concurrently
+        const closePromises = openTransactions.map(async (transaction) => {
+            const success = await transaction.close();
+            if (success) {
+                this.successfulTrades++;
+            }
+            return success;
+        });
+
+        await Promise.all(closePromises);
+
+        // Calculate final profit
+        this.calculateProfit();
+        console.log(`${this.symbol}: Final profit: ${this.profit.toFixed(2)}`);
     }
 
-    canTick() {
-        let can = this._id && this._symbol && this.ticker && this.ticker.currentPrice && this._status === "ACTIVE" && !this.busy;
-        return can;
+    // Calculate total profit from all transactions
+    calculateProfit() {
+        const currentPrice = this.getCurrentPrice();
+        if (!currentPrice) return;
+
+        const currentPriceValue = parseFloat(currentPrice.price);
+        let totalProfit = 0;
+
+        this.transactions.forEach(transaction => {
+            if (transaction.status === 'FILLED' || transaction.status === 'CLOSED') {
+                const transactionProfit = (currentPriceValue - transaction.price) * transaction.amount;
+                totalProfit += transactionProfit;
+            }
+        });
+
+        this.profit = totalProfit;
     }
 
+    // Update all transactions with real-time data
+    updateAllTransactions() {
+        this.transactions.forEach(transaction => {
+            transaction.updateRealTime();
+        });
+    }
+
+    // Main tick function for trader operations
     async tick() {
         try {
-            if(!this.canTick()) return;
-            this.hold();
-            if(this._mode === "LIVE" && this.transactions.length < 1) await this.setLeverage();
-            if(this._baseAmountIn === 0 || !this._baseAmountIn) this._baseAmountIn = this._quoteAmountIn / this.ticker.currentPrice;
-            if(this._quoteAmountIn === 0 || !this._quoteAmountIn) this._quoteAmountIn = this.ticker.getQuoteQuantity(this._baseAmountIn * this.ticker.currentPrice);
-            if(this._currentAmountIn === 0) this._currentAmountIn = this._baseAmountIn;
-            await this.controller.tick();
-            await this.generateLevels();
-            await this.sync();
-            await this.fill();
-            await this.updateTransactions();
-            await this.calculateProfit();
-            await this.calculateTotalProfit();
-            await this.calculateProfitTaken();
-            await this.calculateMoneyIn();
-            this.release();
-        }
-        catch(error) {
-            console.log(error);
-        }
-    }
+            this.updateStatus();
+            
+            if (this.status !== 'ACTIVE') return;
+            
+            // Update all transactions with real-time price data
+            this.updateAllTransactions();
+            
+            // Check take profit first
+            if (await this.checkTakeProfit()) return;
+            
+            const currentData = this.getCurrentPrice();
+            if (!currentData) return;
 
-    async fill() {
-        try {
-            for(let price of this._levels) {
-                const levelTransactions = await this.getLevel(price);
-                if(levelTransactions.length < 2) {
-                    const long = levelTransactions.find(transaction => transaction.side === "SHORT") || null;
-                    const short = levelTransactions.find(transaction => transaction.side === "LONG") || null;
-                    //if(this.ticker.currentPrice <= (Number(price) - Number(0)) && !long) {
-                    if(!long) {
-                        await this.newTransaction({side: "SHORT", price});
-                    }
-                    //else if(this.ticker.currentPrice >= (Number(price) + Number(0)) && !short) {
-                    else if(!short) {
-                        await this.newTransaction({side: "LONG", price});
-                    }    
-                }       
+            const currentPercentage = parseFloat(currentData.priceChangePercent);
+            
+            // Update highest percentage reached
+            if (currentPercentage > this.highestPercentage) {
+                this.highestPercentage = currentPercentage;
             }
-        }
-        catch(error) {
-            console.log(error);
+
+            // Check if we need to create new transactions
+            this.checkForNewTransactions(currentPercentage);
+            
+            // Calculate local average price
+            this.calculateAveragePrice();
+            
+            // Verify with Binance only in live mode (every 10 ticks to avoid too many API calls)
+            if (!this.testingMode && this.transactions.length > 0 && Math.random() < 0.1) {
+                await this.verifyAveragePrice();
+            }
+            
+            // Recalculate take profit based on (potentially corrected) average price
+            this.calculateTakeProfitPrice();
+            
+            // Update profit calculation
+            this.calculateProfit();
+            
+        } catch (error) {
+            console.log(`Error in trader ${this.symbol} tick:`, error.message);
         }
     }
 
-    async destroy() {
-        try {
-            this._status = "STOPPED";
-            await Promise.all(this.transactions.map(async (transaction) => {
-                await transaction.close();
-            }));
-            this.transactions = [];
-            this.levels = [];
-            this.controller.removeTrader(this);
-            this.ticker.removeTrader(this);
-            await this.sync();
-        }
-        catch(error) {
-            console.log(error);
-        }
-    }
-
-    async revive() {
-        try {
-            if(this._status === "STOPPED") return;
-            await this.destroy();
-            await this.controller.createTrader({
-                symbol: this._symbol,
-                takeProfit: this._takeProfit,
-                baseAmountIn: this._baseAmountIn,
-                quoteAmountIn: this._quoteAmountIn,
-                stepSize: this._stepSize,
-                stopLoss: this._stopLoss,
-                mode: this._mode,
-                leverage: this._leverage,
-                takeProfitStep: this._takeProfitStep,
-            });
-        }
-        catch(error) {
-            console.log(error);
+    // Check if we need to create new transactions based on current percentage
+    checkForNewTransactions(currentPercentage) {
+        // Calculate the next level we should execute
+        const currentLevel = Math.floor(currentPercentage / this.percentageStep) * this.percentageStep;
+        
+        // Only create transactions for levels we haven't executed yet
+        // and only if the current percentage is higher than our starting percentage
+        if (currentPercentage >= this.startPercentage && 
+            currentLevel > this.startPercentage && 
+            !this.executedLevels.has(currentLevel)) {
+            
+            // Mark this level as executed
+            this.executedLevels.add(currentLevel);
+            
+            // Create transaction for this level
+            this.createTransaction(currentLevel);
+            
+            console.log(`${this.symbol}: New level ${currentLevel}% executed. Total levels: ${this.executedLevels.size}`);
         }
     }
 
-    async calculateProfit() {
-        try {
-            const results = await Transactions.aggregate([
-                {$match: {traderId: this._id, isFake: false}},
-                {$group: {
-                  _id: null,
-                  totalProfit: { $sum: "$profit" },
-                }}
-            ]).exec();
-            this._profit = results && results.length > 0 ? Number(results[0].totalProfit) : 0;
-            if(this._profit > this._peak) this._peak = this._profit;
-        }
-        catch(error) {
-            console.log(error);
-        }
+    // Get detailed trading summary with real-time data
+    getTradingSummary() {
+        const currentData = this.getCurrentPrice();
+        const currentPrice = currentData ? parseFloat(currentData.price) : 0;
+        
+        // Calculate real-time total profit from all transactions
+        const realTimeTotalProfit = this.transactions.reduce((total, transaction) => {
+            return total + transaction.getCurrentProfit();
+        }, 0);
+
+        // Get real-time transaction details
+        const transactionDetails = this.transactions.map(transaction => 
+            transaction.getRealTimeStatus()
+        );
+
+        return {
+            symbol: this.symbol,
+            startPercentage: this.startPercentage,
+            highestPercentage: this.highestPercentage,
+            currentPrice: currentPrice,
+            currentTransactions: this.transactions.length,
+            executedLevels: Array.from(this.executedLevels).sort((a, b) => a - b),
+            averagePrice: this.averagePrice,
+            totalPosition: this.totalPosition,
+            takeProfitPrice: this.takeProfitPrice,
+            profit: this.profit,
+            realTimeTotalProfit: realTimeTotalProfit,
+            status: this.status,
+            testingMode: this.testingMode,
+            transactions: transactionDetails,
+            profitPercentage: this.averagePrice > 0 ? ((currentPrice - this.averagePrice) / this.averagePrice) * 100 : 0,
+            takeProfitDistance: this.takeProfitPrice > 0 && currentPrice > 0 ? 
+                ((this.takeProfitPrice - currentPrice) / currentPrice) * 100 : 0
+        };
     }
 
-    async calculateTotalProfit() {
-        try {
-            const results = await Transactions.aggregate([
-                {$match: {symbol: this._symbol, isFake: false}},
-                {$group: {
-                  _id: null,
-                  totalProfit: { $sum: "$profit" },
-                }}
-            ]).exec();
-            this._totalProfit = results && results.length > 0 ? Number(results[0].totalProfit) : 0;
-        }
-        catch(error) {
-            console.log(error);
-        }
-    }
-
-    async calculateProfitTaken() {
-        try {
-            const results = await Transactions.aggregate([
-                {$match: {traderId: this._id, isFake: false, status: "CLOSED"}},
-                {$group: {
-                  _id: null,
-                  totalProfit: { $sum: "$profit" },
-                }}
-            ]).exec();
-            this._profitTaken = results && results.length > 0 ? Number(results[0].totalProfit) : 0;
-        }
-        catch(error) {
-            console.log(error);
-        }
-    }
-
-    async calculateMoneyIn() {
-        try {
-            const results = await Transactions.aggregate([
-                {$match: {traderId: this._id, isFake: false, status: "FILLED"}},
-                {$group: {
-                    _id: null,
-                    moneyIn: { $sum: "$quoteAmountIn" },
-                }}
-            ]).exec();
-            const money = results && results.length > 0 ? Number(results[0].moneyIn) : 0;
-            this._moneyIn = Number(money);
-            if(this._moneyIn > this._maxMoneyIn) this._maxMoneyIn = this._moneyIn;
-        }
-        catch(error) {
-            console.log(error);
-        }
-    }
-
-    async getLevel(price) {
-        try {
-            const transactions = await Transactions.aggregate([
-                {$match: {traderId: this._id, price, status: {$ne: "CLOSED"}}},
-                {$project: {_id: 1, price: 1, side: 1}}
-            ]);
-            return transactions;
-        }  
-        catch(error) {
-            console.log(error);
-        }
-    } 
-
-    async getTransactions() {
-        try {
-            const transactions = await Transactions.aggregate([
-                {$match: {traderId: this._id}},
-                {$project: {_id: 1, price: 1, side: 1, status: 1}}
-            ]);
-            return transactions;
-        }  
-        catch(error) {
-            console.log(error);
-        }
-    } 
-
-    async getClosedCount() {
-        try {
-            const count = await Transactions.countDocuments({traderId: this._id, status: "CLOSED"});
-            return count;
-        }  
-        catch(error) {
-            console.log(error);
-        }
-    } 
-
-    async getLevelCount(price) {
-        try {
-            const count = await Transactions.countDocuments({traderId: this._id, price, status: {$ne: "CLOSED"}});
-            return count;
-        }  
-        catch(error) {
-            console.log(error);
-        }
-    }
-
-    async getTransactionsCount() {
-        try {
-            const count = await Transactions.countDocuments({traderId: this._id, status: {$ne: "CLOSED"}});
-            return count;
-        }  
-        catch(error) {
-            console.log(error);
-        }
+    // Cleanup when removing trader
+    destroy() {
+        this.status = 'DESTROYED';
+        console.log(`Trader ${this.symbol} destroyed`);
     }
 }
 

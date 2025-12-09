@@ -1,0 +1,17 @@
+{
+  "short_name": "Speed Trading",
+  "name": "Speed Trading Platform",
+  "description": "Professional Cryptocurrency Trading Platform",
+  "icons": [
+    {
+      "src": "favicon.ico",
+      "sizes": "64x64 32x32 24x24 16x16",
+      "type": "image/x-icon"
+    }
+  ],
+  "start_url": ".",
+  "display": "standalone",
+  "theme_color": "#1a1a2e",
+  "background_color": "#0f0f23",
+  "orientation": "portrait-primary"
+}

@@ -36,6 +36,8 @@ class API {
             allOrders: "/allOrders",
             getQuote: "/getQuote",
             klines: "/klines",
+            ticker24hr: "/ticker/24hr",
+            positionRisk: "/positionRisk",
         }
 
         this.createInstance();
@@ -315,7 +317,238 @@ class Service extends API {
         catch(error) {
             throw error;
         }
-    } 
+    }
+
+    async get24hrTicker(symbol = null) {
+        try {
+            const query = symbol ? [{symbol}] : [];
+            return this.get(this.urls.ticker24hr, query);
+        }
+        catch(error) {
+            throw error;
+        }
+    }
+
+    async getTopGainers(limit = 10) {
+        try {
+            // Use WebSocket data instead of REST API to avoid rate limits
+            if (this.controller && this.controller.tickerData && this.controller.tickerData.size > 0) {
+                const tickers = Array.from(this.controller.tickerData.values());
+                const gainers = tickers
+                    .filter(ticker => parseFloat(ticker.priceChangePercent) > 0)
+                    .sort((a, b) => parseFloat(b.priceChangePercent) - parseFloat(a.priceChangePercent))
+                    .slice(0, limit)
+                    .map(ticker => ({
+                        symbol: ticker.symbol,
+                        price: ticker.price,
+                        priceChange: ticker.priceChange,
+                        priceChangePercent: ticker.priceChangePercent,
+                        volume: ticker.volume,
+                        quoteVolume: ticker.quoteVolume
+                    }));
+                
+                console.log('Top 5 Gainers from WebSocket data:');
+                gainers.slice(0, 5).forEach((ticker, index) => {
+                    console.log(`${index + 1}. ${ticker.symbol}: ${ticker.priceChangePercent}%`);
+                });
+                
+                return gainers;
+            } else {
+                // Fallback to REST API if WebSocket data not available
+                const tickers = await this.get24hrTicker();
+                const gainers = tickers
+                    .filter(ticker => parseFloat(ticker.priceChangePercent) > 0)
+                    .sort((a, b) => parseFloat(b.priceChangePercent) - parseFloat(a.priceChangePercent))
+                    .slice(0, limit)
+                    .map(ticker => ({
+                        symbol: ticker.symbol,
+                        price: ticker.lastPrice,
+                        priceChange: ticker.priceChange,
+                        priceChangePercent: ticker.priceChangePercent,
+                        volume: ticker.volume,
+                        quoteVolume: ticker.quoteVolume
+                    }));
+                
+                return gainers;
+            }
+        }
+        catch(error) {
+            throw error;
+        }
+    }
+
+    async getTopLosers(limit = 10) {
+        try {
+            // Use WebSocket data instead of REST API to avoid rate limits
+            if (this.controller && this.controller.tickerData && this.controller.tickerData.size > 0) {
+                const tickers = Array.from(this.controller.tickerData.values());
+                const losers = tickers
+                    .filter(ticker => parseFloat(ticker.priceChangePercent) < 0)
+                    .sort((a, b) => parseFloat(a.priceChangePercent) - parseFloat(b.priceChangePercent))
+                    .slice(0, limit)
+                    .map(ticker => ({
+                        symbol: ticker.symbol,
+                        price: ticker.price,
+                        priceChange: ticker.priceChange,
+                        priceChangePercent: ticker.priceChangePercent,
+                        volume: ticker.volume,
+                        quoteVolume: ticker.quoteVolume
+                    }));
+                
+                return losers;
+            } else {
+                // Fallback to REST API if WebSocket data not available
+                const tickers = await this.get24hrTicker();
+                const losers = tickers
+                    .filter(ticker => parseFloat(ticker.priceChangePercent) < 0)
+                    .sort((a, b) => parseFloat(a.priceChangePercent) - parseFloat(b.priceChangePercent))
+                    .slice(0, limit)
+                    .map(ticker => ({
+                        symbol: ticker.symbol,
+                        price: ticker.lastPrice,
+                        priceChange: ticker.priceChange,
+                        priceChangePercent: ticker.priceChangePercent,
+                        volume: ticker.volume,
+                        quoteVolume: ticker.quoteVolume
+                    }));
+                
+                return losers;
+            }
+        }
+        catch(error) {
+            throw error;
+        }
+    }
+
+    async getContractAge(symbol, minDays = 30) {
+        try {
+            // Get klines data to determine contract age
+            // Use daily candles and get maximum available data
+            const klines = await this.getKlines(symbol, 1000, "1d");
+            
+            if (!klines || klines.length === 0) {
+                return 0;
+            }
+
+            // Calculate the age in days
+            const oldestTimestamp = parseInt(klines[0][0]); // First candle open time
+            const newestTimestamp = parseInt(klines[klines.length - 1][0]); // Last candle open time
+            const ageInMs = newestTimestamp - oldestTimestamp;
+            const ageInDays = Math.floor(ageInMs / (1000 * 60 * 60 * 24));
+
+            return ageInDays;
+        }
+        catch(error) {
+            console.log(`Error getting contract age for ${symbol}:`, error.message);
+            return 0; // Return 0 if we can't determine age (will be filtered out)
+        }
+    }
+
+    async getFilteredGainersAdvanced(minPercentage = 50, minPrice = 0.01, minAge = 30, limit = 50) {
+        try {
+            console.log(`Filtering gainers: min ${minPercentage}%, min price $${minPrice}, min age ${minAge} days`);
+            
+            // Get top gainers first
+            const allGainers = await this.getTopGainers(limit);
+            
+            // Filter by percentage
+            const highPercentGainers = allGainers.filter(gainer => 
+                parseFloat(gainer.priceChangePercent) >= minPercentage
+            );
+
+            // Filter by price
+            const priceFilteredGainers = highPercentGainers.filter(gainer => 
+                parseFloat(gainer.price) >= minPrice
+            );
+
+            // Check contract age for remaining candidates
+            const finalGainers = [];
+            for (const gainer of priceFilteredGainers) {
+                const contractAge = await this.getContractAge(gainer.symbol, minAge);
+                if (contractAge >= minAge) {
+                    finalGainers.push({
+                        ...gainer,
+                        contractAge
+                    });
+                }
+                
+                // Add small delay to avoid rate limiting
+                await new Promise(resolve => setTimeout(resolve, 100));
+            }
+
+            // Sort by percentage change (highest to lowest)
+            finalGainers.sort((a, b) => parseFloat(b.priceChangePercent) - parseFloat(a.priceChangePercent));
+
+            console.log(`Found ${finalGainers.length} gainers meeting all criteria`);
+            return finalGainers;
+        }
+        catch(error) {
+            console.log('Error in advanced gainer filtering:', error.message);
+            throw error;
+        }
+    }
+
+    async getPositionRisk(symbol = null) {
+        try {
+            const query = symbol ? [{symbol}] : [];
+            return this.authenticatedGet(this.urls.positionRisk, query);
+        }
+        catch(error) {
+            console.log('Error getting position risk:', error.message);
+            throw error;
+        }
+    }
+
+    async getPositionInfo(symbol) {
+        try {
+            const positions = await this.getPositionRisk(symbol);
+            
+            if (!positions || positions.length === 0) {
+                return {
+                    symbol: symbol,
+                    positionAmt: '0',
+                    entryPrice: '0',
+                    markPrice: '0',
+                    unRealizedProfit: '0',
+                    percentage: '0'
+                };
+            }
+
+            // Find the position for the specified symbol
+            const position = positions.find(pos => pos.symbol === symbol);
+            
+            if (!position) {
+                return {
+                    symbol: symbol,
+                    positionAmt: '0',
+                    entryPrice: '0',
+                    markPrice: '0',
+                    unRealizedProfit: '0',
+                    percentage: '0'
+                };
+            }
+
+            return {
+                symbol: position.symbol,
+                positionAmt: position.positionAmt,
+                entryPrice: position.entryPrice,
+                markPrice: position.markPrice,
+                unRealizedProfit: position.unRealizedProfit,
+                percentage: position.percentage
+            };
+        }
+        catch(error) {
+            console.log(`Error getting position info for ${symbol}:`, error.message);
+            return {
+                symbol: symbol,
+                positionAmt: '0',
+                entryPrice: '0',
+                markPrice: '0',
+                unRealizedProfit: '0',
+                percentage: '0'
+            };
+        }
+    }
 }
 
 module.exports = { API, Service };

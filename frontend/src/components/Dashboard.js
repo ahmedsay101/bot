@@ -1,0 +1,343 @@
+import React, { useState, useEffect } from 'react';
+import { TrendingUp, TrendingDown, BarChart3, Users, DollarSign, Activity, RefreshCw } from 'lucide-react';
+import api from '../services/api';
+import TraderModal from './TraderModal';
+
+const Dashboard = () => {
+  const [dashboardData, setDashboardData] = useState({
+    topGainers: [],
+    topLosers: [],
+    currentTraders: []
+  });
+  const [selectedTrader, setSelectedTrader] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [lastUpdate, setLastUpdate] = useState(new Date());
+
+  const fetchDashboardData = async () => {
+    try {
+      const data = await api.getDashboard();
+      setDashboardData(data);
+      setLastUpdate(new Date());
+    } catch (error) {
+      console.error('Error fetching dashboard data:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchDashboardData();
+    
+    // Update every 5 seconds to avoid rate limits while keeping data fresh
+    const interval = setInterval(fetchDashboardData, 5000);
+    
+    return () => clearInterval(interval);
+  }, []);
+
+  const formatCurrency = (value) => {
+    const numValue = Number(value) || 0;
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: 'USD',
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 6
+    }).format(numValue);
+  };
+
+  const formatPercentage = (value) => {
+    const numValue = Number(value) || 0;
+    const color = numValue >= 0 ? 'text-trading-green' : 'text-trading-red';
+    const sign = numValue >= 0 ? '+' : '';
+    return <span className={color}>{sign}{numValue.toFixed(2)}%</span>;
+  };
+
+  const MarketCard = ({ title, items, icon: Icon, trendColor }) => (
+    <div className="bg-trading-card rounded-lg border border-trading-border p-6 hover:border-trading-blue/50 transition-colors">
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center space-x-2">
+          <Icon className={`w-6 h-6 ${trendColor}`} />
+          <h3 className="text-lg font-semibold text-trading-text">{title}</h3>
+        </div>
+        <span className="text-sm text-trading-text-muted">{items.length} symbols</span>
+      </div>
+      <div className="space-y-3">
+        {items.slice(0, 5).map((item, index) => (
+          <div key={item.symbol || index} className="flex justify-between items-center p-3 bg-trading-dark rounded-lg">
+            <div>
+              <p className="font-mono font-bold text-trading-text">{item.symbol}</p>
+              <p className="text-sm text-trading-text-muted">{formatCurrency(item.price || item.lastPrice)}</p>
+            </div>
+            <div className="text-right">
+              <p className="font-mono">{formatPercentage(item.priceChangePercent)}</p>
+              <p className="text-sm text-trading-text-muted">
+                {formatCurrency(item.priceChange || (item.price * item.priceChangePercent / 100))}
+              </p>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+
+  const TraderCard = ({ trader }) => (
+    <div 
+      className="bg-trading-card rounded-lg border border-trading-border p-6 hover:border-trading-blue/50 transition-all cursor-pointer hover:shadow-lg"
+      onClick={() => setSelectedTrader(trader)}
+    >
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center space-x-3">
+          <div className="bg-trading-blue p-2 rounded-lg">
+            <BarChart3 className="w-5 h-5 text-white" />
+          </div>
+          <div>
+            <h3 className="font-mono font-bold text-trading-text">{trader.symbol}</h3>
+            <p className="text-sm text-trading-text-muted">
+              {trader.testingMode ? 'Testing Mode' : 'Live Trading'}
+            </p>
+          </div>
+        </div>
+        <div className="text-right">
+          <p className="text-sm text-trading-text-muted">Current Price</p>
+          <p className="font-mono text-trading-text">{formatCurrency(trader.currentPrice)}</p>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-4 mb-4">
+        <div>
+          <p className="text-sm text-trading-text-muted">Total Profit</p>
+          <p className="font-mono font-bold">{formatPercentage(trader.profitPercentage)}</p>
+          <p className="text-xs text-trading-text-muted">{formatCurrency(trader.realTimeTotalProfit)}</p>
+        </div>
+        <div>
+          <p className="text-sm text-trading-text-muted">Position Size</p>
+          <p className="font-mono font-bold text-trading-text">{(Number(trader.totalPosition) || 0).toFixed(4)}</p>
+          <p className="text-xs text-trading-text-muted">Avg: {formatCurrency(trader.averagePrice)}</p>
+        </div>
+      </div>
+
+      <div className="mb-4">
+        <div className="flex justify-between text-sm text-trading-text-muted mb-1">
+          <span>Take Profit Progress</span>
+          <span>{formatPercentage(trader.takeProfitDistance)} to target</span>
+        </div>
+        <div className="w-full bg-trading-dark rounded-full h-2">
+          <div 
+            className="bg-gradient-to-r from-trading-blue to-trading-green h-2 rounded-full transition-all"
+            style={{ width: `${Math.max(0, Math.min(100, (trader.profitPercentage / trader.takeProfitDistance) * 100))}%` }}
+          ></div>
+        </div>
+      </div>
+
+      <div className="flex justify-between items-center">
+        <div>
+          <p className="text-sm text-trading-text-muted">Transactions</p>
+          <p className="font-bold text-trading-text">{(trader.transactions || []).length}</p>
+        </div>
+        <div className="text-right">
+          <p className="text-sm text-trading-text-muted">Performance</p>
+          <p className="text-sm font-mono text-trading-text">
+            {trader.startPercentage || 0}% → {(Number(trader.highestPercentage) || 0).toFixed(1)}%
+          </p>
+        </div>
+      </div>
+
+      <div className="mt-4 pt-3 border-t border-trading-border">
+        <p className="text-sm text-trading-text-muted mb-2">Executed Levels</p>
+        <div className="flex flex-wrap gap-1">
+          {trader.executedLevels.slice(0, 6).map((level, index) => (
+            <span
+              key={index}
+              className="px-2 py-1 bg-trading-blue/20 text-trading-blue rounded text-xs font-mono"
+            >
+              {level}%
+            </span>
+          ))}
+          {trader.executedLevels.length > 6 && (
+            <span className="px-2 py-1 bg-trading-text-muted/20 text-trading-text-muted rounded text-xs">
+              +{trader.executedLevels.length - 6} more
+            </span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+
+  const StatsCard = ({ title, value, subtitle, icon: Icon, color = "text-trading-text" }) => (
+    <div className="bg-trading-card rounded-lg border border-trading-border p-4">
+      <div className="flex items-center space-x-3">
+        <div className="bg-trading-blue p-2 rounded-lg">
+          <Icon className="w-5 h-5 text-white" />
+        </div>
+        <div>
+          <p className="text-sm text-trading-text-muted">{title}</p>
+          <p className={`text-xl font-bold ${color}`}>{value}</p>
+          {subtitle && <p className="text-sm text-trading-text-muted">{subtitle}</p>}
+        </div>
+      </div>
+    </div>
+  );
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-trading-bg flex items-center justify-center">
+        <div className="flex items-center space-x-3">
+          <RefreshCw className="w-8 h-8 text-trading-blue animate-spin" />
+          <span className="text-trading-text text-lg">Loading trading data...</span>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-trading-bg">
+      {/* Header */}
+      <div className="bg-trading-card border-b border-trading-border p-6">
+        <div className="max-w-7xl mx-auto">
+          <div className="flex justify-between items-center">
+            <div>
+              <h1 className="text-3xl font-bold text-trading-text">Trading Dashboard</h1>
+              <p className="text-trading-text-muted">Real-time cryptocurrency trading platform</p>
+            </div>
+            <div className="flex items-center space-x-4">
+              <div className="text-right">
+                <p className="text-sm text-trading-text-muted">Last Update</p>
+                <p className="text-sm font-mono text-trading-text">{lastUpdate.toLocaleTimeString()}</p>
+              </div>
+              <button
+                onClick={fetchDashboardData}
+                className="bg-trading-blue hover:bg-trading-blue/80 text-white px-4 py-2 rounded-lg flex items-center space-x-2 transition-colors"
+              >
+                <RefreshCw className="w-4 h-4" />
+                <span>Refresh</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="max-w-7xl mx-auto p-6">
+        {/* Stats Overview */}
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+          <StatsCard
+            title="Active Traders"
+            value={dashboardData.currentTraders?.length || 0}
+            subtitle="Running strategies"
+            icon={Users}
+          />
+          <StatsCard
+            title="Top Gainers"
+            value={dashboardData.topGainers?.length || 0}
+            subtitle="Market opportunities"
+            icon={TrendingUp}
+            color="text-trading-green"
+          />
+          <StatsCard
+            title="Top Losers"
+            value={dashboardData.topLosers?.length || 0}
+            subtitle="Market watch"
+            icon={TrendingDown}
+            color="text-trading-red"
+          />
+          <StatsCard
+            title="Total Profit"
+            value={formatCurrency(
+              (dashboardData.currentTraders || []).reduce((sum, trader) => sum + (trader.realTimeTotalProfit || 0), 0)
+            )}
+            subtitle="All active traders"
+            icon={DollarSign}
+            color="text-trading-green"
+          />
+        </div>
+
+        {/* Main Content Grid */}
+        <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+          {/* Market Data */}
+          <MarketCard
+            title="Top Gainers"
+            items={dashboardData.topGainers}
+            icon={TrendingUp}
+            trendColor="text-trading-green"
+          />
+          
+          <MarketCard
+            title="Top Losers"
+            items={dashboardData.topLosers}
+            icon={TrendingDown}
+            trendColor="text-trading-red"
+          />
+
+          {/* Quick Stats */}
+          <div className="bg-trading-card rounded-lg border border-trading-border p-6">
+            <div className="flex items-center space-x-2 mb-4">
+              <Activity className="w-6 h-6 text-trading-blue" />
+              <h3 className="text-lg font-semibold text-trading-text">Platform Stats</h3>
+            </div>
+            <div className="space-y-4">
+              <div className="flex justify-between">
+                <span className="text-trading-text-muted">Total Transactions</span>
+                <span className="font-mono font-bold text-trading-text">
+                  {(dashboardData.currentTraders || []).reduce((sum, trader) => sum + ((trader.transactions || []).length), 0)}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-trading-text-muted">Testing Mode Traders</span>
+                <span className="font-mono font-bold text-trading-text">
+                  {(dashboardData.currentTraders || []).filter(trader => trader.testingMode).length}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-trading-text-muted">Live Traders</span>
+                <span className="font-mono font-bold text-trading-text">
+                  {(dashboardData.currentTraders || []).filter(trader => !trader.testingMode).length}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-trading-text-muted">Avg Performance</span>
+                <span className="font-mono font-bold">
+                  {formatPercentage(
+                    (dashboardData.currentTraders || []).length > 0 
+                      ? (dashboardData.currentTraders || []).reduce((sum, trader) => sum + (trader.profitPercentage || 0), 0) / (dashboardData.currentTraders || []).length
+                      : 0
+                  )}
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Active Traders */}
+        {(dashboardData.currentTraders || []).length > 0 && (
+          <div className="mt-8">
+            <div className="mb-6">
+              <h2 className="text-2xl font-bold text-trading-text mb-2">Active Traders</h2>
+              <p className="text-trading-text-muted">Click on any trader card to view detailed information</p>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+              {(dashboardData.currentTraders || []).map((trader, index) => (
+                <TraderCard key={trader.symbol || index} trader={trader} />
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Empty State */}
+        {(dashboardData.currentTraders || []).length === 0 && (
+          <div className="mt-8 bg-trading-card rounded-lg border border-trading-border p-12 text-center">
+            <BarChart3 className="w-16 h-16 text-trading-text-muted mx-auto mb-4" />
+            <h3 className="text-xl font-semibold text-trading-text mb-2">No Active Traders</h3>
+            <p className="text-trading-text-muted">Start trading by selecting symbols from the market data above</p>
+          </div>
+        )}
+      </div>
+
+      {/* Trader Modal */}
+      <TraderModal
+        trader={selectedTrader}
+        isOpen={!!selectedTrader}
+        onClose={() => setSelectedTrader(null)}
+      />
+    </div>
+  );
+};
+
+export default Dashboard;

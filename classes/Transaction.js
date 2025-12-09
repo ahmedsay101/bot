@@ -1,349 +1,207 @@
 const { v4: uuidv4 } = require('uuid');
-const { Transactions } = require("../schema/transaction.schema");
-const { DB } = require('./DB');
 
-class Transaction extends DB {
-  constructor(trader) {
-    super(Transactions);
-    this.id = uuidv4();
-    this._id = null;
+class Transaction {
+  constructor(trader, config) {
+    // Link to trader
     this.trader = trader;
-    this.service = this.trader.service;
-    this._traderId = this.trader._id || null;   
-    this.trader.addTransaction(this);
-    this.ticker = this.trader.ticker;
-    this._symbol = this.trader._symbol;
-    this._mode = this.trader._mode;
-    this._baseAmountIn = this.trader._baseAmountIn;
-    this._quoteAmountIn = this.trader._quoteAmountIn;
-    this._currentTakeProfit = Number(this.trader._takeProfit);
-    this._takeProfitStep = Number(this.trader.takeProfitStep);
-    this._readyToTakeProfit = false;
-    this._baseAmountOut = 0;
-    this._quoteAmountOut = 0;
-    this._side = null;
-    this._orderId = null;
-    this._takeProfitOrderId = null;
-    this._stopLossOrderId = null;
-    this._price = null;
-    this._takeProfit = Number(this.trader._takeProfit);
-    this._stopLoss = Number(this.trader._stopLoss);
-    this._closingPrice = 0;
-    this._profit = 0;
-    this._profitable = false;
-    this._isFake = false;
-    this._status = null;
-    this._type = "STOP_MARKET";
-    this._position = null;
-    this.busy = false;
-    this._createdAt = new Date();
-    this._updatedAt = new Date();
-    this.overwrite = ["orderId"];
+    this.id = uuidv4();
+    
+    // Transaction data
+    this.symbol = config.symbol;
+    this.amount = config.amount;
+    this.price = config.price;
+    this.percentageLevel = config.percentageLevel;
+    this.side = config.side;
+    this.testingMode = config.testingMode !== undefined ? config.testingMode : true;
+    
+    // Transaction state
+    this.status = 'CREATED';  // CREATED -> FILLED -> CLOSED
+    this.orderId = null;
+    this.executedPrice = 0;
+    this.executedAmount = 0;
+    this.profit = 0;
+    
+    // Timestamps
+    this.createdAt = new Date();
+    this.filledAt = null;
+    this.closedAt = null;
+    
+    console.log(`Transaction created: ${this.symbol} ${this.side} ${this.amount} at ${this.percentageLevel}% (${this.testingMode ? 'TESTING' : 'LIVE'} mode)`);
+    
+    // Automatically execute the transaction (simulate immediate fill for momentum trading)
+    this.executeTransaction();
   }
 
-  hold() {
-    this.busy = true;
-  }
-
-  release() {
-    this.busy = false;
-  }
-
-  async fill() {
+  // Execute the transaction (simulate or real Binance order execution)
+  async executeTransaction() {
     try {
-      if(this.trader._currentRounds === 1) this._baseAmountIn = this.trader._baseAmountIn * this.trader._doubles;
-      if(this.trader._currentRounds === 1 && this.trader._startsAt === 1 && this.trader._endsAt === 1) this._isFake = true;
-      if(this._baseAmountIn > this.trader._peakBaseAmountIn && !this._isFake) this.trader._peakBaseAmountIn = this._baseAmountIn;
-      if(this._mode === "LIVE" && !this._isFake) {
-        await this.order();
-      }
-      else {
-        this._status = "FILLED";
-      }
-      this.trader._currentRounds = this.trader._currentRounds + 1;
-      if(this.trader._currentRounds > this.trader._peakRounds) this.trader._peakRounds = this.trader._currentRounds;
-    } 
-    catch(error) {
-      console.log(error);
-    }
-  }
-
-  async order() {
-    try {
-      if(!this._side || this._mode !== "LIVE" || this.busy || this._orderId !== null || this._isFake) return false;
-      if((this._type === "LIMIT" || this._type === "STOP_MARKET") && (!this._price)) return false;
-      this.hold();
-      const orderObj = {
-        symbol: this._symbol,
-        side: this._side === "LONG" ? "BUY" : "SELL",
-        //positionSide: this._side,
-        type: this._type,
-        quantity: this._baseAmountIn,
-      }
-
-      if(this._type === "LIMIT") {
-        orderObj["price"] = this.ticker.getQuoteQuantity(this._price);
-        orderObj["timeInForce"] = "GTC";
-        orderObj["postOnly"] = true;
-      }
-
-      if(this._type === "STOP_MARKET") {
-        orderObj["stopPrice"] = this.ticker.getQuoteQuantity(this._price);
-        orderObj["reduceOnly"] = false;
-      }
-
-      const order = await this.service.order(orderObj);
-      console.log("ORDER", order);
-      if(order && order?.orderId) this._orderId = order.orderId;
-
-      if(this._type === "MARKET") {
-        await this.tp();
-        await this.sl();
-      }
-      
-      this.release();
-    } 
-    catch(error) {
-      console.log(error);
-    }
-  }
-
-  async tp() {
-    try {
-      if(this._mode !== "LIVE" || !this._takeProfit || this._takeProfitOrderId !== null || this._isFake) return false;
-      this.hold();
-      const orderObj = {
-        symbol: this._symbol,
-        side: this._side === "LONG" ? "SELL" : "BUY",
-        //positionSide: this._side,
-        type: 'TAKE_PROFIT_MARKET',
-        quantity: this._baseAmountIn,
-        stopPrice: this._takeProfit,
-        reduceOnly: true,
-      }
-      const order = await this.service.order(orderObj);
-      console.log("TP", order);
-      if(order && order?.orderId) this._takeProfitOrderId = order.orderId;
-      this.release();
-    } 
-    catch(error) {
-      console.log(error);
-    }
-  }
-
-  async sl() {
-    try {
-      if(this._mode !== "LIVE" || !this._stopLoss || this._stopLossOrderId !== null || this._isFake) return false;
-      this.hold();
-      const orderObj = {
-        symbol: this._symbol,
-        side: this._side === "LONG" ? "SELL" : "BUY",
-        //positionSide: this._side,
-        type: 'STOP_MARKET',
-        quantity: this._baseAmountIn,
-        stopPrice: this._stopLoss,
-        reduceOnly: true,
-      }
-      const order = await this.service.order(orderObj);
-      console.log("SL", order);
-      if(order && order?.orderId) this._stopLossOrderId = order.orderId;
-      this.release();
-    } 
-    catch(error) {
-      console.log(error);
-    }
-  }
-  
-  async update() {
-    try {
-      if(this._orderId !== null && this._mode === "LIVE" && this._status !== "CLOSED" && !this.busy && !this._isFake) {
-        const orderResponse = await this.service.getOrderByOrderId(this._symbol, this._orderId);
-        console.log("ORDERRRRRRR:", orderResponse);
-        if(orderResponse) {
-          if(orderResponse?.status === "NEW" || orderResponse?.status === "FILLED") this._status = orderResponse?.status;
-          if(orderResponse?.status === "CANCELED") {
-            this._orderId = null;
-            return;
-          }
-          this._baseAmountIn = Number(orderResponse.executedQty) ? Number(orderResponse.executedQty) : Number(orderResponse.origQty);
-          this._quoteAmountIn = Number(orderResponse.cumQuote) ? Number(orderResponse.cumQuote) : Number(this._quoteAmountIn);
-          this._price = Number(orderResponse.price) ? Number(orderResponse.price) : Number(this._price);
+      if (this.testingMode) {
+        // Testing mode: simulate immediate execution locally
+        this.status = 'FILLED';
+        this.executedPrice = this.price;
+        this.executedAmount = this.amount;
+        this.filledAt = new Date();
+        
+        // Generate a mock order ID for testing
+        this.orderId = `TEST_${this.symbol}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        
+        console.log(`${this.symbol}: [TESTING] Transaction SIMULATED - ${this.side} ${this.executedAmount} at $${this.executedPrice}`);
+      } else {
+        // Live mode: execute real Binance order
+        const apiService = this.trader.getApiService();
+        const order = await apiService.order({
+          symbol: this.symbol,
+          side: this.side,
+          type: 'MARKET',
+          quantity: this.amount
+        });
+        
+        if (order && order.orderId) {
+          this.status = 'FILLED';
+          this.executedPrice = parseFloat(order.fills?.[0]?.price || this.price);
+          this.executedAmount = parseFloat(order.executedQty || this.amount);
+          this.orderId = order.orderId;
+          this.filledAt = new Date();
+          
+          console.log(`${this.symbol}: [LIVE] Transaction FILLED - ${this.side} ${this.executedAmount} at $${this.executedPrice}`);
+        } else {
+          throw new Error('Order execution failed');
         }
       }
-    } 
-    catch(error) {
-      console.log(error);
-    }
-  } 
-
-  async updateTpSl() {
-    try {
-      if(this._mode === "LIVE" && this._status !== "CLOSED" && !this.busy && !this._isFake) {
-        if(this._takeProfitOrderId !== null) {
-          const orderResponse = await this.service.getOrderByOrderId(this._symbol, this._takeProfitOrderId);
-          console.log("TP UPDATE", orderResponse);
-          if(orderResponse) {
-            if(orderResponse?.status === "FILLED") await this.destroy();
-          }
-        }
-        else {
-          await this.tp();
-        }
-        if(this._stopLossOrderId !== null) {
-          const orderResponse = await this.service.getOrderByOrderId(this._symbol, this._stopLossOrderId);
-          console.log("SL UPDATE", orderResponse);
-          if(orderResponse) {
-            if(orderResponse?.status === "FILLED") await this.destroy();
-          }
-        }
-        else {
-          await this.sl();
-        }
-      }
-    } 
-    catch(error) {
-      console.log(error);
-    }
-  } 
-
-  async sync() {
-    try {
-      if(this._mode === "LIVE" && !this.busy) {
-        if(this._status === "NEW") await this.update();
-        if(this._status === "FILLED") await this.updateTpSl();
-      }
-      await this.dbSync();
-    } 
-    catch(error) {
-      console.log(error);
+    } catch (error) {
+      console.log(`Error executing transaction for ${this.symbol}:`, error.message);
+      this.status = 'FAILED';
     }
   }
 
-  async cancel() {
-    try {
-      if(this._mode === "LIVE" && !this._isFake) {
-        this.hold();
-        if(this._orderId && this._status === "NEW") await this.service.cancelOrder({symbol: this._symbol, orderId: this._orderId});
-        this.release();
-      }
-    }  
-    catch(error) {
-      console.log(error);
-      this.release();
-    }
-  } 
-  async cancelTp() {
-    try {
-      if(this._mode === "LIVE" && !this._isFake) {
-        this.hold();
-        if(this._takeProfitOrderId) await this.service.cancelOrder({symbol: this._symbol, orderId: this._takeProfitOrderId});
-        this.release();
-      }
-    }  
-    catch(error) {
-      console.log(error);
-      this.release();
-    }
-  } 
-  async cancelSl() {
-    try {
-      if(this._mode === "LIVE" && !this._isFake) {
-        this.hold();
-        if(this._stopLossOrderId) await this.service.cancelOrder({symbol: this._symbol, orderId: this._stopLossOrderId});
-        this.release();
-      }
-    }  
-    catch(error) {
-      console.log(error);
-      this.release();
-    }
-  } 
-
+  // Close the transaction (sell position)
   async close() {
     try {
-      if(this._mode === "LIVE" && this._status !== "CLOSED" && !this.busy && !this._isFake) {
-        this.hold();
-        if(this._status === "FILLED" && this._type === "MARKET") {
-          const closeOrder = await this.service.order({
-            symbol: this._symbol,
-            side: this._side === "LONG" ? "SELL" : "BUY",
-            //positionSide: this._side,
-            type: "MARKET",
-            quantity: this._baseAmountIn,
-            recvWindow: '10000'
-          });
-        }
+      if (this.status !== 'FILLED') {
+        console.log(`Cannot close transaction ${this.id}: Status is ${this.status}`);
+        return false;
       }
-      this.release();
-      await this.destroy();
-    }  
-    catch(error) {
-      console.log(error);
-      this.release();
-    }
-  } 
 
-  async destroy() {
-    try {
-      await this.cancel();
-      await this.cancelTp();
-      await this.cancelSl();
-      this._status = "CLOSED";
-      this.trader.removeTransaction(this);
-      await this.sync();
-    }  
-    catch(error) {
-      console.log(error);
-    }
-  } 
-
-  async tick() {
-    try {
-      if(!this._price && this._type === "MARKET") this._price = this.ticker.currentPrice;
-      if(!this._price || !this._baseAmountIn || !this.ticker.currentPrice || this._status === "CLOSED") return;
-      if(this._position === null) this._position = this.ticker.currentPrice > this._price ? "LOWER" : "HIGHER";
-      this._takeProfit = this.trader._takeProfit > 0 ? this._side === "LONG" ? this._price + this.trader._takeProfit : this._price  - this.trader._takeProfit : 0;
-      this._stopLoss = this.trader._stopLoss > 0 ? this._side === "LONG" ? this._price - this.trader._stopLoss : this._price + this.trader._stopLoss : 0;
-      if(
-        this._status === "NEW"
-        &&
-        ((((this._position === "HIGHER" && this.ticker.currentPrice >= this._price)
-        ||
-        (this._position === "LOWER" && this.ticker.currentPrice <= this._price)))
-        ||
-        ((this._type === "LIMIT" || this._type === "STOP_MARKET") && this._mode === "LIVE" && !this._isFake)
-        )
-      ) {
-        await this.fill();
+      // Get current price for profit calculation
+      const currentData = this.trader.getCurrentPrice();
+      if (!currentData) {
+        console.log(`Cannot close transaction ${this.id}: No current price data`);
+        return false;
       }
+
+      const currentPrice = parseFloat(currentData.price);
       
-      if(
-        this._mode === "TESTING" 
-        &&
-        (
-          (this._side === "LONG" && this.ticker.getQuoteQuantity(this.ticker.currentPrice) >= this.ticker.getQuoteQuantity(this._takeProfit) && this.ticker.getQuoteQuantity(this._takeProfit) !== 0 && this._status === "FILLED")
-          ||
-          (this._side === "SHORT" && this.ticker.getQuoteQuantity(this.ticker.currentPrice) <= this.ticker.getQuoteQuantity(this._takeProfit) && this.ticker.getQuoteQuantity(this._takeProfit) !== 0 && this._status === "FILLED")
-          ||
-          (this._side === "SHORT" && this.ticker.getQuoteQuantity(this.ticker.currentPrice) >= this.ticker.getQuoteQuantity(this._stopLoss) && this.ticker.getQuoteQuantity(this._stopLoss) !== 0 && this._status === "FILLED")
-          ||
-          (this._side === "LONG" && this.ticker.getQuoteQuantity(this.ticker.currentPrice) <= this.ticker.getQuoteQuantity(this._stopLoss) && this.ticker.getQuoteQuantity(this._stopLoss) !== 0 && this._status === "FILLED")
-        )
-      ) await this.close();
+      // Calculate profit
+      if (this.side === 'BUY') {
+        this.profit = (currentPrice - this.executedPrice) * this.executedAmount;
+      } else {
+        this.profit = (this.executedPrice - currentPrice) * this.executedAmount;
+      }
 
-      this._quoteAmountIn = this._baseAmountIn * this._price;
-      this._quoteAmountOut = this._side === "LONG" ? this._baseAmountIn * this.ticker.currentPrice : (this._quoteAmountIn + (this._quoteAmountIn - (this._baseAmountIn * this.ticker.currentPrice)));
-      this._baseAmountOut = this.ticker.getBaseQuantity(this._quoteAmountOut / this.ticker.currentPrice);
-      this._closingPrice = this.ticker.currentPrice;
-      this._profit = this._status === "FILLED" ? (this._quoteAmountOut - this._quoteAmountIn) - (this._quoteAmountIn * this.trader._fee) : this._profit > 0 ? this._profit : 0;
-      this._isProfitable = this._profit > 0;
-      this._expectedAmountOut = this._side === "LONG" ? this._baseAmountIn * this._takeProfit : (this._quoteAmountIn + (this._quoteAmountIn - (this._baseAmountIn * this._takeProfit)));
-      this._expectedProfit = (this._expectedAmountOut - this._quoteAmountIn) - (this._quoteAmountIn * this.trader._fee);
-      await this.sync();
+      this.status = 'CLOSED';
+      this.closedAt = new Date();
+
+      if (this.testingMode) {
+        console.log(`${this.symbol}: [TESTING] Transaction SIMULATED CLOSE - Profit: ${this.profit.toFixed(2)} (${this.percentageLevel}% level)`);
+      } else {
+        // Live mode: place actual sell order
+        const apiService = this.trader.getApiService();
+        const closeOrder = await apiService.order({
+          symbol: this.symbol,
+          side: this.side === 'BUY' ? 'SELL' : 'BUY',
+          type: 'MARKET',
+          quantity: this.executedAmount
+        });
+        
+        console.log(`${this.symbol}: [LIVE] Transaction CLOSED - Profit: ${this.profit.toFixed(2)} (${this.percentageLevel}% level)`);
+      }
+
+      return true;
+    } catch (error) {
+      console.log(`Error closing transaction ${this.id}:`, error.message);
+      return false;
     }
-    catch(error) {
-      console.log(error);
+  }
+
+  // Get transaction summary
+  getSummary() {
+    return {
+      id: this.id,
+      symbol: this.symbol,
+      side: this.side,
+      amount: this.amount,
+      price: this.price,
+      executedPrice: this.executedPrice,
+      executedAmount: this.executedAmount,
+      percentageLevel: this.percentageLevel,
+      status: this.status,
+      profit: this.profit,
+      orderId: this.orderId,
+      createdAt: this.createdAt,
+      filledAt: this.filledAt,
+      closedAt: this.closedAt
+    };
+  }
+
+  // Get current market price for this transaction
+  getCurrentPrice() {
+    const currentData = this.trader.getCurrentPrice();
+    return currentData ? parseFloat(currentData.price) : 0;
+  }
+
+  // Calculate current profit/loss in real-time
+  getCurrentProfit() {
+    const currentPrice = this.getCurrentPrice();
+    if (!currentPrice || this.status !== 'FILLED') return 0;
+
+    if (this.side === 'BUY') {
+      return (currentPrice - this.executedPrice) * this.executedAmount;
+    } else {
+      return (this.executedPrice - currentPrice) * this.executedAmount;
     }
+  }
+
+  // Calculate percentage gain/loss from entry price
+  getCurrentProfitPercentage() {
+    const currentPrice = this.getCurrentPrice();
+    if (!currentPrice || this.status !== 'FILLED' || this.executedPrice === 0) return 0;
+
+    if (this.side === 'BUY') {
+      return ((currentPrice - this.executedPrice) / this.executedPrice) * 100;
+    } else {
+      return ((this.executedPrice - currentPrice) / this.executedPrice) * 100;
+    }
+  }
+
+  // Get real-time transaction status with current market data
+  getRealTimeStatus() {
+    const currentPrice = this.getCurrentPrice();
+    const currentProfit = this.getCurrentProfit();
+    const profitPercentage = this.getCurrentProfitPercentage();
+
+    return {
+      ...this.getSummary(),
+      currentPrice: currentPrice,
+      currentProfit: currentProfit,
+      currentProfitPercentage: profitPercentage,
+      priceChange: currentPrice - this.executedPrice,
+      priceChangePercentage: profitPercentage,
+      isInProfit: currentProfit > 0
+    };
+  }
+
+  // Update transaction every second (called from trader tick)
+  updateRealTime() {
+    if (this.status !== 'FILLED') return;
+
+    const realTimeStatus = this.getRealTimeStatus();
+    
+    // Log significant price movements (optional, for monitoring)
+    if (Math.abs(realTimeStatus.currentProfitPercentage) > 5) { // Log if >5% change
+      console.log(`${this.symbol} [${this.percentageLevel}%]: ${realTimeStatus.currentProfitPercentage.toFixed(2)}% (${realTimeStatus.currentProfit.toFixed(2)})`);
+    }
+
+    return realTimeStatus;
   }
 };
 
