@@ -1,7 +1,37 @@
 import React, { useState } from 'react';
 import { X, TrendingUp, DollarSign, Target, Clock, Activity, BarChart3 } from 'lucide-react';
 
-const TraderModal = ({ trader, isOpen, onClose }) => {
+const TraderModal = ({ traderId, dashboardData, isOpen, onClose }) => {
+  // Find the current trader data from dashboardData
+  const trader = React.useMemo(() => {
+    if (!traderId || !dashboardData.currentTraders) return null;
+    // Try to find by ID first, then by symbol as fallback
+    return dashboardData.currentTraders.find(t => 
+      t.id === traderId || t.symbol === traderId
+    );
+  }, [traderId, dashboardData.currentTraders]);
+
+  // Extract key values to track changes individually
+  const currentPrice = trader?.currentPrice;
+  const realTimeTotalProfit = trader?.realTimeTotalProfit;
+  const profitPercentage = trader?.profitPercentage;
+  const takeProfitPrice = trader?.takeProfitPrice;
+  const takeProfitDistance = trader?.takeProfitDistance;
+  const averagePrice = trader?.averagePrice;
+  const totalPosition = trader?.totalPosition;
+  
+  React.useEffect(() => {
+    if (trader && isOpen) {
+      console.log('📊 TraderModal LIVE UPDATE:', {
+        symbol: trader.symbol,
+        profit: realTimeTotalProfit,
+        price: currentPrice,
+        profitPercentage: profitPercentage,
+        timestamp: new Date().toLocaleTimeString()
+      });
+    }
+  }, [currentPrice, realTimeTotalProfit, profitPercentage, trader?.symbol]);
+
   if (!isOpen || !trader) return null;
 
   const formatCurrency = (value) => {
@@ -33,7 +63,7 @@ const TraderModal = ({ trader, isOpen, onClose }) => {
             <div>
               <h2 className="text-2xl font-bold text-trading-text">{trader.symbol}</h2>
               <p className="text-trading-text-muted">
-                {trader.testingMode ? 'Testing Mode' : 'Live Trading'}
+                {trader.testingMode ? 'Testing Mode' : 'Live Trading'} • {trader.tradeDirection || 'LONG'} Trader
               </p>
             </div>
           </div>
@@ -53,7 +83,7 @@ const TraderModal = ({ trader, isOpen, onClose }) => {
               <span className="text-sm text-trading-text-muted">Current Price</span>
             </div>
             <p className="text-xl font-mono font-bold text-trading-text">
-              {formatCurrency(trader.currentPrice)}
+              {formatCurrency(currentPrice)}
             </p>
           </div>
 
@@ -63,10 +93,10 @@ const TraderModal = ({ trader, isOpen, onClose }) => {
               <span className="text-sm text-trading-text-muted">Total Profit</span>
             </div>
             <p className="text-xl font-mono font-bold">
-              {formatPercentage(trader.profitPercentage)}
+              {formatPercentage(profitPercentage)}
             </p>
             <p className="text-sm text-trading-text-muted">
-              {formatCurrency(trader.realTimeTotalProfit)}
+              {formatCurrency(realTimeTotalProfit)}
             </p>
           </div>
 
@@ -76,10 +106,10 @@ const TraderModal = ({ trader, isOpen, onClose }) => {
               <span className="text-sm text-trading-text-muted">Take Profit</span>
             </div>
             <p className="text-xl font-mono font-bold text-trading-text">
-              {formatCurrency(trader.takeProfitPrice)}
+              {formatCurrency(takeProfitPrice)}
             </p>
             <p className="text-sm text-trading-text-muted">
-              {formatPercentage(trader.takeProfitDistance)} to target
+              {formatPercentage(takeProfitDistance)} to target
             </p>
           </div>
 
@@ -89,7 +119,7 @@ const TraderModal = ({ trader, isOpen, onClose }) => {
               <span className="text-sm text-trading-text-muted">Average Price</span>
             </div>
             <p className="text-lg font-mono font-bold text-trading-text">
-              {formatCurrency(trader.averagePrice)}
+              {formatCurrency(averagePrice)}
             </p>
           </div>
 
@@ -99,17 +129,20 @@ const TraderModal = ({ trader, isOpen, onClose }) => {
               <span className="text-sm text-trading-text-muted">Position Size</span>
             </div>
             <p className="text-lg font-mono font-bold text-trading-text">
-              {(Number(trader.totalPosition) || 0).toFixed(4)}
+              {(Number(totalPosition) || 0).toFixed(4)}
             </p>
           </div>
 
           <div className="bg-trading-dark p-4 rounded-lg border border-trading-border">
             <div className="flex items-center space-x-2 mb-2">
               <Clock className="w-5 h-5 text-trading-text-muted" />
-              <span className="text-sm text-trading-text-muted">Performance</span>
+              <span className="text-sm text-trading-text-muted">Price Range</span>
             </div>
             <p className="text-lg font-bold text-trading-text">
-              {trader.startPercentage || 0}% → {(Number(trader.highestPercentage) || 0).toFixed(1)}%
+              {(Number(trader?.startPercentage) || 0).toFixed(1)}% → {(Number(trader?.highestPercentage) || 0).toFixed(1)}%
+            </p>
+            <p className="text-xs text-trading-text-muted">
+              24h Change: {formatPercentage(trader?.current24hChange || 0)}
             </p>
           </div>
         </div>

@@ -8,6 +8,8 @@ const app = express();
 const cors = require('cors');
 const { Controller } = require("./classes/Controller");
 const jwt = require('jsonwebtoken');
+const WebSocket = require('ws');
+const http = require('http');
 
 const port = 5000;
 
@@ -350,6 +352,122 @@ app.delete('/api/:id', authenticate, async(req, res) => {
 });
 
 
-app.listen(port, () => {
-    console.log(`App is listening on port ${port}`);
+// Create HTTP server and WebSocket server
+const server = http.createServer(app);
+const wss = new WebSocket.Server({ server });
+
+// Store connected clients
+const clients = new Set();
+
+// WebSocket connection handler
+wss.on('connection', (ws, req) => {
+    console.log('Frontend WebSocket client connected');
+    clients.add(ws);
+    
+    // Send initial data
+    getDashboardData().then(dashboardData => {
+        ws.send(JSON.stringify({
+            type: 'dashboard_update',
+            data: dashboardData
+        }));
+    }).catch(error => {
+        console.log('Error sending initial WebSocket data:', error);
+    });
+    
+    ws.on('close', () => {
+        console.log('Frontend WebSocket client disconnected');
+        clients.delete(ws);
+    });
+    
+    ws.on('error', (error) => {
+        console.log('WebSocket error:', error);
+        clients.delete(ws);
+    });
+});
+
+// Broadcast updates to all connected clients
+async function broadcastUpdate() {
+    if (clients.size > 0) {
+        try {
+            const dashboardData = await getDashboardData();
+            console.log('📡 Broadcasting WebSocket data:', {
+                topGainers: dashboardData.topGainers?.length || 0,
+                topLosers: dashboardData.topLosers?.length || 0,
+                traders: dashboardData.currentTraders?.length || 0
+            });
+            const message = JSON.stringify({
+                type: 'dashboard_update',
+                data: dashboardData,
+                timestamp: new Date()
+            });
+            
+            console.log(`📡 Broadcasting to ${clients.size} WebSocket clients with ${dashboardData.currentTraders.length} traders`);
+            
+            clients.forEach(client => {
+                if (client.readyState === WebSocket.OPEN) {
+                    client.send(message);
+                }
+            });
+        } catch (error) {
+            console.log('Error broadcasting WebSocket update:', error);
+        }
+    }
+}
+
+// Function to get dashboard data (same as REST endpoint)
+async function getDashboardData() {
+    try {
+        console.log('📊 Getting dashboard data - TickerData size:', controller.tickerData?.size || 0);
+        
+        let topGainers = [];
+        let topLosers = [];
+        
+        try {
+            [topGainers, topLosers] = await Promise.all([
+                controller.service.getTopGainers(10),
+                controller.service.getTopLosers(10)
+            ]);
+        } catch (marketDataError) {
+            console.log('⚠️  Error fetching market data:', marketDataError.message);
+            // Continue with empty arrays if market data fails
+        }
+
+        console.log('📈 Got gainers:', topGainers?.length || 0, 'losers:', topLosers?.length || 0);
+
+        const traders = controller.traders.map(trader => {
+            const summary = trader.getTradingSummary();
+            console.log('🔍 Trader summary for', summary.symbol, '- Summary ID:', summary.id, 'Trader ID:', trader.id, 'Has ID:', !!trader.id);
+            // Ensure ID is included
+            if (!summary.id && trader.id) {
+                summary.id = trader.id;
+            }
+            return summary;
+        });
+        return {
+            topGainers: topGainers,
+            topLosers: topLosers,
+            currentTraders: traders.sort((a, b) => (b.realTimeTotalProfit || 0) - (a.realTimeTotalProfit || 0)),
+            tradingMode: controller.getTradingMode(),
+            totalTraders: controller.traders.length,
+            maxTraders: controller.maxTraders
+        };
+    } catch (error) {
+        console.log('❌ Error getting dashboard data for WebSocket:', error);
+        return {
+            topGainers: [],
+            topLosers: [],
+            currentTraders: [],
+            tradingMode: 'TESTING',
+            totalTraders: 0,
+            maxTraders: 10
+        };
+    }
+}
+
+// Broadcast updates every second
+setInterval(broadcastUpdate, 1000);
+
+server.listen(port, () => {
+    console.log(`HTTP server listening on port ${port}`);
+    console.log(`WebSocket server listening on port ${port}`);
 });

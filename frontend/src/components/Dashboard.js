@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { TrendingUp, TrendingDown, BarChart3, Users, DollarSign, Activity, RefreshCw } from 'lucide-react';
+import { TrendingUp, TrendingDown, BarChart3, Users, DollarSign, Activity, RefreshCw, Wifi, WifiOff } from 'lucide-react';
 import api from '../services/api';
+import websocket from '../services/websocket';
 import TraderModal from './TraderModal';
 
 const Dashboard = () => {
@@ -9,9 +10,11 @@ const Dashboard = () => {
     topLosers: [],
     currentTraders: []
   });
-  const [selectedTrader, setSelectedTrader] = useState(null);
+  const [selectedTraderId, setSelectedTraderId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [lastUpdate, setLastUpdate] = useState(new Date());
+  const [wsConnected, setWsConnected] = useState(false);
+  const [useWebSocket, setUseWebSocket] = useState(true);
 
   const fetchDashboardData = async () => {
     try {
@@ -26,13 +29,42 @@ const Dashboard = () => {
   };
 
   useEffect(() => {
-    fetchDashboardData();
-    
-    // Update every 5 seconds to avoid rate limits while keeping data fresh
-    const interval = setInterval(fetchDashboardData, 5000);
-    
-    return () => clearInterval(interval);
-  }, []);
+    if (useWebSocket) {
+      // Setup WebSocket connection for real-time updates
+      websocket.onData((data) => {
+        console.log('📊 Dashboard received WebSocket data:', {
+          traders: data?.currentTraders?.length || 0,
+          topGainers: data?.topGainers?.length || 0,
+          topLosers: data?.topLosers?.length || 0,
+          traderIds: data?.currentTraders?.map(t => ({symbol: t.symbol, id: t.id})) || [],
+          firstTrader: data?.currentTraders?.[0]
+        });
+        setDashboardData(data);
+        setLastUpdate(new Date());
+        setLoading(false);
+      });
+      
+      websocket.connect();
+      setWsConnected(websocket.getConnectionStatus());
+      
+      // Check connection status periodically
+      const statusInterval = setInterval(() => {
+        setWsConnected(websocket.getConnectionStatus());
+      }, 1000);
+      
+      return () => {
+        clearInterval(statusInterval);
+        websocket.disconnect();
+      };
+    } else {
+      // Fallback to REST API polling
+      fetchDashboardData();
+      const interval = setInterval(fetchDashboardData, 5000);
+      return () => clearInterval(interval);
+    }
+  }, [useWebSocket]);
+
+
 
   const formatCurrency = (value) => {
     const numValue = Number(value) || 0;
@@ -82,48 +114,63 @@ const Dashboard = () => {
   const TraderCard = ({ trader }) => (
     <div 
       className="bg-trading-card rounded-lg border border-trading-border p-6 hover:border-trading-blue/50 transition-all cursor-pointer hover:shadow-lg"
-      onClick={() => setSelectedTrader(trader)}
+      onClick={() => {
+        const traderId = trader.id || trader.symbol;
+        console.log('🎯 Trader selected:', trader.symbol, 'Using ID:', traderId);
+        setSelectedTraderId(traderId);
+      }}
     >
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center space-x-3">
-          <div className="bg-trading-blue p-2 rounded-lg">
-            <BarChart3 className="w-5 h-5 text-white" />
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center space-x-3">
+            <div className="bg-trading-blue p-2 rounded-lg">
+              <BarChart3 className="w-5 h-5 text-white" />
+            </div>
+            <div>
+              <h3 className="font-mono font-bold text-trading-text">{trader.symbol}</h3>
+              <p className="text-sm text-trading-text-muted">
+                {trader.testingMode ? 'Testing Mode' : 'Live Trading'} • {trader.tradeDirection || 'LONG'}
+              </p>
+            </div>
           </div>
-          <div>
-            <h3 className="font-mono font-bold text-trading-text">{trader.symbol}</h3>
-            <p className="text-sm text-trading-text-muted">
-              {trader.testingMode ? 'Testing Mode' : 'Live Trading'}
-            </p>
+          <div className="text-right">
+            <p className="text-sm text-trading-text-muted">Current Price</p>
+            <p className="font-mono text-trading-text">{formatCurrency(trader.currentPrice)}</p>
+            <div className="text-sm">
+              {formatPercentage(trader.current24hChange || 0)}
+            </div>
           </div>
+        </div>      <div className="grid grid-cols-3 gap-3 mb-4">
+        <div className="text-center">
+          <p className="text-xs text-trading-text-muted">Total Profit</p>
+          <p className={`font-mono font-bold text-sm ${
+            (trader.realTimeTotalProfit || 0) >= 0 ? 'text-trading-green' : 'text-trading-red'
+          }`}>
+            {formatCurrency(trader.realTimeTotalProfit)}
+          </p>
         </div>
-        <div className="text-right">
-          <p className="text-sm text-trading-text-muted">Current Price</p>
-          <p className="font-mono text-trading-text">{formatCurrency(trader.currentPrice)}</p>
+        <div className="text-center">
+          <p className="text-xs text-trading-text-muted">Average Price</p>
+          <p className="font-mono font-bold text-sm text-trading-text">
+            {formatCurrency(trader.averagePrice)}
+          </p>
         </div>
-      </div>
-
-      <div className="grid grid-cols-2 gap-4 mb-4">
-        <div>
-          <p className="text-sm text-trading-text-muted">Total Profit</p>
-          <p className="font-mono font-bold">{formatPercentage(trader.profitPercentage)}</p>
-          <p className="text-xs text-trading-text-muted">{formatCurrency(trader.realTimeTotalProfit)}</p>
-        </div>
-        <div>
-          <p className="text-sm text-trading-text-muted">Position Size</p>
-          <p className="font-mono font-bold text-trading-text">{(Number(trader.totalPosition) || 0).toFixed(4)}</p>
-          <p className="text-xs text-trading-text-muted">Avg: {formatCurrency(trader.averagePrice)}</p>
+        <div className="text-center">
+          <p className="text-xs text-trading-text-muted">Position Size</p>
+          <p className="font-mono font-bold text-sm text-trading-text">
+            {formatCurrency((Number(trader.totalPosition) || 0) * (Number(trader.averagePrice) || 0))}
+          </p>
         </div>
       </div>
 
       <div className="mb-4">
         <div className="flex justify-between text-sm text-trading-text-muted mb-1">
-          <span>Take Profit Progress</span>
+          <span>Take Profit Progress ({trader.tradeDirection})</span>
           <span>{formatPercentage(trader.takeProfitDistance)} to target</span>
         </div>
         <div className="w-full bg-trading-dark rounded-full h-2">
           <div 
             className="bg-gradient-to-r from-trading-blue to-trading-green h-2 rounded-full transition-all"
-            style={{ width: `${Math.max(0, Math.min(100, (trader.profitPercentage / trader.takeProfitDistance) * 100))}%` }}
+            style={{ width: `${Math.max(0, Math.min(100, (Math.abs(trader.profitPercentage) / 10) * 100))}%` }}
           ></div>
         </div>
       </div>
@@ -134,9 +181,11 @@ const Dashboard = () => {
           <p className="font-bold text-trading-text">{(trader.transactions || []).length}</p>
         </div>
         <div className="text-right">
-          <p className="text-sm text-trading-text-muted">Performance</p>
-          <p className="text-sm font-mono text-trading-text">
-            {trader.startPercentage || 0}% → {(Number(trader.highestPercentage) || 0).toFixed(1)}%
+          <p className="text-sm text-trading-text-muted">P&L</p>
+          <p className={`text-sm font-mono font-bold ${
+            (trader.profitPercentage || 0) >= 0 ? 'text-trading-green' : 'text-trading-red'
+          }`}>
+            {(trader.profitPercentage || 0) >= 0 ? '+' : ''}{(Number(trader.profitPercentage) || 0).toFixed(2)}%
           </p>
         </div>
       </div>
@@ -199,17 +248,40 @@ const Dashboard = () => {
               <p className="text-trading-text-muted">Real-time cryptocurrency trading platform</p>
             </div>
             <div className="flex items-center space-x-4">
+              <div className="flex items-center space-x-2">
+                {wsConnected ? (
+                  <Wifi className="w-4 h-4 text-trading-green" />
+                ) : (
+                  <WifiOff className="w-4 h-4 text-trading-red" />
+                )}
+                <span className="text-sm text-trading-text-muted">
+                  {wsConnected ? 'Real-time' : 'Polling'}
+                </span>
+              </div>
               <div className="text-right">
                 <p className="text-sm text-trading-text-muted">Last Update</p>
                 <p className="text-sm font-mono text-trading-text">{lastUpdate.toLocaleTimeString()}</p>
               </div>
               <button
-                onClick={fetchDashboardData}
-                className="bg-trading-blue hover:bg-trading-blue/80 text-white px-4 py-2 rounded-lg flex items-center space-x-2 transition-colors"
+                onClick={() => setUseWebSocket(!useWebSocket)}
+                className={`px-4 py-2 rounded-lg flex items-center space-x-2 transition-colors ${
+                  useWebSocket 
+                    ? 'bg-trading-green hover:bg-trading-green/80 text-white' 
+                    : 'bg-trading-text-muted hover:bg-trading-text-muted/80 text-white'
+                }`}
               >
-                <RefreshCw className="w-4 h-4" />
-                <span>Refresh</span>
+                {useWebSocket ? <Wifi className="w-4 h-4" /> : <WifiOff className="w-4 h-4" />}
+                <span>{useWebSocket ? 'WebSocket' : 'REST API'}</span>
               </button>
+              {!useWebSocket && (
+                <button
+                  onClick={fetchDashboardData}
+                  className="bg-trading-blue hover:bg-trading-blue/80 text-white px-4 py-2 rounded-lg flex items-center space-x-2 transition-colors"
+                >
+                  <RefreshCw className="w-4 h-4" />
+                  <span>Refresh</span>
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -225,18 +297,18 @@ const Dashboard = () => {
             icon={Users}
           />
           <StatsCard
-            title="Top Gainers"
-            value={dashboardData.topGainers?.length || 0}
-            subtitle="Market opportunities"
+            title="Active Positions"
+            value={(dashboardData.currentTraders || []).reduce((sum, trader) => sum + ((trader.transactions || []).length), 0)}
+            subtitle="Total open positions"
             icon={TrendingUp}
-            color="text-trading-green"
+            color="text-trading-blue"
           />
           <StatsCard
-            title="Top Losers"
-            value={dashboardData.topLosers?.length || 0}
-            subtitle="Market watch"
-            icon={TrendingDown}
-            color="text-trading-red"
+            title="Profitable Traders"
+            value={(dashboardData.currentTraders || []).filter(trader => (trader.realTimeTotalProfit || 0) > 0).length}
+            subtitle="Making profit"
+            icon={TrendingUp}
+            color="text-trading-green"
           />
           <StatsCard
             title="Total Profit"
@@ -245,7 +317,7 @@ const Dashboard = () => {
             )}
             subtitle="All active traders"
             icon={DollarSign}
-            color="text-trading-green"
+            color={(dashboardData.currentTraders || []).reduce((sum, trader) => sum + (trader.realTimeTotalProfit || 0), 0) >= 0 ? 'text-trading-green' : 'text-trading-red'}
           />
         </div>
 
@@ -314,7 +386,7 @@ const Dashboard = () => {
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
               {(dashboardData.currentTraders || []).map((trader, index) => (
-                <TraderCard key={trader.symbol || index} trader={trader} />
+                <TraderCard key={trader.id || trader.symbol || index} trader={trader} />
               ))}
             </div>
           </div>
@@ -332,9 +404,13 @@ const Dashboard = () => {
 
       {/* Trader Modal */}
       <TraderModal
-        trader={selectedTrader}
-        isOpen={!!selectedTrader}
-        onClose={() => setSelectedTrader(null)}
+        key={selectedTraderId || 'no-trader'}
+        traderId={selectedTraderId}
+        dashboardData={dashboardData}
+        isOpen={!!selectedTraderId}
+        onClose={() => {
+          setSelectedTraderId(null);
+        }}
       />
     </div>
   );

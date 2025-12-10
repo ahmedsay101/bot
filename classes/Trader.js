@@ -15,10 +15,11 @@ class Trader {
         this.contractAge = config.contractAge;
         
         // Trading configuration
-        this.amount = 10;                    // Amount per order
+        this.usdtAmount = config.usdtAmount || 10;  // USDT amount per order (not base asset)
         this.percentageStep = 10;            // Percentage step for new orders
-        this.takeProfit = config.takeProfit || 20;  // Take profit percentage
+        this.takeProfit = config.takeProfit || 10;  // Take profit percentage
         this.testingMode = config.testingMode !== undefined ? config.testingMode : true;
+        this.tradeDirection = config.tradeDirection || 'SHORT';  // 'LONG' or 'SHORT'
         
         // Trading state
         this.transactions = [];              // All transactions for this trader
@@ -41,7 +42,7 @@ class Trader {
         // Initialize first level as executed (starting percentage)
         this.executedLevels.add(Math.floor(this.startPercentage / this.percentageStep) * this.percentageStep);
         
-        console.log(`Trader created for ${this.symbol} starting at ${this.startPercentage}% with ${this.amount} amount per level (${this.testingMode ? 'TESTING' : 'LIVE'} mode)`);
+        console.log(`Trader created for ${this.symbol} starting at ${this.startPercentage}% with $${this.usdtAmount} USDT per level (${this.tradeDirection} trader, ${this.testingMode ? 'TESTING' : 'LIVE'} mode)`);
         
         // Create initial transaction at starting percentage
         this.createTransaction(this.startPercentage);
@@ -124,12 +125,20 @@ class Trader {
                 return null;
             }
 
+            const price = parseFloat(currentPrice.price);
+            // Calculate base asset amount from USDT amount
+            const baseAssetAmount = this.usdtAmount / price;
+            
+            // Determine transaction side based on trade direction
+            const transactionSide = this.tradeDirection === 'SHORT' ? 'SELL' : 'BUY';
+
             const transaction = new Transaction(this, {
                 symbol: this.symbol,
-                amount: this.amount,
-                price: parseFloat(currentPrice.price),
+                amount: baseAssetAmount,  // Base asset amount calculated from USDT
+                usdtAmount: this.usdtAmount,  // Store original USDT amount
+                price: price,
                 percentageLevel: percentageLevel,
-                side: 'BUY',  // Always buying on upward momentum
+                side: transactionSide,  // BUY for LONG, SELL for SHORT
                 testingMode: this.testingMode
             });
 
@@ -222,10 +231,16 @@ class Trader {
         return true; // Indicates local calculation is accurate
     }
 
-    // Calculate take profit price based on average position
+    // Calculate take profit price based on average position and trade direction
     calculateTakeProfitPrice() {
         if (this.averagePrice > 0) {
-            this.takeProfitPrice = this.averagePrice * (1 + (this.takeProfit / 100));
+            if (this.tradeDirection === 'SHORT') {
+                // For SHORT positions, take profit BELOW average price
+                this.takeProfitPrice = this.averagePrice * (1 - (this.takeProfit / 100));
+            } else {
+                // For LONG positions, take profit ABOVE average price
+                this.takeProfitPrice = this.averagePrice * (1 + (this.takeProfit / 100));
+            }
         }
     }
 
@@ -236,8 +251,18 @@ class Trader {
 
         const currentPriceValue = parseFloat(currentPrice.price);
         
-        if (currentPriceValue >= this.takeProfitPrice) {
-            console.log(`${this.symbol}: Take profit hit! Current: $${currentPriceValue}, Target: $${this.takeProfitPrice.toFixed(6)}`);
+        let takeProfitHit = false;
+        
+        if (this.tradeDirection === 'SHORT') {
+            // For SHORT positions, take profit when price goes BELOW target
+            takeProfitHit = currentPriceValue <= this.takeProfitPrice;
+        } else {
+            // For LONG positions, take profit when price goes ABOVE target
+            takeProfitHit = currentPriceValue >= this.takeProfitPrice;
+        }
+        
+        if (takeProfitHit) {
+            console.log(`${this.symbol}: ${this.tradeDirection} Take profit hit! Current: $${currentPriceValue}, Target: $${this.takeProfitPrice.toFixed(6)}`);
             await this.closeAllPositions();
             this.destroy();
             return true;
@@ -374,11 +399,16 @@ class Trader {
             transaction.getRealTimeStatus()
         );
 
+        // Get 24h percentage change from current data
+        const current24hChange = currentData ? parseFloat(currentData.priceChangePercent) : 0;
+
         return {
+            id: this.id,
             symbol: this.symbol,
             startPercentage: this.startPercentage,
             highestPercentage: this.highestPercentage,
             currentPrice: currentPrice,
+            current24hChange: current24hChange,
             currentTransactions: this.transactions.length,
             executedLevels: Array.from(this.executedLevels).sort((a, b) => a - b),
             averagePrice: this.averagePrice,
@@ -388,10 +418,16 @@ class Trader {
             realTimeTotalProfit: realTimeTotalProfit,
             status: this.status,
             testingMode: this.testingMode,
+            tradeDirection: this.tradeDirection,
             transactions: transactionDetails,
-            profitPercentage: this.averagePrice > 0 ? ((currentPrice - this.averagePrice) / this.averagePrice) * 100 : 0,
+            profitPercentage: this.averagePrice > 0 ? 
+                (this.tradeDirection === 'SHORT' ? 
+                    ((this.averagePrice - currentPrice) / this.averagePrice) * 100 :
+                    ((currentPrice - this.averagePrice) / this.averagePrice) * 100) : 0,
             takeProfitDistance: this.takeProfitPrice > 0 && currentPrice > 0 ? 
-                ((this.takeProfitPrice - currentPrice) / currentPrice) * 100 : 0
+                (this.tradeDirection === 'SHORT' ? 
+                    -Math.abs(((this.takeProfitPrice - currentPrice) / currentPrice) * 100) :
+                    Math.abs(((this.takeProfitPrice - currentPrice) / currentPrice) * 100)) : 0
         };
     }
 

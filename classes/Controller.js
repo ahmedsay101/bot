@@ -11,6 +11,7 @@ class Controller {
         this.minContractDays = 30;
         this.testingMode = testingMode;
         this.tickerData = new Map();
+        this.hasLoggedTickerData = false;
         
         // Pass controller reference to service for WebSocket data access
         this.service.controller = this;
@@ -39,12 +40,18 @@ class Controller {
                         this.tickerData.set(ticker.s, {
                             symbol: ticker.s,
                             price: ticker.c,
-                            priceChange: ticker.P,
+                            priceChange: ticker.p,
                             priceChangePercent: ticker.P,
                             volume: ticker.v,
                             quoteVolume: ticker.q
                         });
                     });
+                    
+                    // Log first time we get data
+                    if (this.tickerData.size > 0 && !this.hasLoggedTickerData) {
+                        console.log(`📊 Ticker WebSocket data loaded: ${this.tickerData.size} symbols`);
+                        this.hasLoggedTickerData = true;
+                    }
                     this.processTickerUpdates();
                 } catch (error) {
                     console.log('WebSocket message parse error:', error.message);
@@ -240,6 +247,8 @@ class Controller {
                 console.log(`Attempting to create trader for ${gainer.symbol}: ${gainer.priceChangePercent}% gain, $${gainer.price}, ${gainer.contractAge} days old`);
 
                 // Create trader configuration
+                // For gainers (positive momentum), use SHORT to profit from potential reversal
+                // For high gains, we expect a pullback, so SHORT is more appropriate
                 const traderConfig = {
                     symbol: gainer.symbol,
                     percentage: gainer.priceChangePercent,
@@ -247,6 +256,9 @@ class Controller {
                     priceChange: gainer.priceChange,
                     volume: gainer.volume,
                     contractAge: gainer.contractAge,
+                    usdtAmount: 10,  // $10 USDT per transaction level
+                    takeProfit: 10,  // 10% take profit target
+                    tradeDirection: 'SHORT',  // SHORT high-momentum gainers for reversal profits
                     testingMode: this.testingMode
                 };
 

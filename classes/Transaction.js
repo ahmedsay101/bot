@@ -8,7 +8,8 @@ class Transaction {
     
     // Transaction data
     this.symbol = config.symbol;
-    this.amount = config.amount;
+    this.amount = config.amount;  // Base asset amount (calculated from USDT)
+    this.usdtAmount = config.usdtAmount || (config.amount * config.price);  // USDT amount
     this.price = config.price;
     this.percentageLevel = config.percentageLevel;
     this.side = config.side;
@@ -26,7 +27,7 @@ class Transaction {
     this.filledAt = null;
     this.closedAt = null;
     
-    console.log(`Transaction created: ${this.symbol} ${this.side} ${this.amount} at ${this.percentageLevel}% (${this.testingMode ? 'TESTING' : 'LIVE'} mode)`);
+    console.log(`Transaction created: ${this.symbol} ${this.side} ${this.amount} (≈$${this.usdtAmount.toFixed(2)} USDT) at ${this.percentageLevel}% (${this.testingMode ? 'TESTING' : 'LIVE'} mode)`);
     
     // Automatically execute the transaction (simulate immediate fill for momentum trading)
     this.executeTransaction();
@@ -45,7 +46,7 @@ class Transaction {
         // Generate a mock order ID for testing
         this.orderId = `TEST_${this.symbol}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
         
-        console.log(`${this.symbol}: [TESTING] Transaction SIMULATED - ${this.side} ${this.executedAmount} at $${this.executedPrice}`);
+        console.log(`${this.symbol}: [TESTING] Transaction SIMULATED - ${this.side} ${this.executedAmount} (≈$${this.usdtAmount.toFixed(2)} USDT) at $${this.executedPrice}`);
       } else {
         // Live mode: execute real Binance order
         const apiService = this.trader.getApiService();

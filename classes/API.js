@@ -332,6 +332,7 @@ class Service extends API {
     async getTopGainers(limit = 10) {
         try {
             // Use WebSocket data instead of REST API to avoid rate limits
+            console.log('🔍 getTopGainers - Controller exists:', !!this.controller, 'TickerData size:', this.controller?.tickerData?.size || 0);
             if (this.controller && this.controller.tickerData && this.controller.tickerData.size > 0) {
                 const tickers = Array.from(this.controller.tickerData.values());
                 const gainers = tickers
@@ -355,6 +356,7 @@ class Service extends API {
                 return gainers;
             } else {
                 // Fallback to REST API if WebSocket data not available
+                console.log('⚠️  Using REST API fallback for getTopGainers');
                 const tickers = await this.get24hrTicker();
                 const gainers = tickers
                     .filter(ticker => parseFloat(ticker.priceChangePercent) > 0)
@@ -380,6 +382,7 @@ class Service extends API {
     async getTopLosers(limit = 10) {
         try {
             // Use WebSocket data instead of REST API to avoid rate limits
+            console.log('🔍 getTopLosers - Controller exists:', !!this.controller, 'TickerData size:', this.controller?.tickerData?.size || 0);
             if (this.controller && this.controller.tickerData && this.controller.tickerData.size > 0) {
                 const tickers = Array.from(this.controller.tickerData.values());
                 const losers = tickers
@@ -398,6 +401,7 @@ class Service extends API {
                 return losers;
             } else {
                 // Fallback to REST API if WebSocket data not available
+                console.log('⚠️  Using REST API fallback for getTopLosers');
                 const tickers = await this.get24hrTicker();
                 const losers = tickers
                     .filter(ticker => parseFloat(ticker.priceChangePercent) < 0)
