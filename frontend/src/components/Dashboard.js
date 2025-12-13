@@ -169,8 +169,18 @@ const Dashboard = () => {
         </div>
         <div className="w-full bg-trading-dark rounded-full h-2">
           <div 
-            className="bg-gradient-to-r from-trading-blue to-trading-green h-2 rounded-full transition-all"
-            style={{ width: `${Math.max(0, Math.min(100, (Math.abs(trader.profitPercentage) / 10) * 100))}%` }}
+            className={`h-2 rounded-full transition-all ${
+              (trader.profitPercentage || 0) >= 0 
+                ? 'bg-gradient-to-r from-trading-blue to-trading-green' 
+                : 'bg-gradient-to-r from-trading-red/50 to-trading-red'
+            }`}
+            style={{ 
+              width: `${Math.max(0, Math.min(100, 
+                trader.tradeDirection === 'SHORT' 
+                  ? Math.max(0, (trader.profitPercentage || 0) / 10 * 100) // For SHORT: positive profit = progress toward take profit
+                  : Math.max(0, (trader.profitPercentage || 0) / 10 * 100) // For LONG: positive profit = progress toward take profit
+              ))}%` 
+            }}
           ></div>
         </div>
       </div>
@@ -191,19 +201,32 @@ const Dashboard = () => {
       </div>
 
       <div className="mt-4 pt-3 border-t border-trading-border">
-        <p className="text-sm text-trading-text-muted mb-2">Executed Levels</p>
+        <p className="text-sm text-trading-text-muted mb-2">Price Levels ({trader.currentLevelIndex + 1 || 1}/{trader.priceLevels?.length || 0})</p>
         <div className="flex flex-wrap gap-1">
-          {trader.executedLevels.slice(0, 6).map((level, index) => (
-            <span
-              key={index}
-              className="px-2 py-1 bg-trading-blue/20 text-trading-blue rounded text-xs font-mono"
-            >
-              {level}%
-            </span>
-          ))}
-          {trader.executedLevels.length > 6 && (
+          {trader.priceLevels?.slice(0, 8).map((priceLevel, index) => {
+            const isExecuted = trader.executedLevels?.some(executed => 
+              executed.includes(priceLevel.toFixed(4)) || Math.abs(parseFloat(executed.replace('$', '')) - priceLevel) < 0.0001
+            );
+            const isCurrent = index === (trader.currentLevelIndex || 0);
+            
+            return (
+              <span
+                key={index}
+                className={`px-2 py-1 rounded text-xs font-mono ${
+                  isCurrent 
+                    ? 'bg-trading-green/30 text-trading-green border border-trading-green/50' 
+                    : isExecuted 
+                    ? 'bg-trading-blue/20 text-trading-blue' 
+                    : 'bg-trading-dark/50 text-trading-text-muted border border-trading-border'
+                }`}
+              >
+                ${priceLevel.toFixed(4)}
+              </span>
+            );
+          })}
+          {trader.priceLevels?.length > 8 && (
             <span className="px-2 py-1 bg-trading-text-muted/20 text-trading-text-muted rounded text-xs">
-              +{trader.executedLevels.length - 6} more
+              +{trader.priceLevels.length - 8} more
             </span>
           )}
         </div>

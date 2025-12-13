@@ -147,18 +147,33 @@ const TraderModal = ({ traderId, dashboardData, isOpen, onClose }) => {
           </div>
         </div>
 
-        {/* Executed Levels */}
+        {/* Price Levels */}
         <div className="px-6 pb-4">
-          <h3 className="text-lg font-semibold text-trading-text mb-3">Executed Levels</h3>
+          <h3 className="text-lg font-semibold text-trading-text mb-3">
+            Price Levels ({(trader?.currentLevelIndex || 0) + 1}/{trader?.priceLevels?.length || 0})
+          </h3>
           <div className="flex flex-wrap gap-2">
-            {trader.executedLevels.map((level, index) => (
-              <span
-                key={index}
-                className="px-3 py-1 bg-trading-blue/20 text-trading-blue rounded-full text-sm font-mono"
-              >
-                {level}%
-              </span>
-            ))}
+            {trader?.priceLevels?.map((priceLevel, index) => {
+              const isExecuted = trader?.executedLevels?.some(executed => 
+                executed.includes(priceLevel.toFixed(4)) || Math.abs(parseFloat(executed.replace('$', '')) - priceLevel) < 0.0001
+              );
+              const isCurrent = index === (trader?.currentLevelIndex || 0);
+              
+              return (
+                <span
+                  key={index}
+                  className={`px-3 py-1 rounded-full text-sm font-mono ${
+                    isCurrent 
+                      ? 'bg-trading-green/30 text-trading-green border border-trading-green/50' 
+                      : isExecuted 
+                      ? 'bg-trading-blue/20 text-trading-blue' 
+                      : 'bg-trading-dark/50 text-trading-text-muted border border-trading-border'
+                  }`}
+                >
+                  ${priceLevel.toFixed(4)}
+                </span>
+              );
+            })}
           </div>
         </div>
 

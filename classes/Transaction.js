@@ -13,6 +13,7 @@ class Transaction {
     this.price = config.price;
     this.percentageLevel = config.percentageLevel;
     this.side = config.side;
+    this.orderType = config.orderType || 'MARKET';  // MARKET or LIMIT
     this.testingMode = config.testingMode !== undefined ? config.testingMode : true;
     
     // Transaction state
@@ -50,12 +51,34 @@ class Transaction {
       } else {
         // Live mode: execute real Binance order
         const apiService = this.trader.getApiService();
-        const order = await apiService.order({
+        const orderConfig = {
           symbol: this.symbol,
           side: this.side,
-          type: 'MARKET',
+          type: this.orderType,
           quantity: this.amount
-        });
+        };
+        
+        // Add price for LIMIT orders
+        if (this.orderType === 'LIMIT') {
+          orderConfig.price = this.price.toFixed(8);
+          orderConfig.timeInForce = 'GTC';  // Good Till Cancelled
+        }
+        
+        const order = await apiService.order(orderConfig);
+        
+        // Track this order in trader's monitoring system
+        if (order && order.orderId && this.trader && this.trader.trackOrder) {
+          this.trader.trackOrder(order.orderId, {
+            symbol: this.symbol,
+            side: this.side,
+            orderType: this.orderType,
+            amount: this.amount,
+            price: this.price,
+            usdtAmount: this.usdtAmount,
+            priceLevel: this.priceLevel,
+            levelIndex: this.levelIndex
+          });
+        }
         
         if (order && order.orderId) {
           this.status = 'FILLED';
@@ -63,6 +86,14 @@ class Transaction {
           this.executedAmount = parseFloat(order.executedQty || this.amount);
           this.orderId = order.orderId;
           this.filledAt = new Date();
+          
+          // For MARKET orders that fill immediately, update the tracked order as filled
+          if (this.trader && this.trader.activeOrders && this.trader.activeOrders.has(order.orderId)) {
+            const orderInfo = this.trader.activeOrders.get(order.orderId);
+            orderInfo.lastStatus = 'FILLED';
+            // Remove from active tracking since it's immediately filled
+            this.trader.activeOrders.delete(order.orderId);
+          }
           
           console.log(`${this.symbol}: [LIVE] Transaction FILLED - ${this.side} ${this.executedAmount} at $${this.executedPrice}`);
         } else {
