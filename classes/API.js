@@ -236,6 +236,33 @@ class Service extends API {
         }
     }
 
+    // Get last 5 days of daily candles for momentum validation
+    async getRecentCandles(symbol, days = 5) {
+        try {
+            const query = [{symbol}, {interval: '1d'}, {limit: days}];
+            const klines = await this.get(this.urls.klines, query);
+            
+            if (!klines || klines.length === 0) {
+                return null;
+            }
+            
+            // Parse candle data: [openTime, open, high, low, close, volume, closeTime, quoteVolume, trades, buyBaseVolume, buyQuoteVolume, ignored]
+            return klines.map(candle => ({
+                openTime: parseInt(candle[0]),
+                open: parseFloat(candle[1]),
+                high: parseFloat(candle[2]),
+                low: parseFloat(candle[3]),
+                close: parseFloat(candle[4]),
+                volume: parseFloat(candle[5]),
+                closeTime: parseInt(candle[6])
+            }));
+        }
+        catch(error) {
+            console.log(`Error getting recent candles for ${symbol}:`, error.message);
+            return null;
+        }
+    }
+
     async getAccount() {
         try {
             return this.authenticatedGet(this.urls.account, [{omitZeroBalances: true}]);
@@ -447,7 +474,39 @@ class Service extends API {
             return 0; // Return 0 if we can't determine age (will be filtered out)
         }
     }
-
+    // Validate if current price represents true momentum (new highs for SHORT, new lows for LONG)
+    async validateMomentum(symbol, currentPrice, tradeDirection = 'SHORT') {
+        try {
+            const recentCandles = await this.getRecentCandles(symbol, 5);
+            
+            if (!recentCandles || recentCandles.length < 5) {
+                console.log(`${symbol}: Insufficient candle data for momentum validation`);
+                return false; // Conservative approach - reject if no data
+            }
+            
+            if (tradeDirection === 'SHORT') {
+                // For SHORT traders: Current price should be higher than ALL highs of last 5 days
+                const maxHigh = Math.max(...recentCandles.map(candle => candle.high));
+                const isNewHigh = currentPrice > maxHigh;
+                
+                console.log(`${symbol} SHORT momentum check: Current $${currentPrice.toFixed(6)} vs Max High $${maxHigh.toFixed(6)} - ${isNewHigh ? '✅ NEW HIGH' : '❌ NOT NEW HIGH'}`);
+                return isNewHigh;
+                
+            } else if (tradeDirection === 'LONG') {
+                // For LONG traders: Current price should be lower than ALL lows of last 5 days
+                const minLow = Math.min(...recentCandles.map(candle => candle.low));
+                const isNewLow = currentPrice < minLow;
+                
+                console.log(`${symbol} LONG momentum check: Current $${currentPrice.toFixed(6)} vs Min Low $${minLow.toFixed(6)} - ${isNewLow ? '✅ NEW LOW' : '❌ NOT NEW LOW'}`);
+                return isNewLow;
+            }
+            
+            return false;
+        } catch (error) {
+            console.log(`${symbol}: Error validating momentum:`, error.message);
+            return false; // Conservative approach - reject on error
+        }
+    }
     async getFilteredGainersAdvanced(minPercentage = 50, minPrice = 0.01, minAge = 30, limit = 50) {
         try {
             console.log(`Filtering gainers: min ${minPercentage}%, min price $${minPrice}, min age ${minAge} days`);

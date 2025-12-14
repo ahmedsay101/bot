@@ -8,9 +8,10 @@ class Controller {
         this.traders = [];
         this.maxTraders = maxTraders;
         this.maxLevels = 10; // Maximum number of price levels per trader
-        this.levelPercentage = 10; // Percentage gap between levels (10% = 1.1x for LONG, 0.9x for SHORT)
+        this.levelPercentage = 20; // Percentage gap between levels (10% = 1.1x for LONG, 0.9x for SHORT)
         this.minContractPrice = 0.01;
         this.minContractDays = 30;
+        this.minPercentage = 50; // Minimum percentage change required for trader creation
         this.testingMode = testingMode;
         this.tickerData = new Map();
         this.hasLoggedTickerData = false;
@@ -133,20 +134,33 @@ class Controller {
                     const percentage = parseFloat(ticker.priceChangePercent);
                     const price = parseFloat(ticker.price);
                     
-                    return percentage >= 30 && // 30% minimum change
+                    return percentage >= this.minPercentage && // Configurable minimum change
                            price >= this.minContractPrice && // Minimum price
                            !this.traders.find(t => t.symbol === ticker.symbol); // Not already trading
                 })
                 .sort((a, b) => parseFloat(b.priceChangePercent) - parseFloat(a.priceChangePercent))
                 .slice(0, 3); // Top 3 candidates
             
-            console.log(`📊 Found ${candidates.length} WebSocket candidates meeting 30% criteria`);
+            console.log(`📊 Found ${candidates.length} WebSocket candidates meeting ${this.minPercentage}% criteria`);
             
             if (candidates.length > 0) {
                 for (const candidate of candidates) {
                     if (this.traders.length >= this.maxTraders) break;
                     
                     console.log(`🎯 Attempting to create trader for ${candidate.symbol}: ${candidate.priceChangePercent}%`);
+                    
+                    // Validate momentum before creating trader
+                    const currentPrice = parseFloat(candidate.price);
+                    const tradeDirection = 'SHORT'; // Default for gainers
+                    
+                    const momentumValid = await this.service.validateMomentum(candidate.symbol, currentPrice, tradeDirection);
+                    
+                    if (!momentumValid) {
+                        console.log(`❌ ${candidate.symbol}: Failed momentum validation - not at new ${tradeDirection === 'SHORT' ? 'high' : 'low'}`);
+                        continue;
+                    }
+                    
+                    console.log(`✅ ${candidate.symbol}: Momentum validation passed - creating trader`);
                     
                     const traderConfig = {
                         symbol: candidate.symbol,
@@ -157,7 +171,7 @@ class Controller {
                         contractAge: 30, // Default age since WebSocket doesn't provide this
                         usdtAmount: 10,
                         takeProfit: 10,
-                        tradeDirection: 'SHORT',
+                        tradeDirection: tradeDirection,
                         testingMode: this.testingMode
                     };
                     
@@ -280,19 +294,29 @@ class Controller {
         return true;
     }
 
+    setMinPercentage(newMinPercentage) {
+        if (newMinPercentage < 0 || newMinPercentage > 100) {
+            console.log(`Invalid minimum percentage: ${newMinPercentage}%. Must be between 0 and 100.`);
+            return false;
+        }
+        this.minPercentage = newMinPercentage;
+        console.log(`Minimum percentage updated to: ${this.minPercentage}%`);
+        return true;
+    }
+
     async getFilteredGainers() {
         try {
             console.log('🔍 Fetching and filtering gainers...');
             
             // Use the new API method with our controller settings
             const filteredGainers = await this.service.getFilteredGainersAdvanced(
-                30, // minimum percentage (50% as per requirements)
+                this.minPercentage, // minimum percentage
                 this.minContractPrice,
                 this.minContractDays,
                 100 // limit for initial search
             );
             
-            console.log(`✅ Found ${filteredGainers.length} gainers meeting criteria (>50%, >$${this.minContractPrice}, >${this.minContractDays} days old)`);
+            console.log(`✅ Found ${filteredGainers.length} gainers meeting criteria (>${this.minPercentage}%, >$${this.minContractPrice}, >${this.minContractDays} days old)`);
             
             // Log the top gainers that meet criteria for debugging
             if (filteredGainers.length > 0) {
@@ -318,7 +342,7 @@ class Controller {
                     const percentage = parseFloat(gainer.priceChangePercent);
                     const price = parseFloat(gainer.price || gainer.lastPrice);
                     
-                    const meetsPercentage = percentage >= 50;
+                    const meetsPercentage = percentage >= this.minPercentage;
                     const meetsPrice = price >= this.minContractPrice;
                     // Skip contract age check for now as it may not be available
                     
@@ -348,7 +372,7 @@ class Controller {
             
             if (filteredGainers.length === 0) {
                 console.log('⚠️  No gainers meet the criteria for trader creation');
-                console.log('🔍 Criteria: >50% gain, >$' + this.minContractPrice + ', >' + this.minContractDays + ' days old');
+                console.log(`🔍 Criteria: >${this.minPercentage}% gain, >$${this.minContractPrice}, >${this.minContractDays} days old`);
                 return;
             }
 
@@ -370,6 +394,19 @@ class Controller {
                 
                 console.log(`Attempting to create trader for ${gainer.symbol}: ${gainer.priceChangePercent}% gain, $${gainer.price}, ${gainer.contractAge} days old`);
 
+                // Validate momentum before creating trader
+                const currentPrice = parseFloat(gainer.price || gainer.lastPrice) || 0;
+                const tradeDirection = 'SHORT'; // For gainers, we use SHORT direction
+                
+                const momentumValid = await this.service.validateMomentum(gainer.symbol, currentPrice, tradeDirection);
+                
+                if (!momentumValid) {
+                    console.log(`❌ ${gainer.symbol}: Failed momentum validation - not at new high, skipping...`);
+                    continue;
+                }
+                
+                console.log(`✅ ${gainer.symbol}: Momentum validation passed - creating trader`);
+
                 // Create trader configuration
                 // For gainers (positive momentum), use SHORT to profit from potential reversal
                 // For high gains, we expect a pullback, so SHORT is more appropriate
@@ -382,7 +419,7 @@ class Controller {
                     contractAge: parseInt(gainer.contractAge) || 0,
                     usdtAmount: 10,  // $10 USDT per transaction level
                     takeProfit: 10,  // 10% take profit target
-                    tradeDirection: 'SHORT',  // SHORT high-momentum gainers for reversal profits
+                    tradeDirection: tradeDirection,  // SHORT high-momentum gainers for reversal profits
                     testingMode: this.testingMode
                 };
 
