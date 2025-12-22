@@ -15,12 +15,13 @@ class Trader {
         this.contractAge = parseInt(config.contractAge) || 0;
         
         // Trading configuration
-        this.usdtAmount = config.usdtAmount || 10;  // USDT amount per order (not base asset)
+        this.usdtAmount = config.usdtAmount || 5;  // USDT amount per order (not base asset)
         this.levelPercentage = this.controller.levelPercentage;  // Percentage gap between levels
         this.maxLevels = this.controller.maxLevels;  // Maximum number of levels
         this.takeProfit = config.takeProfit || 10;  // Take profit percentage
         this.testingMode = config.testingMode !== undefined ? config.testingMode : true;
         this.tradeDirection = config.tradeDirection || 'SHORT';  // 'LONG' or 'SHORT'
+        this.orderValidation = config.orderValidation; // Store validation results for precision
         
         // Trading state - Price-based levels
         this.transactions = [];              // All transactions for this trader
@@ -154,14 +155,19 @@ class Trader {
 
     // Create a new transaction
     createTransaction(priceLevel) {
+        console.log(`🚨 TRADER DEBUG: createTransaction called for ${this.symbol} at price ${priceLevel}`);
+        console.log(`🚨 TRADER DEBUG: testingMode: ${this.testingMode}, transactions.length: ${this.transactions.length}`);
+        
         try {
             const { Transaction } = require('./Transaction');
+            console.log(`🚨 TRADER DEBUG: Transaction class loaded successfully`);
             
             // Use the provided price level instead of current market price
             const transactionPrice = priceLevel;
             
             // Calculate base asset amount from USDT amount
             const baseAssetAmount = this.usdtAmount / transactionPrice;
+            console.log(`💰 ${this.symbol}: Transaction calculation - usdtAmount: ${this.usdtAmount}, price: ${transactionPrice}, baseAssetAmount: ${baseAssetAmount}`);
             
             // Determine transaction side based on trade direction
             const transactionSide = this.tradeDirection === 'SHORT' ? 'SELL' : 'BUY';
@@ -180,8 +186,10 @@ class Trader {
                 price: transactionPrice,
                 priceLevel: priceLevel,   // Store the price level instead of percentage
                 levelIndex: levelIndex,   // Store the level index
+                startPrice: this.startPrice, // Add starting price for percentage calculation
                 side: transactionSide,  // BUY for LONG, SELL for SHORT
                 orderType: orderType,    // MARKET for immediate entry, LIMIT for price levels
+                orderValidation: this.orderValidation, // Pass validation results for precision
                 testingMode: this.testingMode
             });
 
@@ -213,6 +221,18 @@ class Trader {
         try {
             console.log(`${this.symbol}: Pre-placing LIMIT orders for remaining ${this.priceLevels.length - 1} levels...`);
             
+            // Get precision requirements for this symbol
+            let requirements = this.orderValidation?.requirements;
+            if (!requirements) {
+                // Fallback: get requirements from API if not available
+                const apiService = this.getApiService();
+                requirements = await apiService.getMinimumOrderRequirements(this.symbol);
+                if (!requirements) {
+                    console.log(`${this.symbol}: Unable to get precision requirements for LIMIT orders`);
+                    return;
+                }
+            }
+            
             // Create pending limit orders for all price levels except the first one (already executed)
             for (let i = 1; i < this.priceLevels.length; i++) {
                 const priceLevel = this.priceLevels[i];
@@ -223,12 +243,19 @@ class Trader {
                 
                 try {
                     const apiService = this.getApiService();
+                    
+                    // Use API service's proper step size rounding method (same as in validateMinimumOrderSize)
+                    const roundedQuantity = apiService.roundToStepSize(baseAssetAmount, requirements.stepSize, requirements.quantityPrecision);
+                    const roundedPrice = apiService.roundToStepSize(priceLevel, requirements.tickSize, requirements.pricePrecision);
+                    
+                    console.log(`📏 ${this.symbol}: Level ${i} precision - Quantity: ${baseAssetAmount} → ${roundedQuantity} (stepSize: ${requirements.stepSize}), Price: ${priceLevel} → ${roundedPrice} (tickSize: ${requirements.tickSize})`);
+                    
                     const limitOrder = await apiService.order({
                         symbol: this.symbol,
                         side: transactionSide,
                         type: 'LIMIT',
-                        quantity: baseAssetAmount.toFixed(8),
-                        price: priceLevel.toFixed(8),
+                        quantity: roundedQuantity.toString(),
+                        price: roundedPrice.toString(),
                         timeInForce: 'GTC'  // Good Till Cancelled
                     });
                     
@@ -268,24 +295,40 @@ class Trader {
 
     // Calculate average price of all open positions (local calculation)
     calculateAveragePrice() {
-        const openTransactions = this.transactions.filter(t => t.status === 'FILLED' || t.status === 'OPEN');
+        // Only count FILLED transactions, not PENDING or CREATED ones
+        const openTransactions = this.transactions.filter(t => t.status === 'FILLED');
+        
+        console.log(`📊 ${this.symbol}: Calculating average price - Total transactions: ${this.transactions.length}, FILLED transactions: ${openTransactions.length}`);
+        
+        // Debug: Show all transaction statuses
+        if (this.transactions.length > 0) {
+            console.log(`📊 ${this.symbol}: Transaction statuses:`);
+            this.transactions.forEach((t, index) => {
+              console.log(`  ${index + 1}. ${t.symbol} ${t.side} ${t.amount} - Status: ${t.status}, ExecutedAmount: ${t.executedAmount}, Price: ${t.executedPrice}`);
+            });
+        }
         
         if (openTransactions.length === 0) {
             this.averagePrice = 0;
             this.totalPosition = 0;
+            console.log(`⚠️ ${this.symbol}: No FILLED transactions found - averagePrice set to 0`);
             return;
         }
 
         let totalValue = 0;
         let totalAmount = 0;
 
-        openTransactions.forEach(transaction => {
-            totalValue += transaction.executedPrice * transaction.executedAmount;
+        openTransactions.forEach((transaction, index) => {
+            const value = transaction.executedPrice * transaction.executedAmount;
+            totalValue += value;
             totalAmount += transaction.executedAmount;
+            console.log(`  ${index + 1}. ${transaction.symbol}: ${transaction.executedAmount} × $${transaction.executedPrice} = $${value.toFixed(2)}`);
         });
 
         this.averagePrice = totalValue / totalAmount;
         this.totalPosition = totalAmount;
+        
+        console.log(`✅ ${this.symbol}: Average price calculated - $${this.averagePrice.toFixed(6)} (Position: ${this.totalPosition})`);
     }
 
     // Get average price from Binance positionRisk endpoint
@@ -372,7 +415,7 @@ class Trader {
         if (takeProfitHit) {
             console.log(`${this.symbol}: ${this.tradeDirection} Take profit hit! Current: $${currentPriceValue}, Target: $${this.takeProfitPrice.toFixed(6)}`);
             await this.closeAllPositions();
-            this.destroy();
+            await this.destroy();
             return true;
         }
         
@@ -381,24 +424,163 @@ class Trader {
 
     // Close all open positions
     async closeAllPositions() {
-        console.log(`${this.symbol}: Closing all positions for take profit`);
-        
-        const openTransactions = this.transactions.filter(t => t.status === 'FILLED' || t.status === 'OPEN');
-        
-        // Close all positions concurrently
-        const closePromises = openTransactions.map(async (transaction) => {
-            const success = await transaction.close();
-            if (success) {
-                this.successfulTrades++;
+        try {
+            console.log(`${this.symbol}: Closing all positions for take profit`);
+            
+            // Step 1: Cancel all pending LIMIT orders on Binance
+            console.log(`${this.symbol}: Step 1 - Cancelling all pending orders...`);
+            try {
+                await this.cancelAllOrders();
+            } catch (cancelError) {
+                console.error(`${this.symbol}: Error cancelling orders:`, cancelError.message);
+                // Continue even if cancel fails
             }
-            return success;
-        });
+            
+            // Step 2: Close the entire position on Binance with a single MARKET order
+            console.log(`${this.symbol}: Step 2 - Closing position on Binance...`);
+            let binanceClosedSuccess = false;
+            try {
+                binanceClosedSuccess = await this.closePositionOnBinance();
+            } catch (closeError) {
+                console.error(`${this.symbol}: Error closing position:`, closeError.message);
+                // Continue to mark local transactions as closed
+            }
+            
+            if (binanceClosedSuccess || this.testingMode) {
+                // Step 3: Mark all local transactions as CLOSED
+                console.log(`${this.symbol}: Step 3 - Marking local transactions as CLOSED...`);
+                const openTransactions = this.transactions.filter(t => t.status === 'FILLED' || t.status === 'OPEN');
+                
+                openTransactions.forEach(transaction => {
+                    transaction.status = 'CLOSED';
+                    transaction.closedAt = new Date();
+                    console.log(`${this.symbol}: Transaction ${transaction.id} marked as CLOSED`);
+                });
+                
+                this.successfulTrades += openTransactions.length;
+            } else {
+                console.log(`⚠️ ${this.symbol}: Failed to close position on Binance - keeping local transactions as FILLED`);
+            }
 
-        await Promise.all(closePromises);
+            // Calculate final profit
+            this.calculateProfit();
+            console.log(`${this.symbol}: Final profit: ${this.profit.toFixed(2)}`);
+        } catch (error) {
+            console.error(`${this.symbol}: Error in closeAllPositions:`, error);
+            throw error;
+        }
+    }
 
-        // Calculate final profit
-        this.calculateProfit();
-        console.log(`${this.symbol}: Final profit: ${this.profit.toFixed(2)}`);
+    // Cancel all active orders on Binance
+    async cancelAllOrders() {
+        if (this.testingMode) {
+            console.log(`${this.symbol}: Testing mode - skipping order cancellation`);
+            return;
+        }
+
+        if (this.activeOrders.size === 0) {
+            console.log(`${this.symbol}: No active orders to cancel`);
+            return;
+        }
+
+        try {
+            const apiService = this.getApiService();
+            const orderIds = Array.from(this.activeOrders.keys());
+            
+            console.log(`${this.symbol}: Attempting to cancel ${orderIds.length} active orders on Binance...`);
+            console.log(`${this.symbol}: Order IDs:`, orderIds);
+            
+            if (orderIds.length > 0) {
+                try {
+                    // Try batch cancel first
+                    const result = await apiService.cancelOrders({
+                        symbol: this.symbol,
+                        orderIds: orderIds
+                    });
+                    
+                    console.log(`✅ ${this.symbol}: Successfully cancelled ${orderIds.length} orders in batch`);
+                } catch (batchError) {
+                    console.log(`⚠️ ${this.symbol}: Batch cancel failed (${batchError.message}), trying individual cancellations...`);
+                    
+                    // If batch fails, try cancelling orders individually
+                    let successCount = 0;
+                    let failCount = 0;
+                    
+                    for (const orderId of orderIds) {
+                        try {
+                            await apiService.cancelOrder({
+                                symbol: this.symbol,
+                                orderId: orderId
+                            });
+                            successCount++;
+                            console.log(`✅ ${this.symbol}: Cancelled order ${orderId}`);
+                        } catch (individualError) {
+                            failCount++;
+                            // Order might already be filled or cancelled
+                            console.log(`⚠️ ${this.symbol}: Failed to cancel order ${orderId}: ${individualError.message}`);
+                        }
+                    }
+                    
+                    console.log(`${this.symbol}: Individual cancellation results - Success: ${successCount}, Failed: ${failCount}`);
+                }
+                
+                // Clear tracking maps
+                this.activeOrders.clear();
+                this.pendingLimitOrders.clear();
+            }
+        } catch (error) {
+            console.error(`❌ ${this.symbol}: Error in cancelAllOrders:`, error.message);
+            // Don't throw - we want to continue with closing positions even if cancel fails
+        }
+    }
+
+    // Close the entire position on Binance with a single MARKET order
+    async closePositionOnBinance() {
+        if (this.testingMode || this.totalPosition === 0) {
+            console.log(`${this.symbol}: No position to close on Binance (Testing: ${this.testingMode}, Position: ${this.totalPosition})`);
+            return true;
+        }
+
+        try {
+            const apiService = this.getApiService();
+            
+            // Determine the closing side (opposite of our position)
+            // SHORT position needs BUY to close, LONG position needs SELL to close
+            const closingSide = this.tradeDirection === 'SHORT' ? 'BUY' : 'SELL';
+            
+            // Get precision requirements
+            let requirements = this.orderValidation?.requirements;
+            if (!requirements) {
+                requirements = await apiService.getMinimumOrderRequirements(this.symbol);
+            }
+
+            // Round position size to proper precision
+            const roundedQuantity = apiService.roundToStepSize(
+                this.totalPosition, 
+                requirements.stepSize, 
+                requirements.quantityPrecision
+            );
+
+            console.log(`${this.symbol}: Closing ${this.tradeDirection} position on Binance - ${closingSide} ${roundedQuantity} at MARKET price...`);
+            
+            const closeOrder = await apiService.order({
+                symbol: this.symbol,
+                side: closingSide,
+                type: 'MARKET',
+                quantity: roundedQuantity.toString()
+            });
+
+            if (closeOrder && closeOrder.orderId) {
+                console.log(`✅ ${this.symbol}: Position closed on Binance - Order ID: ${closeOrder.orderId}`);
+                return true;
+            } else {
+                console.log(`❌ ${this.symbol}: Failed to close position on Binance - no order ID returned`);
+                return false;
+            }
+        } catch (error) {
+            console.log(`❌ ${this.symbol}: Error closing position on Binance:`, error.message);
+            return false;
+        }
     }
 
     // Calculate total profit from all transactions
@@ -569,10 +751,7 @@ class Trader {
     // Check individual order status and sync with our system
     async checkSingleOrder(apiService, orderId, orderInfo) {
         try {
-            const orderStatus = await apiService.getOrder({
-                symbol: this.symbol,
-                orderId: orderId
-            });
+            const orderStatus = await apiService.getOrderByOrderId(this.symbol, orderId);
             
             if (!orderStatus) return;
             
@@ -609,6 +788,27 @@ class Trader {
     // Handle filled orders - create transaction records
     async handleOrderFilled(orderId, orderStatus, orderInfo) {
         try {
+            // Check if we already have a transaction for this orderId
+            const existingTransaction = this.transactions.find(t => t.orderId === orderId);
+            if (existingTransaction) {
+                console.log(`⚠️ ${this.symbol}: Transaction for order ${orderId} already exists, updating instead of creating duplicate`);
+                
+                // Update existing transaction instead of creating duplicate
+                if (existingTransaction.status !== 'FILLED') {
+                    existingTransaction.status = 'FILLED';
+                    existingTransaction.executedPrice = parseFloat(orderStatus.price || orderStatus.avgPrice);
+                    existingTransaction.executedAmount = parseFloat(orderStatus.executedQty);
+                    existingTransaction.filledAt = new Date(orderStatus.updateTime);
+                    
+                    console.log(`✅ ${this.symbol}: Updated existing transaction ${orderId} - ${existingTransaction.side} ${existingTransaction.executedAmount} at $${existingTransaction.executedPrice}`);
+                    
+                    // Update position tracking
+                    this.calculateAveragePrice();
+                    this.calculateTakeProfitPrice();
+                }
+                return;
+            }
+
             const { Transaction } = require('./Transaction');
             
             // Create transaction record for filled order
@@ -619,9 +819,11 @@ class Trader {
                 price: parseFloat(orderStatus.price),
                 priceLevel: orderInfo.priceLevel,
                 levelIndex: orderInfo.levelIndex,
+                startPrice: this.startPrice, // Add starting price for percentage calculation
                 side: orderInfo.side,
                 orderType: orderStatus.type,
-                testingMode: false
+                testingMode: false,
+                skipExecution: true  // Skip auto-execution since this order is already filled
             });
             
             // Set as already filled (since Binance executed it)
@@ -630,6 +832,8 @@ class Trader {
             transaction.executedAmount = parseFloat(orderStatus.executedQty);
             transaction.orderId = orderId;
             transaction.filledAt = new Date(orderStatus.updateTime);
+            
+            console.log(`📝 ${this.symbol}: Created transaction record for filled order - executedAmount: ${transaction.executedAmount}, status: ${transaction.status}`);
             
             // Add to our transaction list
             this.transactions.push(transaction);
@@ -721,10 +925,115 @@ class Trader {
         };
     }
 
+    // Fix obvious transaction issues (synchronous)
+    fixObviousTransactionIssues() {
+        console.log(`🔧 ${this.symbol}: FIXING obvious transaction issues`);
+        
+        let fixed = false;
+        
+        // Remove duplicate transactions (same orderId)
+        const orderIds = new Set();
+        const uniqueTransactions = [];
+        
+        this.transactions.forEach((transaction, index) => {
+            if (transaction.orderId) {
+                if (orderIds.has(transaction.orderId)) {
+                    console.log(`🔧 ${this.symbol}: Removing duplicate transaction ${index + 1} with orderId: ${transaction.orderId}`);
+                    fixed = true;
+                    return; // Skip this duplicate
+                }
+                orderIds.add(transaction.orderId);
+            }
+            uniqueTransactions.push(transaction);
+        });
+        
+        if (uniqueTransactions.length !== this.transactions.length) {
+            this.transactions = uniqueTransactions;
+            console.log(`🔧 ${this.symbol}: Removed ${this.transactions.length - uniqueTransactions.length} duplicate transactions`);
+            fixed = true;
+        }
+        
+        this.transactions.forEach((transaction, index) => {
+            // Fix FILLED transactions with 0 executedPrice
+            if (transaction.status === 'FILLED' && transaction.executedPrice === 0 && transaction.price > 0) {
+                console.log(`🔧 ${this.symbol}: Fixing FILLED transaction ${index + 1} - setting executedPrice from ${transaction.executedPrice} to ${transaction.price}`);
+                transaction.executedPrice = transaction.price;
+                fixed = true;
+            }
+            
+            // Fix FILLED transactions with 0 executedAmount  
+            if (transaction.status === 'FILLED' && transaction.executedAmount === 0 && transaction.amount > 0) {
+                console.log(`🔧 ${this.symbol}: Fixing FILLED transaction ${index + 1} - setting executedAmount from ${transaction.executedAmount} to ${transaction.amount}`);
+                transaction.executedAmount = transaction.amount;
+                fixed = true;
+            }
+            
+            // Convert FAILED transactions back to FILLED if they have valid data
+            if (transaction.status === 'FAILED' && transaction.orderId && transaction.amount > 0) {
+                console.log(`🔧 ${this.symbol}: Converting FAILED transaction ${index + 1} back to FILLED`);
+                transaction.status = 'FILLED';
+                transaction.executedPrice = transaction.executedPrice > 0 ? transaction.executedPrice : transaction.price;
+                transaction.executedAmount = transaction.executedAmount > 0 ? transaction.executedAmount : transaction.amount;
+                fixed = true;
+            }
+        });
+        
+        if (fixed) {
+            console.log(`✅ ${this.symbol}: Fixed transaction issues, recalculating average price`);
+            this.calculateAveragePrice();
+        }
+    }
+
+    // Force sync transaction statuses with Binance (emergency fix)
+    async forceSyncTransactions() {
+        console.log(`🚨 ${this.symbol}: FORCE SYNC - Checking transaction statuses`);
+        
+        for (const transaction of this.transactions) {
+            if (transaction.orderId && (transaction.status === 'PENDING' || transaction.status === 'FAILED' || (transaction.status === 'FILLED' && transaction.executedPrice === 0))) {
+                try {
+                    const apiService = this.getApiService();
+                    const orderStatus = await apiService.getOrderByOrderId(this.symbol, transaction.orderId);
+                    
+                    if (orderStatus) {
+                        console.log(`🔍 ${this.symbol}: Order ${transaction.orderId} status:`, orderStatus.status, `executedQty: ${orderStatus.executedQty}`);
+                        
+                        if (orderStatus.status === 'FILLED' && parseFloat(orderStatus.executedQty) > 0) {
+                            // Update the transaction directly
+                            transaction.status = 'FILLED';
+                            transaction.executedPrice = parseFloat(orderStatus.price || orderStatus.avgPrice || transaction.price);
+                            transaction.executedAmount = parseFloat(orderStatus.executedQty);
+                            transaction.filledAt = new Date(orderStatus.updateTime);
+                            
+                            console.log(`✅ ${this.symbol}: FIXED transaction ${transaction.orderId} - price: ${transaction.executedPrice}, amount: ${transaction.executedAmount}`);
+                        }
+                    }
+                } catch (error) {
+                    console.log(`❌ ${this.symbol}: Error syncing transaction ${transaction.orderId}:`, error.message);
+                }
+            }
+        }
+        
+        // Recalculate after sync
+        this.calculateAveragePrice();
+    }
+
     // Get detailed trading summary with real-time data
     getTradingSummary() {
+        // Debug: Show current transaction states
+        console.log(`🔍 ${this.symbol}: getTradingSummary - Transaction states:`);
+        this.transactions.forEach((t, i) => {
+            console.log(`  ${i + 1}. Status: ${t.status}, ExecutedAmount: ${t.executedAmount}, ExecutedPrice: ${t.executedPrice}, OrderId: ${t.orderId}`);
+        });
+        console.log(`🔍 ${this.symbol}: averagePrice: ${this.averagePrice}, totalPosition: ${this.totalPosition}`);
+
         const currentData = this.getCurrentPrice();
         const currentPrice = currentData ? parseFloat(currentData.price) : 0;
+        
+        // Force recalculate average price to ensure it's up to date
+        this.calculateAveragePrice();
+        
+        // Force sync transaction statuses if needed
+        this.fixObviousTransactionIssues();
         
         // Calculate real-time total profit from all transactions
         const realTimeTotalProfit = this.transactions.reduce((total, transaction) => {
@@ -752,7 +1061,8 @@ class Trader {
             executedLevels: Array.from(this.executedLevels).sort((a, b) => a - b).map(level => `$${level.toFixed(4)}`),
             currentLevelIndex: this.currentLevelIndex,
             averagePrice: this.averagePrice,
-            totalPosition: this.totalPosition,
+            totalPosition: this.totalPosition, // This should be the quantity, not dollar amount
+            positionValue: this.totalPosition * this.averagePrice, // Add position value in dollars
             takeProfitPrice: this.takeProfitPrice,
             profit: this.profit,
             realTimeTotalProfit: realTimeTotalProfit,
@@ -772,9 +1082,34 @@ class Trader {
     }
 
     // Cleanup when removing trader
-    destroy() {
-        this.status = 'DESTROYED';
-        console.log(`Trader ${this.symbol} destroyed`);
+    async destroy() {
+        try {
+            console.log(`${this.symbol}: Destroying trader...`);
+            
+            // Stop order monitoring
+            try {
+                this.stopOrderMonitoring();
+            } catch (stopError) {
+                console.error(`${this.symbol}: Error stopping order monitoring:`, stopError.message);
+            }
+            
+            // Cancel any remaining orders (safety check)
+            try {
+                await this.cancelAllOrders();
+            } catch (cancelError) {
+                console.error(`${this.symbol}: Error in final cancelAllOrders:`, cancelError.message);
+            }
+            
+            // Mark trader as destroyed
+            this.status = 'DESTROYED';
+            
+            console.log(`✅ ${this.symbol}: Trader destroyed successfully`);
+        } catch (error) {
+            console.error(`${this.symbol}: Error in destroy:`, error);
+            // Still mark as destroyed even if there are errors
+            this.status = 'DESTROYED';
+            throw error;
+        }
     }
 }
 

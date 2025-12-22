@@ -165,6 +165,60 @@ app.get('/api/trader/:id', authenticate, (req, res) => {
     }
 });
 
+// Close trader - cancel all orders, close position, terminate
+app.post('/api/trader/:id/close', authenticate, async (req, res) => {
+    try {
+        const traderId = req.params.id;
+        console.log(`🛑 API: Close request for trader ID: ${traderId}`);
+        
+        const trader = controller.traders.find(t => t.id === traderId);
+        
+        if (!trader) {
+            console.log(`❌ Trader not found: ${traderId}`);
+            return res.status(404).json({success: false, message: "Trader not found"});
+        }
+
+        console.log(`🛑 API: Closing trader ${trader.symbol} (${traderId})...`);
+        
+        try {
+            // Close all positions and terminate
+            console.log(`🛑 Step 1: Calling closeAllPositions...`);
+            await trader.closeAllPositions();
+            
+            console.log(`🛑 Step 2: Calling destroy...`);
+            await trader.destroy();
+            
+            // Remove trader from controller
+            const index = controller.traders.findIndex(t => t.id === traderId);
+            if (index !== -1) {
+                controller.traders.splice(index, 1);
+                console.log(`✅ Trader ${trader.symbol} removed from controller (index: ${index})`);
+            }
+            
+            console.log(`✅ Successfully closed trader ${trader.symbol}`);
+            return res.status(200).json({
+                success: true,
+                message: `Trader ${trader.symbol} closed and terminated successfully`
+            });
+        } catch (closeError) {
+            console.error('❌ Error during trader close operations:', closeError);
+            console.error('❌ Error stack:', closeError.stack);
+            return res.status(500).json({
+                success: false, 
+                message: `Failed to close trader: ${closeError.message}`
+            });
+        }
+    }
+    catch(error) {
+        console.error('❌ Unexpected error in close endpoint:', error);
+        console.error('❌ Error stack:', error.stack);
+        return res.status(500).json({
+            success: false, 
+            message: `Unexpected error: ${error.message || "Something went wrong!"}`
+        });
+    }
+});
+
 // Legacy API for backwards compatibility
 app.get('/api', authenticate, (req, res) => {
     try {

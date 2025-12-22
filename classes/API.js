@@ -37,7 +37,7 @@ class API {
             getQuote: "/getQuote",
             klines: "/klines",
             ticker24hr: "/ticker/24hr",
-            positionRisk: "/positionRisk",
+            positionRisk: "/../v2/positionRisk", // v2 endpoint for position risk
         }
 
         this.createInstance();
@@ -136,10 +136,18 @@ class API {
         }
     }
 
-    async authenticatedDelete(url, body, query = []) {
+    async authenticatedDelete(url, params = {}) {
         try {
-            const payload = await this.getPayload(body);
-            const response = await this.instance.delete(url, {data: payload});
+            // Convert params object to query array format
+            const query = Object.keys(params).map(key => {
+                const obj = {};
+                obj[key] = params[key];
+                return obj;
+            });
+            
+            const queryString = await this.getQueryString(query);
+            const link = `${url}${queryString}`;
+            const response = await this.instance.delete(link);
             return response.data;
         }
         catch(error) {
@@ -173,6 +181,127 @@ class Service extends API {
             console.log(error);
             throw(error);
         }
+    }
+
+    // Get minimum order requirements for a specific symbol
+    async getMinimumOrderRequirements(symbol) {
+        try {
+            const exchangeInfo = await this.getInfo();
+            
+            if (!exchangeInfo || !exchangeInfo.symbols) {
+                throw new Error('Unable to fetch exchange info');
+            }
+            
+            const symbolInfo = exchangeInfo.symbols.find(s => s.symbol === symbol);
+            if (!symbolInfo) {
+                throw new Error(`Symbol ${symbol} not found in exchange info`);
+            }
+            
+            // Extract minimum order requirements
+            const minQtyFilter = symbolInfo.filters.find(f => f.filterType === 'LOT_SIZE');
+            const minNotionalFilter = symbolInfo.filters.find(f => f.filterType === 'MIN_NOTIONAL');
+            const marketLotSizeFilter = symbolInfo.filters.find(f => f.filterType === 'MARKET_LOT_SIZE');
+            const priceFilter = symbolInfo.filters.find(f => f.filterType === 'PRICE_FILTER');
+            
+            // Calculate precision from step sizes
+            const quantityPrecision = minQtyFilter ? this.getPrecisionFromStepSize(minQtyFilter.stepSize) : 8;
+            const pricePrecision = priceFilter ? this.getPrecisionFromStepSize(priceFilter.tickSize) : 8;
+            
+            return {
+                symbol: symbol,
+                baseAsset: symbolInfo.baseAsset,
+                quoteAsset: symbolInfo.quoteAsset,
+                minQty: minQtyFilter ? parseFloat(minQtyFilter.minQty) : 0,
+                maxQty: minQtyFilter ? parseFloat(minQtyFilter.maxQty) : 0,
+                stepSize: minQtyFilter ? parseFloat(minQtyFilter.stepSize) : 0,
+                minNotional: minNotionalFilter ? parseFloat(minNotionalFilter.minNotional || minNotionalFilter.notional) : 0,
+                marketMinQty: marketLotSizeFilter ? parseFloat(marketLotSizeFilter.minQty) : 0,
+                tickSize: priceFilter ? parseFloat(priceFilter.tickSize) : 0,
+                quantityPrecision: quantityPrecision,
+                pricePrecision: pricePrecision,
+                status: symbolInfo.status
+            };
+        } catch (error) {
+            console.log(`Error getting minimum order requirements for ${symbol}:`, error.message);
+            return null;
+        }
+    }
+    
+    // Validate if USDT amount can meet minimum trading requirements
+    async validateMinimumOrderSize(symbol, usdtAmount, currentPrice) {
+        try {
+            const requirements = await this.getMinimumOrderRequirements(symbol);
+            
+            if (!requirements) {
+                console.log(`${symbol}: Unable to get minimum order requirements`);
+                return false;
+            }
+            
+            // Check if symbol is active for trading
+            if (requirements.status !== 'TRADING') {
+                console.log(`${symbol}: Symbol status is ${requirements.status}, not TRADING`);
+                return false;
+            }
+            
+            // Calculate base asset amount we can buy with our USDT
+            const baseAssetAmount = usdtAmount / currentPrice;
+            
+            // Round values to correct precision
+            const roundedQuantity = this.roundToStepSize(baseAssetAmount, requirements.stepSize, requirements.quantityPrecision);
+            const roundedPrice = this.roundToStepSize(currentPrice, requirements.tickSize, requirements.pricePrecision);
+            
+            // Check minimum quantity requirement
+            if (roundedQuantity < requirements.minQty) {
+                console.log(`${symbol}: Order too small - Need ${requirements.minQty} ${requirements.baseAsset}, can only afford ${roundedQuantity.toFixed(requirements.quantityPrecision)}`);
+                return false;
+            }
+            
+            // Check market minimum quantity (for MARKET orders)
+            if (roundedQuantity < requirements.marketMinQty) {
+                console.log(`${symbol}: Market order too small - Need ${requirements.marketMinQty} ${requirements.baseAsset}, can only afford ${roundedQuantity.toFixed(requirements.quantityPrecision)}`);
+                return false;
+            }
+            
+            // Check minimum notional value
+            if (requirements.minNotional > 0 && usdtAmount < requirements.minNotional) {
+                console.log(`${symbol}: Order value too small - Need $${requirements.minNotional} USDT, only have $${usdtAmount}`);
+                return false;
+            }
+            
+            console.log(`${symbol}: ✅ Order size validation passed - $${usdtAmount} USDT = ${roundedQuantity.toFixed(requirements.quantityPrecision)} ${requirements.baseAsset} @ $${roundedPrice.toFixed(requirements.pricePrecision)}`);
+            return {
+                valid: true,
+                baseAssetAmount: roundedQuantity,
+                price: roundedPrice,
+                requirements
+            };
+            
+        } catch (error) {
+            console.log(`${symbol}: Error validating minimum order size:`, error.message);
+            return false;
+        }
+    }
+
+    // Calculate precision (decimal places) from step size
+    getPrecisionFromStepSize(stepSize) {
+        const stepStr = stepSize.toString();
+        if (stepStr.indexOf('.') === -1) return 0;
+        const decimalPart = stepStr.split('.')[1];
+        // Count trailing zeros and total length
+        const trailingZeros = decimalPart.match(/0*$/)[0].length;
+        return decimalPart.length - trailingZeros;
+    }
+    
+    // Round value to correct precision based on step size
+    roundToStepSize(value, stepSize, precision) {
+        if (stepSize <= 0) return parseFloat(value.toFixed(precision));
+        
+        // Use proper floating point math to avoid precision issues
+        const factor = 1 / stepSize;
+        const rounded = Math.floor(value * factor) / factor;
+        
+        // Ensure the result respects the precision by using toFixed and parseFloat
+        return parseFloat(rounded.toFixed(precision));
     }
 
     async getOrderLimits() {

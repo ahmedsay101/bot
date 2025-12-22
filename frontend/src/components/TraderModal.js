@@ -197,7 +197,7 @@ const TraderModal = ({ traderId, dashboardData, isOpen, onClose }) => {
                   {trader.transactions.map((transaction, index) => (
                     <tr key={transaction.id || index} className="border-t border-trading-border">
                       <td className="px-4 py-3 text-sm text-trading-text font-mono">
-                        {transaction.percentageLevel}%
+                        {transaction.percentageLevel}$
                       </td>
                       <td className="px-4 py-3 text-sm">
                         <span className={`px-2 py-1 rounded text-xs font-medium ${

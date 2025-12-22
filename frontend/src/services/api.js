@@ -94,6 +94,15 @@ class ApiService {
     }
   }
 
+  async closeTrader(traderId) {
+    try {
+      const response = await this.axios.post(`/api/trader/${traderId}/close`);
+      return response.data;
+    } catch (error) {
+      throw new Error(error.response?.data?.message || 'Failed to close trader');
+    }
+  }
+
   async toggleTradingMode(testingMode) {
     try {
       const response = await this.axios.put('/trading-mode', { testingMode });

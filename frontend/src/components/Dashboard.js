@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { TrendingUp, TrendingDown, BarChart3, Users, DollarSign, Activity, RefreshCw, Wifi, WifiOff } from 'lucide-react';
+import { TrendingUp, TrendingDown, BarChart3, Users, DollarSign, Activity, RefreshCw, Wifi, WifiOff, XCircle } from 'lucide-react';
 import api from '../services/api';
 import websocket from '../services/websocket';
 import TraderModal from './TraderModal';
@@ -15,6 +15,27 @@ const Dashboard = () => {
   const [lastUpdate, setLastUpdate] = useState(new Date());
   const [wsConnected, setWsConnected] = useState(false);
   const [useWebSocket, setUseWebSocket] = useState(true);
+  const [closingTrader, setClosingTrader] = useState(null);
+
+  const handleCloseTrader = async (e, traderId, symbol) => {
+    e.stopPropagation(); // Prevent card click
+    
+    if (!window.confirm(`Are you sure you want to close all positions and terminate trader ${symbol}?\n\nThis will:\n- Cancel all pending LIMIT orders\n- Close position on Binance\n- Terminate the trader`)) {
+      return;
+    }
+
+    setClosingTrader(traderId);
+    try {
+      await api.closeTrader(traderId);
+      // Refresh dashboard data
+      await fetchDashboardData();
+    } catch (error) {
+      console.error('Error closing trader:', error);
+      alert('Failed to close trader: ' + error.message);
+    } finally {
+      setClosingTrader(null);
+    }
+  };
 
   const fetchDashboardData = async () => {
     try {
@@ -198,6 +219,23 @@ const Dashboard = () => {
             {(trader.profitPercentage || 0) >= 0 ? '+' : ''}{(Number(trader.profitPercentage) || 0).toFixed(2)}%
           </p>
         </div>
+      </div>
+
+      <div className="mt-4 pt-3 border-t border-trading-border">
+        <button
+          onClick={(e) => handleCloseTrader(e, trader.id, trader.symbol)}
+          disabled={closingTrader === trader.id}
+          className="w-full px-4 py-2 bg-trading-red hover:bg-trading-red/80 disabled:bg-trading-red/50 text-white rounded-lg font-medium transition-colors flex items-center justify-center space-x-2"
+        >
+          {closingTrader === trader.id ? (
+            <>
+              <RefreshCw className="w-4 h-4 animate-spin" />
+              <span>Closing Position...</span>
+            </>
+          ) : (
+            <span>Close Position & Terminate</span>
+          )}
+        </button>
       </div>
 
       <div className="mt-4 pt-3 border-t border-trading-border">

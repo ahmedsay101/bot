@@ -3,19 +3,19 @@ const { Trader } = require('./Trader');
 const WebSocket = require('ws');
 
 class Controller {
-    constructor(maxTraders = 10, testingMode = true) {
+    constructor(maxTraders = 1, testingMode = false) {
         this.service = new Service("futures");
         this.traders = [];
         this.maxTraders = maxTraders;
         this.maxLevels = 10; // Maximum number of price levels per trader
         this.levelPercentage = 20; // Percentage gap between levels (10% = 1.1x for LONG, 0.9x for SHORT)
         this.minContractPrice = 0.01;
-        this.minContractDays = 30;
-        this.minPercentage = 50; // Minimum percentage change required for trader creation
-        this.testingMode = testingMode;
+        this.minContractDays = 5;
+        this.minPercentage = 30; // Minimum percentage change required for trader creation        this.skipValidationFilters = false; // Skip momentum and order size validation when true        this.testingMode = testingMode;
         this.tickerData = new Map();
         this.hasLoggedTickerData = false;
-        
+        this.testingMode = testingMode;
+        this.skipValidationFilters = true; // Skip momentum and order size validation when true
         // Pass controller reference to service for WebSocket data access
         this.service.controller = this;
         
@@ -128,6 +128,32 @@ class Controller {
             
             const tickers = Array.from(this.tickerData.values());
             
+            // Log analysis of top performers to understand rejection reasons
+            const topPerformers = tickers
+                .filter(ticker => Math.abs(parseFloat(ticker.priceChangePercent)) >= 20) // 20% minimum for analysis
+                .sort((a, b) => Math.abs(parseFloat(b.priceChangePercent)) - Math.abs(parseFloat(a.priceChangePercent)))
+                .slice(0, 10);
+            
+            console.log(`🔍 Analyzing top ${topPerformers.length} performers (>20% change):`);
+            topPerformers.forEach((ticker, index) => {
+                const percentage = parseFloat(ticker.priceChangePercent);
+                const price = parseFloat(ticker.price);
+                const existingTrader = this.traders.find(t => t.symbol === ticker.symbol);
+                
+                let rejectionReason = '';
+                if (Math.abs(percentage) < this.minPercentage) {
+                    rejectionReason = `Below ${this.minPercentage}% threshold`;
+                } else if (price < this.minContractPrice) {
+                    rejectionReason = `Price $${price} below min $${this.minContractPrice}`;
+                } else if (existingTrader) {
+                    rejectionReason = 'Already trading this symbol';
+                } else {
+                    rejectionReason = '✅ Passed initial filters';
+                }
+                
+                console.log(`  ${index + 1}. ${ticker.symbol}: ${percentage.toFixed(2)}% ($${price}) - ${rejectionReason}`);
+            });
+            
             // Filter for potential trading opportunities directly from WebSocket data
             const candidates = tickers
                 .filter(ticker => {
@@ -144,42 +170,49 @@ class Controller {
             console.log(`📊 Found ${candidates.length} WebSocket candidates meeting ${this.minPercentage}% criteria`);
             
             if (candidates.length > 0) {
+                console.log(`🏁 Processing ${candidates.length} WebSocket candidates that passed initial filters`);
+                
                 for (const candidate of candidates) {
                     if (this.traders.length >= this.maxTraders) break;
                     
-                    console.log(`🎯 Attempting to create trader for ${candidate.symbol}: ${candidate.priceChangePercent}%`);
+                    console.log(`\n🎯 Evaluating ${candidate.symbol}: ${candidate.priceChangePercent}% change`);
                     
-                    // Validate momentum before creating trader
-                    const currentPrice = parseFloat(candidate.price);
                     const tradeDirection = 'SHORT'; // Default for gainers
+                    const usdtAmount = 5; // Default USDT amount per trade
                     
-                    const momentumValid = await this.service.validateMomentum(candidate.symbol, currentPrice, tradeDirection);
+                    // Use refactored validation function
+                    const validationResult = await this.validateTraderCandidate(candidate, usdtAmount, tradeDirection);
                     
-                    if (!momentumValid) {
-                        console.log(`❌ ${candidate.symbol}: Failed momentum validation - not at new ${tradeDirection === 'SHORT' ? 'high' : 'low'}`);
-                        continue;
+                    if (!validationResult) {
+                        continue; // Validation failed, skip to next candidate
                     }
                     
-                    console.log(`✅ ${candidate.symbol}: Momentum validation passed - creating trader`);
+                    // Use refactored trader creation function
+                    const trader = this.createTraderFromValidatedCandidate(candidate, usdtAmount, tradeDirection);
                     
-                    const traderConfig = {
-                        symbol: candidate.symbol,
-                        percentage: parseFloat(candidate.priceChangePercent),
-                        price: parseFloat(candidate.price),
-                        priceChange: parseFloat(candidate.priceChange || 0),
-                        volume: parseFloat(candidate.volume || 0),
-                        contractAge: 30, // Default age since WebSocket doesn't provide this
-                        usdtAmount: 10,
-                        takeProfit: 10,
-                        tradeDirection: tradeDirection,
-                        testingMode: this.testingMode
-                    };
-                    
-                    const trader = this.addTrader(traderConfig);
-                    if (trader) {
-                        console.log(`✅ Created trader for ${candidate.symbol} (${candidate.priceChangePercent}%)`);
+                    if (!trader) {
+                        console.log(`❌ ${candidate.symbol}: FAILED - Trader creation failed`);
                     }
                 }
+            } else {
+                console.log(`🚨 No WebSocket candidates found. Top movers analysis:`);
+                const topMovers = tickers
+                    .sort((a, b) => Math.abs(parseFloat(b.priceChangePercent)) - Math.abs(parseFloat(a.priceChangePercent)))
+                    .slice(0, 5);
+                    
+                topMovers.forEach((ticker, index) => {
+                    const percentage = parseFloat(ticker.priceChangePercent);
+                    const price = parseFloat(ticker.price);
+                    const existingTrader = this.traders.find(t => t.symbol === ticker.symbol);
+                    
+                    let reason = '';
+                    if (Math.abs(percentage) < this.minPercentage) reason = `Below ${this.minPercentage}% threshold`;
+                    else if (price < this.minContractPrice) reason = `Price too low ($${price})`;
+                    else if (existingTrader) reason = 'Already have trader';
+                    else reason = 'Would need further validation';
+                    
+                    console.log(`  ${index + 1}. ${ticker.symbol}: ${percentage.toFixed(2)}% - ${reason}`);
+                });
             }
         } catch (error) {
             console.log('❌ Error checking WebSocket opportunities:', error.message);
@@ -191,18 +224,32 @@ class Controller {
 
         console.log(`\n=== REAL-TIME TRADER SUMMARIES (${this.testingMode ? 'TESTING' : 'LIVE'} MODE) ===`);
         this.traders.forEach((trader, index) => {
-            const summary = trader.getTradingSummary();
-            console.log(`${index + 1}. ${summary.symbol}: ${summary.startPercentage}% → ${summary.highestPercentage.toFixed(1)}% | Current: $${summary.currentPrice.toFixed(6)}`);
-            console.log(`   Transactions: ${summary.currentTransactions} | RT Profit: ${summary.realTimeTotalProfit.toFixed(2)} | Profit %: ${summary.profitPercentage.toFixed(2)}% | Status: ${summary.status}`);
-            
-            if (summary.executedLevels.length > 0) {
-                console.log(`   Levels: [${summary.executedLevels.join('%, ')}%] | Avg: $${summary.averagePrice.toFixed(6)} | TP: $${summary.takeProfitPrice.toFixed(6)} | TP Distance: ${summary.takeProfitDistance.toFixed(2)}%`);
-            }
+            try {
+                const summary = trader.getTradingSummary();
+                if (!summary) return;
+                
+                const currentPrice = summary.currentPrice || 0;
+                const highestPercentage = summary.highestPercentage || 0;
+                const realTimeTotalProfit = summary.realTimeTotalProfit || 0;
+                const profitPercentage = summary.profitPercentage || 0;
+                const averagePrice = summary.averagePrice || 0;
+                const takeProfitPrice = summary.takeProfitPrice || 0;
+                const takeProfitDistance = summary.takeProfitDistance || 0;
+                
+                console.log(`${index + 1}. ${summary.symbol}: ${summary.startPercentage}% → ${highestPercentage.toFixed(1)}% | Current: $${currentPrice.toFixed(6)}`);
+                console.log(`   Transactions: ${summary.currentTransactions || 0} | RT Profit: ${realTimeTotalProfit.toFixed(2)} | Profit %: ${profitPercentage.toFixed(2)}% | Status: ${summary.status || 'UNKNOWN'}`);
+                
+                if (summary.executedLevels && summary.executedLevels.length > 0) {
+                    console.log(`   Levels: [${summary.executedLevels.join('%, ')}%] | Avg: $${averagePrice.toFixed(6)} | TP: $${takeProfitPrice.toFixed(6)} | TP Distance: ${takeProfitDistance.toFixed(2)}%`);
+                }
 
-            // Show individual transaction performance (only if there are transactions)
-            if (summary.transactions.length > 0) {
-                const profitableCount = summary.transactions.filter(t => t.currentProfit > 0).length;
-                console.log(`   Transaction P&L: ${profitableCount}/${summary.transactions.length} profitable`);
+                // Show individual transaction performance (only if there are transactions)
+                if (summary.transactions && summary.transactions.length > 0) {
+                    const profitableCount = summary.transactions.filter(t => t && t.currentProfit > 0).length;
+                    console.log(`   Transaction P&L: ${profitableCount}/${summary.transactions.length} profitable`);
+                }
+            } catch (error) {
+                console.log(`${index + 1}. Error displaying summary for trader ${trader?.symbol || 'UNKNOWN'}:`, error.message);
             }
         });
     }
@@ -303,6 +350,93 @@ class Controller {
         console.log(`Minimum percentage updated to: ${this.minPercentage}%`);
         return true;
     }
+    
+    setSkipValidationFilters(skipFilters) {
+        this.skipValidationFilters = skipFilters;
+        console.log(`Validation filters ${skipFilters ? 'DISABLED' : 'ENABLED'}. ${skipFilters ? '⚠️ All momentum and order size validations will be skipped!' : '✅ Normal validation process restored.'}`);
+        return true;
+    }
+
+    /**
+     * Validates a trading candidate based on momentum and order requirements
+     * @param {Object} candidate - Trading candidate object
+     * @param {number} usdtAmount - USDT amount for the trade
+     * @param {string} tradeDirection - 'LONG' or 'SHORT'
+     * @returns {Object|null} Returns validation results or null if validation fails
+     */
+    async validateTraderCandidate(candidate, usdtAmount, tradeDirection) {
+        try {
+            const candidateInfo = `${candidate.symbol}: ${candidate.priceChangePercent || candidate.percentage}%`;
+            const currentPrice = parseFloat(candidate.price || candidate.lastPrice) || 0;
+            
+            // Normal validation process
+            console.log(`🔍 ${candidateInfo}: Starting validation checks`);
+            
+            // Validate momentum
+            const momentumValid = await this.service.validateMomentum(candidate.symbol, currentPrice, tradeDirection);
+            if (!momentumValid && !this.skipValidationFilters) {
+                console.log(`❌ ${candidateInfo}: REJECTED - Failed momentum validation (not at new ${tradeDirection === 'SHORT' ? 'high' : 'low'})`);
+                return null;
+            }
+            
+            console.log(`✅ ${candidateInfo}: Momentum validation passed - checking order requirements`);
+            
+            // Validate minimum order requirements
+            const orderValidation = await this.service.validateMinimumOrderSize(candidate.symbol, usdtAmount, currentPrice);
+            if (!orderValidation) {
+                console.log(`❌ ${candidateInfo}: REJECTED - Failed minimum order validation (need more than $${usdtAmount} USDT)`);
+                return null;
+            }
+            
+            console.log(`✅ ${candidateInfo}: All validations passed`);
+            candidate.orderValidation = orderValidation;
+            
+            return { passed: true, orderValidation, reason: 'All validations passed' };
+        } catch (error) {
+            console.log(`❌ ${candidate.symbol}: Validation error:`, error.message);
+            return null;
+        }
+    }
+
+    /**
+     * Creates a trader from a validated candidate
+     * @param {Object} candidate - Validated trading candidate
+     * @param {number} usdtAmount - USDT amount for the trade
+     * @param {string} tradeDirection - 'LONG' or 'SHORT'
+     * @returns {Object|null} Returns created trader or null if creation fails
+     */
+    createTraderFromValidatedCandidate(candidate, usdtAmount, tradeDirection) {
+        try {
+            const candidateInfo = `${candidate.symbol}: ${candidate.priceChangePercent || candidate.percentage}%`;
+            
+            // Create trader configuration
+            const traderConfig = {
+                symbol: candidate.symbol,
+                percentage: parseFloat(candidate.priceChangePercent || candidate.percentage) || 0,
+                price: parseFloat(candidate.price || candidate.lastPrice) || 0,
+                priceChange: parseFloat(candidate.priceChange) || 0,
+                volume: parseFloat(candidate.volume) || 0,
+                contractAge: parseInt(candidate.contractAge) || 30, // Default age for WebSocket data
+                usdtAmount: usdtAmount,
+                takeProfit: 10, // 10% take profit target
+                tradeDirection: tradeDirection,
+                orderValidation: candidate.orderValidation, // Pass validation results
+                testingMode: this.testingMode
+            };
+            
+            const trader = this.addTrader(traderConfig);
+            if (trader) {
+                console.log(`✅ ${candidateInfo}: SUCCESS - Trader created with $${usdtAmount} USDT`);
+                return trader;
+            } else {
+                console.log(`❌ ${candidateInfo}: FAILED - addTrader() returned null`);
+                return null;
+            }
+        } catch (error) {
+            console.log(`❌ ${candidate.symbol}: Error creating trader:`, error.message);
+            return null;
+        }
+    }
 
     async getFilteredGainers() {
         try {
@@ -377,57 +511,77 @@ class Controller {
             }
 
             console.log(`🎯 Creating traders from ${filteredGainers.length} filtered gainers...`);
+            
+            let processedCount = 0;
+            let rejectedReasons = {
+                maxTradersReached: 0,
+                alreadyExists: 0,
+                momentumFailed: 0,
+                minOrderFailed: 0,
+                addTraderFailed: 0,
+                success: 0
+            };
 
             for (const gainer of filteredGainers) {
+                processedCount++;
+                console.log(`\n🔍 [${processedCount}/${filteredGainers.length}] Evaluating ${gainer.symbol}: ${gainer.priceChangePercent}% gain`);
+                
                 // Don't exceed max traders limit
                 if (this.traders.length >= this.maxTraders) {
-                    console.log(`Reached maximum traders limit (${this.maxTraders}). Stopping trader creation.`);
+                    console.log(`❌ ${gainer.symbol}: REJECTED - Maximum traders limit reached (${this.maxTraders})`);
+                    rejectedReasons.maxTradersReached++;
                     break;
                 }
 
                 // Check if we already have a trader for this symbol
                 const existingTrader = this.traders.find(trader => trader.symbol === gainer.symbol);
                 if (existingTrader) {
-                    console.log(`Trader already exists for ${gainer.symbol} (${gainer.priceChangePercent}%), skipping...`);
+                    console.log(`❌ ${gainer.symbol}: REJECTED - Trader already exists (${gainer.priceChangePercent}%)`);
+                    rejectedReasons.alreadyExists++;
                     continue;
                 }
                 
                 console.log(`Attempting to create trader for ${gainer.symbol}: ${gainer.priceChangePercent}% gain, $${gainer.price}, ${gainer.contractAge} days old`);
 
-                // Validate momentum before creating trader
-                const currentPrice = parseFloat(gainer.price || gainer.lastPrice) || 0;
                 const tradeDirection = 'SHORT'; // For gainers, we use SHORT direction
+                const usdtAmount = 10; // $10 USDT per transaction level
                 
-                const momentumValid = await this.service.validateMomentum(gainer.symbol, currentPrice, tradeDirection);
+                // Use refactored validation function
+                const validationResult = await this.validateTraderCandidate(gainer, usdtAmount, tradeDirection);
                 
-                if (!momentumValid) {
-                    console.log(`❌ ${gainer.symbol}: Failed momentum validation - not at new high, skipping...`);
+                if (!validationResult) {
+                    // Determine which validation failed for statistics
+                    if (!this.skipValidationFilters) {
+                        // Check what specifically failed (this is approximate since we can't distinguish)
+                        rejectedReasons.momentumFailed++;
+                    }
                     continue;
                 }
                 
-                console.log(`✅ ${gainer.symbol}: Momentum validation passed - creating trader`);
-
-                // Create trader configuration
-                // For gainers (positive momentum), use SHORT to profit from potential reversal
-                // For high gains, we expect a pullback, so SHORT is more appropriate
-                const traderConfig = {
-                    symbol: gainer.symbol,
-                    percentage: parseFloat(gainer.priceChangePercent) || 0,
-                    price: parseFloat(gainer.price || gainer.lastPrice) || 0,
-                    priceChange: parseFloat(gainer.priceChange) || 0,
-                    volume: parseFloat(gainer.volume) || 0,
-                    contractAge: parseInt(gainer.contractAge) || 0,
-                    usdtAmount: 10,  // $10 USDT per transaction level
-                    takeProfit: 10,  // 10% take profit target
-                    tradeDirection: tradeDirection,  // SHORT high-momentum gainers for reversal profits
-                    testingMode: this.testingMode
-                };
-
-                const trader = this.addTrader(traderConfig);
+                console.log(`✅ ${gainer.symbol}: All validations passed - creating trader`);
+                
+                // Use refactored trader creation function
+                const trader = this.createTraderFromValidatedCandidate(gainer, usdtAmount, tradeDirection);
+                
                 if (trader) {
-                    console.log(`Created trader for ${gainer.symbol} (${gainer.priceChangePercent}% gain, $${gainer.price})`);
+                    console.log(`✅ ${gainer.symbol}: SUCCESS - Trader created (${gainer.priceChangePercent}% gain, $${gainer.price})`);
+                    rejectedReasons.success++;
+                } else {
+                    console.log(`❌ ${gainer.symbol}: FAILED - Trader creation failed`);
+                    rejectedReasons.addTraderFailed++;
                 }
             }
+            
+            // Summary report
+            console.log(`\n📊 TRADER CREATION SUMMARY:`);
+            console.log(`  Processed: ${processedCount} candidates`);
+            console.log(`  ✅ Success: ${rejectedReasons.success}`);
+            console.log(`  ❌ Rejected breakdown:`);
+            console.log(`    - Max traders reached: ${rejectedReasons.maxTradersReached}`);
+            console.log(`    - Already exists: ${rejectedReasons.alreadyExists}`);
+            console.log(`    - Failed momentum: ${rejectedReasons.momentumFailed}`);
+            console.log(`    - Min order size: ${rejectedReasons.minOrderFailed}`);
+            console.log(`    - addTrader failed: ${rejectedReasons.addTraderFailed}`);
 
             console.log(`Trader creation complete. Active traders: ${this.traders.length}/${this.maxTraders}`);
         } catch (error) {
