@@ -11,11 +11,12 @@ class Controller {
         this.levelPercentage = 20; // Percentage gap between levels (10% = 1.1x for LONG, 0.9x for SHORT)
         this.minContractPrice = 0.01;
         this.minContractDays = 5;
-        this.minPercentage = 30; // Minimum percentage change required for trader creation        this.skipValidationFilters = false; // Skip momentum and order size validation when true        this.testingMode = testingMode;
+        this.minPercentage = 50; // Minimum percentage change required for trader creation        this.skipValidationFilters = false; // Skip momentum and order size validation when true        this.testingMode = testingMode;
+        this.usdtAmount = 10; // USDT amount per transaction level
         this.tickerData = new Map();
         this.hasLoggedTickerData = false;
         this.testingMode = testingMode;
-        this.skipValidationFilters = true; // Skip momentum and order size validation when true
+        this.skipValidationFilters = false; // Skip momentum and order size validation when true
         // Pass controller reference to service for WebSocket data access
         this.service.controller = this;
         
@@ -544,7 +545,7 @@ class Controller {
                 console.log(`Attempting to create trader for ${gainer.symbol}: ${gainer.priceChangePercent}% gain, $${gainer.price}, ${gainer.contractAge} days old`);
 
                 const tradeDirection = 'SHORT'; // For gainers, we use SHORT direction
-                const usdtAmount = 10; // $10 USDT per transaction level
+                const usdtAmount = this.usdtAmount; // $10 USDT per transaction level
                 
                 // Use refactored validation function
                 const validationResult = await this.validateTraderCandidate(gainer, usdtAmount, tradeDirection);

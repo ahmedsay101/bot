@@ -604,17 +604,18 @@ class Service extends API {
         }
     }
     // Validate if current price represents true momentum (new highs for SHORT, new lows for LONG)
-    async validateMomentum(symbol, currentPrice, tradeDirection = 'SHORT') {
+    async validateMomentum(symbol, currentPrice, tradeDirection = 'SHORT', candles = 3) {
         try {
-            const recentCandles = await this.getRecentCandles(symbol, 5);
+            const numOfCandles = candles;
+            const recentCandles = await this.getRecentCandles(symbol, numOfCandles);
             
-            if (!recentCandles || recentCandles.length < 5) {
+            if (!recentCandles || recentCandles.length < numOfCandles) {
                 console.log(`${symbol}: Insufficient candle data for momentum validation`);
                 return false; // Conservative approach - reject if no data
             }
             
             if (tradeDirection === 'SHORT') {
-                // For SHORT traders: Current price should be higher than ALL highs of last 5 days
+                // For SHORT traders: Current price should be higher than ALL highs of last numOfCandles days
                 const maxHigh = Math.max(...recentCandles.map(candle => candle.high));
                 const isNewHigh = currentPrice > maxHigh;
                 
@@ -622,7 +623,7 @@ class Service extends API {
                 return isNewHigh;
                 
             } else if (tradeDirection === 'LONG') {
-                // For LONG traders: Current price should be lower than ALL lows of last 5 days
+                // For LONG traders: Current price should be lower than ALL lows of last numOfCandles days
                 const minLow = Math.min(...recentCandles.map(candle => candle.low));
                 const isNewLow = currentPrice < minLow;
                 
