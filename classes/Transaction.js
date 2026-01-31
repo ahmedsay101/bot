@@ -144,10 +144,25 @@ class Transaction {
         const requirements = this.orderValidation?.requirements;
         if (requirements) {
           // Use API service's proper rounding method
-          const finalQuantity = apiService.roundToStepSize(this.amount, requirements.stepSize, requirements.quantityPrecision);
-          const finalPrice = apiService.roundToStepSize(this.price, requirements.tickSize, requirements.pricePrecision);
+          let finalQuantity = apiService.roundToStepSize(this.amount, requirements.stepSize, requirements.quantityPrecision);
+          let finalPrice = apiService.roundToStepSize(this.price, requirements.tickSize, requirements.pricePrecision);
           
           console.log(`📏 ${this.symbol}: Transaction precision - Quantity: ${this.amount} → ${finalQuantity}, Price: ${this.price} → ${finalPrice}`);
+          
+          // Validate and adjust order size to meet Binance minimum requirements
+          const validation = await apiService.validateMinimumOrderSize(this.symbol, this.usdtAmount, finalPrice, requirements);
+          if (!validation || !validation.valid) {
+            throw new Error(`Order failed minimum order validation: Cannot meet Binance $5 minimum requirement`);
+          }
+          
+          // Use validated/adjusted values from the validation
+          finalQuantity = validation.baseAssetAmount;
+          finalPrice = validation.price;
+          
+          console.log(`${this.symbol}: Transaction validated - Notional: $${validation.notionalValue.toFixed(2)} USDT`);
+          if (validation.adjustedForMinimum) {
+            console.log(`${this.symbol}: Transaction quantity adjusted to meet minimum notional requirement`);
+          }
           
           orderConfig = {
             symbol: this.symbol,

@@ -7,21 +7,47 @@ class Controller {
         this.service = new Service("futures");
         this.traders = [];
         this.maxTraders = maxTraders;
-        this.maxLevels = 10; // Maximum number of price levels per trader
-        this.levelPercentage = 20; // Percentage gap between levels (10% = 1.1x for LONG, 0.9x for SHORT)
+        this.maxLevels = 5; // Maximum number of price levels per trader
+        this.levelPercentage = 10; // Percentage gap between levels (10% = 1.1x for LONG, 0.9x for SHORT)
+        this.levelPercentages = [20, 30, 50, 80]; // Array of percentages for custom gaps between levels (alternative to fixed percentage)
+        this.useArrayGaps = true; // Whether to use array-based gaps instead of fixed percentage
+        this.leverage = 2; // Leverage setting for all symbols (will be set in Binance)
+        this.leveragedUsdtAmount = 0; // Calculated: usdtAmount * leverage
+        this.effectiveBalance = 0; // Calculated: balance * leverage
         this.minContractPrice = 0.01;
         this.minContractDays = 5;
         this.minPercentage = 50; // Minimum percentage change required for trader creation        this.skipValidationFilters = false; // Skip momentum and order size validation when true        this.testingMode = testingMode;
-        this.usdtAmount = 10; // USDT amount per transaction level
+        this.usdtAmount = 20; // USDT amount per transaction level
+        this.leverage = 2; // Leverage setting for all symbols (will be set in Binance)
+        this.leveragedUsdtAmount = 0; // Calculated: usdtAmount * leverage
+        this.effectiveBalance = 0; // Calculated: balance * leverage
+        this.balance = 0; // Current USDT balance from Binance Futures
+        this.balanceLastUpdate = null; // Timestamp of last balance update
         this.tickerData = new Map();
         this.hasLoggedTickerData = false;
         this.testingMode = testingMode;
         this.skipValidationFilters = false; // Skip momentum and order size validation when true
+        this.cooldownTimeHours = 1; // Hours to wait before allowing new trader for terminated symbol
+        this.terminatedTraders = new Map(); // Track terminated traders with timestamps for cooldown
+        this.broadcastCallback = null; // Callback function to broadcast data to frontend WebSocket clients
         // Pass controller reference to service for WebSocket data access
         this.service.controller = this;
         
+        // Calculate initial leveraged values
+        this.updateLeveragedData();
+        
         console.log(`Controller initialized in ${this.testingMode ? 'TESTING' : 'LIVE'} mode`);
         console.log(`Using Binance FUTURES market for data`);
+        
+        // Initialize balance from Binance Futures (non-blocking)
+        this.updateBalance().catch(error => {
+            console.log('⚠️  Initial balance fetch failed:', error.message);
+        });
+        
+        // Initialize leverage for trading (non-blocking)
+        this.initializeLeverage().catch(error => {
+            console.log('⚠️  Leverage initialization failed:', error.message);
+        });
         
         this.connectWebSocket();
         this.startPeriodicUpdates();
@@ -92,6 +118,9 @@ class Controller {
 
         // Update all traders with real-time data
         this.updateAllTraders();
+        
+        // Broadcast updates to frontend after processing ticker data
+        this.broadcastToFrontend();
 
         // Check for new trader opportunities (throttled to avoid spam)
         if (this.traders.length < this.maxTraders && Math.random() < 0.005) { // 0.5% chance to check for new traders
@@ -179,7 +208,7 @@ class Controller {
                     console.log(`\n🎯 Evaluating ${candidate.symbol}: ${candidate.priceChangePercent}% change`);
                     
                     const tradeDirection = 'SHORT'; // Default for gainers
-                    const usdtAmount = 5; // Default USDT amount per trade
+                    const usdtAmount = this.leveragedUsdtAmount; // Use pre-calculated leveraged amount
                     
                     // Use refactored validation function
                     const validationResult = await this.validateTraderCandidate(candidate, usdtAmount, tradeDirection);
@@ -223,7 +252,12 @@ class Controller {
     displayTraderSummaries() {
         if (this.traders.length === 0) return;
 
+        const requiredBalance = this.usdtAmount * this.maxLevels;
+        const balanceStatus = this.effectiveBalance < requiredBalance ? '❌ INSUFFICIENT' : '✅ SUFFICIENT';
+        const lastUpdateStr = this.balanceLastUpdate ? new Date(this.balanceLastUpdate).toLocaleTimeString() : 'Never';
+        
         console.log(`\n=== REAL-TIME TRADER SUMMARIES (${this.testingMode ? 'TESTING' : 'LIVE'} MODE) ===`);
+        console.log(`💰 Balance: $${this.effectiveBalance.toFixed(2)} USDT (leveraged) | Required: $${requiredBalance} | Status: ${balanceStatus} | Updated: ${lastUpdateStr}`);
         this.traders.forEach((trader, index) => {
             try {
                 const summary = trader.getTradingSummary();
@@ -279,18 +313,53 @@ class Controller {
         }
     }
 
-    addTrader(traderConfig) {
+    async addTrader(traderConfig) {
+        // Check maximum traders limit
         if (this.traders.length >= this.maxTraders) {
-            console.log(`Cannot add trader: Maximum of ${this.maxTraders} traders reached`);
+            console.log(`❌ Cannot add trader: Maximum of ${this.maxTraders} traders reached`);
+            return null;
+        }
+
+        // Check for duplicate trader for same symbol
+        const existingTrader = this.traders.find(trader => trader.symbol === traderConfig.symbol);
+        if (existingTrader) {
+            console.log(`❌ Cannot add trader for ${traderConfig.symbol}: Duplicate trader already exists (ID: ${existingTrader.id})`);
+            return null;
+        }
+
+        // Check if symbol is on cooldown from recent termination
+        if (this.isSymbolOnCooldown(traderConfig.symbol)) {
+            const remainingTime = this.getRemainingCooldownTime(traderConfig.symbol);
+            const hoursRemaining = Math.ceil(remainingTime / (60 * 60 * 1000));
+            console.log(`❌ Cannot add trader for ${traderConfig.symbol}: Symbol is on ${this.cooldownTimeHours}h cooldown (${hoursRemaining}h remaining)`);
+            return null;
+        }
+
+        // Check if we have sufficient balance for maxLevels (accounting for leverage)
+        const requiredBalance = this.usdtAmount * this.maxLevels;
+        if (this.effectiveBalance < requiredBalance) {
+            console.log(`❌ Cannot add trader for ${traderConfig.symbol}: Insufficient leveraged balance`);
+            console.log(`   Required: $${requiredBalance} USDT (${this.usdtAmount} × ${this.maxLevels} levels)`);
+            console.log(`   Available: $${this.effectiveBalance.toFixed(2)} USDT (leveraged)`);
+            console.log(`   Shortfall: $${(requiredBalance - this.effectiveBalance).toFixed(2)} USDT`);
             return null;
         }
 
         try {
             console.log(`🔧 Creating trader for ${traderConfig.symbol} with price: ${traderConfig.price} (type: ${typeof traderConfig.price})`);
+            console.log(`💰 Balance check passed: $${this.balance.toFixed(2)} available, $${requiredBalance} required`);
+            console.log(`⚡ Using leveraged amount: $${traderConfig.usdtAmount} USDT ($${(traderConfig.usdtAmount / this.leverage).toFixed(2)} base × ${this.leverage}x leverage)`);
+            
+            // Set leverage for this symbol before creating trader
+            await this.setSymbolLeverage(traderConfig.symbol);
             
             const trader = new Trader(this, traderConfig);
             this.traders.push(trader);
             console.log(`✅ Trader added. Total traders: ${this.traders.length}/${this.maxTraders}`);
+            
+            // Broadcast trader addition to frontend
+            this.broadcastToFrontend();
+            
             return trader;
         } catch (error) {
             console.log(`❌ Error creating trader for ${traderConfig.symbol}:`, error.message);
@@ -302,12 +371,24 @@ class Controller {
     removeTrader(trader) {
         const index = this.traders.findIndex(t => t.id === trader.id);
         if (index !== -1) {
+            // Mark trader symbol as terminated for configurable cooldown
+            this.markTraderTerminated(trader.symbol);
+            
             // Properly cleanup trader resources before removal
             if (trader.cleanup) {
                 trader.cleanup();
             }
             this.traders.splice(index, 1);
             console.log(`Trader removed and cleaned up. Total traders: ${this.traders.length}/${this.maxTraders}`);
+            
+            // Update balance after trader removal (non-blocking)
+            this.updateBalance().catch(error => {
+                console.log('⚠️  Balance update failed after trader removal:', error.message);
+            });
+            
+            // Broadcast trader removal to frontend
+            this.broadcastToFrontend();
+            
             return true;
         }
         return false;
@@ -427,7 +508,7 @@ class Controller {
             
             const trader = this.addTrader(traderConfig);
             if (trader) {
-                console.log(`✅ ${candidateInfo}: SUCCESS - Trader created with $${usdtAmount} USDT`);
+                console.log(`✅ ${candidateInfo}: SUCCESS - Trader created with $${usdtAmount} USDT (leveraged)`);
                 return trader;
             } else {
                 console.log(`❌ ${candidateInfo}: FAILED - addTrader() returned null`);
@@ -501,8 +582,10 @@ class Controller {
     async createTradersFromGainers() {
         try {
             console.log('🚀 Starting trader creation process...');
+            const requiredBalance = this.usdtAmount * this.maxLevels;
+            const balanceStatus = this.effectiveBalance < requiredBalance ? '❌ INSUFFICIENT' : '✅ SUFFICIENT';
             console.log(`📊 Current traders: ${this.traders.length}/${this.maxTraders}`);
-            
+            console.log(`💰 Balance: $${this.effectiveBalance.toFixed(2)} USDT (leveraged) | Required: $${requiredBalance} | Status: ${balanceStatus}`);
             const filteredGainers = await this.getFilteredGainers();
             
             if (filteredGainers.length === 0) {
@@ -545,7 +628,7 @@ class Controller {
                 console.log(`Attempting to create trader for ${gainer.symbol}: ${gainer.priceChangePercent}% gain, $${gainer.price}, ${gainer.contractAge} days old`);
 
                 const tradeDirection = 'SHORT'; // For gainers, we use SHORT direction
-                const usdtAmount = this.usdtAmount; // $10 USDT per transaction level
+                const usdtAmount = this.leveragedUsdtAmount; // Use pre-calculated leveraged USDT amount
                 
                 // Use refactored validation function
                 const validationResult = await this.validateTraderCandidate(gainer, usdtAmount, tradeDirection);
@@ -638,6 +721,12 @@ class Controller {
             console.log('📡 Fetching periodic REST API update...');
             console.log('🔄 Also triggering trader creation scan...');
             
+            // Update balance and clean up expired cooldowns periodically (non-blocking)
+            this.updateBalance().catch(error => {
+                console.log('⚠️  Balance update failed in background:', error.message);
+            });
+            this.cleanupExpiredCooldowns();
+            
             const [topGainers, topLosers] = await Promise.all([
                 this.service.getTopGainers(5),
                 this.service.getTopLosers(5)
@@ -659,7 +748,12 @@ class Controller {
                 console.log(`${index + 1}. ${loser.symbol}: ${loser.priceChangePercent}% (${loser.price})`);
             });
             
+            const requiredBalance = this.usdtAmount * this.maxLevels;
+            const balanceStatus = this.effectiveBalance < requiredBalance ? '❌ INSUFFICIENT' : '✅ SUFFICIENT';
+            const lastUpdateStr = this.balanceLastUpdate ? new Date(this.balanceLastUpdate).toLocaleTimeString() : 'Never';
+            
             console.log(`\nActive Traders: ${this.getActiveTraders().length}/${this.maxTraders}`);
+            console.log(`💰 Balance: $${this.effectiveBalance.toFixed(2)} USDT (leveraged) | Required: $${requiredBalance} | Status: ${balanceStatus} | Updated: ${lastUpdateStr}`);
             
             // Display trader summaries
             this.displayTraderSummaries();
@@ -674,6 +768,153 @@ class Controller {
         } catch (error) {
             console.log('Error in periodic tick function:', error.message);
         }
+    }
+
+    async updateBalance() {
+        try {
+            console.log('💰 Fetching balance from Binance...');
+            
+            // Add timeout to prevent hanging
+            const timeoutPromise = new Promise((_, reject) => 
+                setTimeout(() => reject(new Error('Balance fetch timeout')), 10000)
+            );
+            
+            const balancePromise = this.service.getBalance();
+            const balanceResult = await Promise.race([balancePromise, timeoutPromise]);
+            
+            if (balanceResult && balanceResult.success) {
+                this.balance = balanceResult.balance;
+                this.balanceLastUpdate = Date.now();
+                this.updateLeveragedData(); // Recalculate leveraged values
+                console.log(`💰 Balance updated: $${this.balance.toFixed(2)} USDT (Available)`);
+                return true;
+            } else {
+                console.log(`❌ Failed to update balance: ${balanceResult?.error || 'Unknown error'}`);
+                return false;
+            }
+        } catch (error) {
+            console.log('❌ Error updating balance:', error.message);
+            // Don't let balance failures completely break the system
+            if (error.message === 'Balance fetch timeout') {
+                console.log('⚠️  Balance fetch timed out - continuing with last known balance');
+            }
+            return false;
+        }
+    }
+
+    async initializeLeverage() {
+        if (this.testingMode) {
+            console.log('🧪 Skipping leverage initialization in testing mode');
+            return true;
+        }
+
+        try {
+            console.log(`⚡ Setting leverage to ${this.leverage}x for all symbols...`);
+            
+            // For now, we'll set leverage when we create traders for specific symbols
+            // This placeholder ensures the method exists for future enhancement
+            console.log(`⚡ Leverage ${this.leverage}x will be set per symbol when traders are created`);
+            return true;
+        } catch (error) {
+            console.log('❌ Error initializing leverage:', error.message);
+            return false;
+        }
+    }
+
+    async setSymbolLeverage(symbol) {
+        if (this.testingMode) return true;
+        
+        try {
+            console.log(`⚡ Setting ${this.leverage}x leverage for ${symbol}`);
+            await this.service.leverage(symbol, this.leverage);
+            console.log(`✅ ${symbol}: Leverage set to ${this.leverage}x`);
+            return true;
+        } catch (error) {
+            console.log(`❌ ${symbol}: Failed to set leverage:`, error.message);
+            return false;
+        }
+    }
+
+    getBalance() {
+        return {
+            balance: this.balance,
+            leverage: this.leverage,
+            effectiveBalance: this.effectiveBalance,
+            leveragedUsdtAmount: this.leveragedUsdtAmount,
+            lastUpdate: this.balanceLastUpdate,
+            requiredForMaxLevels: this.usdtAmount * this.maxLevels
+        };
+    }
+
+    hasInsufficientBalance() {
+        const requiredBalance = this.usdtAmount * this.maxLevels;
+        return this.effectiveBalance < requiredBalance;
+    }
+
+    isSymbolOnCooldown(symbol) {
+        const cooldownTime = this.cooldownTimeHours * 60 * 60 * 1000; // Convert hours to milliseconds
+        const terminationTime = this.terminatedTraders.get(symbol);
+        
+        if (!terminationTime) {
+            return false; // No cooldown if never terminated
+        }
+        
+        const timeElapsed = Date.now() - terminationTime;
+        return timeElapsed < cooldownTime;
+    }
+
+    getRemainingCooldownTime(symbol) {
+        const cooldownTime = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
+        const terminationTime = this.terminatedTraders.get(symbol);
+        
+        if (!terminationTime) {
+            return 0;
+        }
+        
+        const timeElapsed = Date.now() - terminationTime;
+        const remaining = cooldownTime - timeElapsed;
+        
+        return Math.max(0, remaining);
+    }
+
+    markTraderTerminated(symbol) {
+        this.terminatedTraders.set(symbol, Date.now());
+        console.log(`🚫 ${symbol} marked as terminated - 24h cooldown activated`);
+    }
+
+    cleanupExpiredCooldowns() {
+        const cooldownTime = 24 * 60 * 60 * 1000; // 24 hours
+        const currentTime = Date.now();
+        
+        for (const [symbol, terminationTime] of this.terminatedTraders.entries()) {
+            if (currentTime - terminationTime > cooldownTime) {
+                this.terminatedTraders.delete(symbol);
+                console.log(`✅ ${symbol} cooldown expired - can trade again`);
+            }
+        }
+    }
+
+    setBroadcastCallback(callback) {
+        this.broadcastCallback = callback;
+        console.log('📡 WebSocket broadcast callback registered');
+    }
+
+    broadcastToFrontend() {
+        if (this.broadcastCallback) {
+            try {
+                this.broadcastCallback();
+            } catch (error) {
+                console.log('❌ Error broadcasting to frontend:', error.message);
+            }
+        }
+    }
+
+    updateLeveragedData() {
+        // Calculate leveraged USDT amount and effective balance
+        this.leveragedUsdtAmount = this.usdtAmount * this.leverage;
+        this.effectiveBalance = this.balance * this.leverage;
+        
+        console.log(`📊 Leveraged data updated: Base USDT: $${this.usdtAmount} → Leveraged: $${this.leveragedUsdtAmount} | Base Balance: $${this.balance} → Effective: $${this.effectiveBalance}`);
     }
 }
 

@@ -219,6 +219,94 @@ app.post('/api/trader/:id/close', authenticate, async (req, res) => {
     }
 });
 
+// Manual balance refresh endpoint
+app.post('/api/balance/refresh', authenticate, async (req, res) => {
+    try {
+        console.log('📊 Manual balance refresh requested...');
+        const success = await controller.updateBalance();
+        
+        if (success) {
+            const balanceInfo = controller.getBalance();
+            return res.status(200).json({
+                success: true,
+                message: 'Balance refreshed successfully',
+                balance: balanceInfo.balance,
+                lastUpdate: balanceInfo.lastUpdate,
+                requiredForMaxLevels: balanceInfo.requiredForMaxLevels
+            });
+        } else {
+            return res.status(500).json({
+                success: false,
+                error: 'Failed to refresh balance from Binance'
+            });
+        }
+    } catch (error) {
+        console.error('Error refreshing balance:', error);
+        return res.status(500).json({ 
+            success: false, 
+            error: 'Failed to refresh balance',
+            details: error.message 
+        });
+    }
+});
+
+// Balance endpoint to get current balance info
+app.get('/api/balance', authenticate, (req, res) => {
+    try {
+        const balanceInfo = controller.getBalance();
+        
+        return res.status(200).json({
+            success: true,
+            balance: balanceInfo.balance,
+            lastUpdate: balanceInfo.lastUpdate,
+            requiredForMaxLevels: balanceInfo.requiredForMaxLevels,
+            hasInsufficientBalance: controller.hasInsufficientBalance(),
+            maxLevels: controller.maxLevels,
+            usdtAmount: controller.usdtAmount,
+            lastUpdateFormatted: balanceInfo.lastUpdate ? new Date(balanceInfo.lastUpdate).toISOString() : null
+        });
+    } catch (error) {
+        console.error('Error fetching balance:', error);
+        return res.status(500).json({ 
+            success: false, 
+            error: 'Failed to fetch balance',
+            details: error.message 
+        });
+    }
+});
+
+// Cooldown endpoint to get terminated symbols and their remaining cooldown times
+app.get('/api/cooldowns', authenticate, (req, res) => {
+    try {
+        const cooldowns = [];
+        
+        for (const [symbol, terminationTime] of controller.terminatedTraders.entries()) {
+            const remainingTime = controller.getRemainingCooldownTime(symbol);
+            const isOnCooldown = controller.isSymbolOnCooldown(symbol);
+            
+            cooldowns.push({
+                symbol,
+                terminationTime,
+                remainingTime,
+                isOnCooldown,
+                hoursRemaining: Math.ceil(remainingTime / (60 * 60 * 1000))
+            });
+        }
+        
+        return res.status(200).json({
+            success: true,
+            cooldowns
+        });
+    } catch (error) {
+        console.error('Error fetching cooldowns:', error);
+        return res.status(500).json({ 
+            success: false, 
+            error: 'Failed to fetch cooldowns',
+            details: error.message 
+        });
+    }
+});
+
 // Legacy API for backwards compatibility
 app.get('/api', authenticate, (req, res) => {
     try {
@@ -521,7 +609,13 @@ async function getDashboardData() {
 // Broadcast updates every second
 setInterval(broadcastUpdate, 1000);
 
+// Connect controller to WebSocket broadcasting
+controller.setBroadcastCallback(() => {
+    broadcastUpdate();
+});
+
 server.listen(port, () => {
     console.log(`HTTP server listening on port ${port}`);
     console.log(`WebSocket server listening on port ${port}`);
+    console.log('📡 Controller WebSocket broadcast callback registered');
 });

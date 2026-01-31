@@ -28,7 +28,7 @@ class API {
             bookTicker: "/ticker/bookTicker",
             depth: "/depth",
             tradeList: "/trades",
-            account: "/account",
+            account: api === "futures" ? "/../v2/account" : "/account",
             order: "/order",
             batchOrders: "/batchOrders",
             leverage: "/leverage",
@@ -244,35 +244,62 @@ class Service extends API {
             }
             
             // Calculate base asset amount we can buy with our USDT
-            const baseAssetAmount = usdtAmount / currentPrice;
+            let baseAssetAmount = usdtAmount / currentPrice;
             
             // Round values to correct precision
-            const roundedQuantity = this.roundToStepSize(baseAssetAmount, requirements.stepSize, requirements.quantityPrecision);
+            let roundedQuantity = this.roundToStepSize(baseAssetAmount, requirements.stepSize, requirements.quantityPrecision);
             const roundedPrice = this.roundToStepSize(currentPrice, requirements.tickSize, requirements.pricePrecision);
+            
+            // Calculate actual notional value (quantity * price)
+            let actualNotional = roundedQuantity * roundedPrice;
+            
+            // Binance requires minimum $5 USDT notional value
+            const binanceMinNotional = 5;
+            const effectiveMinNotional = Math.max(requirements.minNotional, binanceMinNotional);
+            
+            // If notional is below minimum, calculate required quantity to meet minimum with small buffer
+            if (actualNotional < effectiveMinNotional) {
+                // Add 2% buffer to ensure we're comfortably above minimum but not too much higher
+                const bufferMultiplier = 1.02;
+                const targetNotional = effectiveMinNotional * bufferMultiplier;
+                const requiredQuantity = targetNotional / roundedPrice;
+                roundedQuantity = this.roundToStepSize(requiredQuantity, requirements.stepSize, requirements.quantityPrecision);
+                actualNotional = roundedQuantity * roundedPrice;
+                
+                console.log(`${symbol}: ⬆️ Adjusting quantity to meet minimum notional:`);
+                console.log(`  Original: ${baseAssetAmount.toFixed(requirements.quantityPrecision)} tokens = $${(baseAssetAmount * roundedPrice).toFixed(2)}`);
+                console.log(`  Adjusted: ${roundedQuantity.toFixed(requirements.quantityPrecision)} tokens = $${actualNotional.toFixed(2)}`);
+                console.log(`  Required minimum: $${effectiveMinNotional.toFixed(2)} USDT (with 2% buffer: $${targetNotional.toFixed(2)})`);
+            }
             
             // Check minimum quantity requirement
             if (roundedQuantity < requirements.minQty) {
-                console.log(`${symbol}: Order too small - Need ${requirements.minQty} ${requirements.baseAsset}, can only afford ${roundedQuantity.toFixed(requirements.quantityPrecision)}`);
+                console.log(`${symbol}: Order too small even after adjustment - Need ${requirements.minQty} ${requirements.baseAsset}, calculated ${roundedQuantity.toFixed(requirements.quantityPrecision)}`);
                 return false;
             }
             
             // Check market minimum quantity (for MARKET orders)
             if (roundedQuantity < requirements.marketMinQty) {
-                console.log(`${symbol}: Market order too small - Need ${requirements.marketMinQty} ${requirements.baseAsset}, can only afford ${roundedQuantity.toFixed(requirements.quantityPrecision)}`);
+                console.log(`${symbol}: Market order too small even after adjustment - Need ${requirements.marketMinQty} ${requirements.baseAsset}, calculated ${roundedQuantity.toFixed(requirements.quantityPrecision)}`);
                 return false;
             }
             
-            // Check minimum notional value
-            if (requirements.minNotional > 0 && usdtAmount < requirements.minNotional) {
-                console.log(`${symbol}: Order value too small - Need $${requirements.minNotional} USDT, only have $${usdtAmount}`);
+            // Final check that we still meet minimum notional
+            if (actualNotional < effectiveMinNotional) {
+                console.log(`${symbol}: Unable to meet minimum notional even after adjustment: $${actualNotional.toFixed(2)} < $${effectiveMinNotional.toFixed(2)}`);
                 return false;
             }
             
-            console.log(`${symbol}: ✅ Order size validation passed - $${usdtAmount} USDT = ${roundedQuantity.toFixed(requirements.quantityPrecision)} ${requirements.baseAsset} @ $${roundedPrice.toFixed(requirements.pricePrecision)}`);
+            console.log(`${symbol}: ✅ Order size validation passed`);
+            console.log(`  Order details: ${roundedQuantity.toFixed(requirements.quantityPrecision)} ${requirements.baseAsset} @ $${roundedPrice.toFixed(requirements.pricePrecision)}`);
+            console.log(`  Notional value: $${actualNotional.toFixed(2)} USDT (min required: $${effectiveMinNotional.toFixed(2)})`);
+            
             return {
                 valid: true,
                 baseAssetAmount: roundedQuantity,
                 price: roundedPrice,
+                notionalValue: actualNotional,
+                adjustedForMinimum: actualNotional > (usdtAmount * 1.01), // Flag if we increased significantly
                 requirements
             };
             
@@ -398,6 +425,47 @@ class Service extends API {
         }
         catch(error) {
             throw error;
+        }
+    }  
+
+    async getBalance() {
+        try {
+            console.log('📊 Fetching balance from Binance Futures...');
+            const accountInfo = await this.authenticatedGet(this.urls.account);
+            
+            if (!accountInfo || !accountInfo.assets) {
+                console.log('❌ Invalid account response from Binance');
+                return { success: false, balance: 0, error: 'Invalid account response' };
+            }
+
+            // Find USDT balance in futures account
+            const usdtAsset = accountInfo.assets.find(asset => asset.asset === 'USDT');
+            
+            if (!usdtAsset) {
+                console.log('❌ USDT asset not found in account');
+                return { success: false, balance: 0, error: 'USDT asset not found' };
+            }
+
+            const availableBalance = parseFloat(usdtAsset.availableBalance) || 0;
+            const totalBalance = parseFloat(usdtAsset.walletBalance) || 0;
+            const marginBalance = parseFloat(usdtAsset.marginBalance) || 0;
+            
+            console.log('💰 BINANCE FUTURES BALANCE RETRIEVED:');
+            console.log(`   📋 Available Balance: $${availableBalance.toFixed(2)} USDT`);
+            console.log(`   📊 Total Balance: $${totalBalance.toFixed(2)} USDT`);
+            console.log(`   🔒 Margin Balance: $${marginBalance.toFixed(2)} USDT`);
+            console.log(`   ⏰ Retrieved at: ${new Date().toISOString()}`);
+            
+            return { 
+                success: true, 
+                balance: availableBalance, 
+                totalBalance: totalBalance,
+                marginBalance: marginBalance
+            };
+        }
+        catch(error) {
+            console.log('❌ Error fetching balance from Binance:', error.message);
+            return { success: false, balance: 0, error: error.message };
         }
     }  
 
@@ -607,27 +675,61 @@ class Service extends API {
     async validateMomentum(symbol, currentPrice, tradeDirection = 'SHORT', candles = 3) {
         try {
             const numOfCandles = candles;
-            const recentCandles = await this.getRecentCandles(symbol, numOfCandles);
+            // Get one extra candle to exclude the current day's candle
+            const recentCandles = await this.getRecentCandles(symbol, numOfCandles + 1);
             
-            if (!recentCandles || recentCandles.length < numOfCandles) {
+            if (!recentCandles || recentCandles.length < numOfCandles + 1) {
                 console.log(`${symbol}: Insufficient candle data for momentum validation`);
                 return false; // Conservative approach - reject if no data
             }
             
+            // Sort candles by time to ensure proper order (Binance returns oldest first)
+            recentCandles.sort((a, b) => a.openTime - b.openTime);
+            
+            // Show all candles with dates for debugging
+            console.log(`${symbol}: Raw candle data (${recentCandles.length} candles, oldest to newest):`);
+            recentCandles.forEach((candle, index) => {
+                const date = new Date(candle.openTime).toISOString().split('T')[0];
+                console.log(`  ${index}: ${date} | High: $${candle.high.toFixed(6)} | Low: $${candle.low.toFixed(6)} | Close: $${candle.close.toFixed(6)}`);
+            });
+            
+            // Exclude the last candle (most recent/current day) and use only previous candles
+            const previousCandles = recentCandles.slice(0, -1);
+            
+            console.log(`${symbol}: Using ${previousCandles.length} previous candles for momentum validation (excluding current day)`);
+            previousCandles.forEach((candle, index) => {
+                const date = new Date(candle.openTime).toISOString().split('T')[0];
+                console.log(`  Previous ${index}: ${date} | High: $${candle.high.toFixed(6)}`);
+            });
+            
             if (tradeDirection === 'SHORT') {
-                // For SHORT traders: Current price should be higher than ALL highs of last numOfCandles days
-                const maxHigh = Math.max(...recentCandles.map(candle => candle.high));
+                // For SHORT traders: Current price should be higher than ALL highs of previous candles
+                const maxHigh = Math.max(...previousCandles.map(candle => candle.high));
+                const maxHighCandle = previousCandles.find(candle => candle.high === maxHigh);
+                const maxHighDate = new Date(maxHighCandle.openTime).toISOString().split('T')[0];
                 const isNewHigh = currentPrice > maxHigh;
                 
-                console.log(`${symbol} SHORT momentum check: Current $${currentPrice.toFixed(6)} vs Max High $${maxHigh.toFixed(6)} - ${isNewHigh ? '✅ NEW HIGH' : '❌ NOT NEW HIGH'}`);
+                console.log(`${symbol} SHORT momentum detailed check:`);
+                console.log(`  Current price: $${currentPrice.toFixed(6)}`);
+                console.log(`  Previous max high: $${maxHigh.toFixed(6)} (from ${maxHighDate})`);
+                console.log(`  Is new high: ${isNewHigh ? '✅ YES' : '❌ NO'}`);
+                console.log(`  Difference: $${(currentPrice - maxHigh).toFixed(6)}`);
+                
                 return isNewHigh;
                 
             } else if (tradeDirection === 'LONG') {
-                // For LONG traders: Current price should be lower than ALL lows of last numOfCandles days
-                const minLow = Math.min(...recentCandles.map(candle => candle.low));
+                // For LONG traders: Current price should be lower than ALL lows of previous candles
+                const minLow = Math.min(...previousCandles.map(candle => candle.low));
+                const minLowCandle = previousCandles.find(candle => candle.low === minLow);
+                const minLowDate = new Date(minLowCandle.openTime).toISOString().split('T')[0];
                 const isNewLow = currentPrice < minLow;
                 
-                console.log(`${symbol} LONG momentum check: Current $${currentPrice.toFixed(6)} vs Min Low $${minLow.toFixed(6)} - ${isNewLow ? '✅ NEW LOW' : '❌ NOT NEW LOW'}`);
+                console.log(`${symbol} LONG momentum detailed check:`);
+                console.log(`  Current price: $${currentPrice.toFixed(6)}`);
+                console.log(`  Previous min low: $${minLow.toFixed(6)} (from ${minLowDate})`);
+                console.log(`  Is new low: ${isNewLow ? '✅ YES' : '❌ NO'}`);
+                console.log(`  Difference: $${(currentPrice - minLow).toFixed(6)}`);
+                
                 return isNewLow;
             }
             

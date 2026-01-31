@@ -17,6 +17,8 @@ class Trader {
         // Trading configuration
         this.usdtAmount = config.usdtAmount || 5;  // USDT amount per order (not base asset)
         this.levelPercentage = this.controller.levelPercentage;  // Percentage gap between levels
+        this.levelPercentages = this.controller.levelPercentages; // Array of percentages for custom gaps
+        this.useArrayGaps = this.controller.useArrayGaps; // Whether to use array-based gaps
         this.maxLevels = this.controller.maxLevels;  // Maximum number of levels
         this.takeProfit = config.takeProfit || 10;  // Take profit percentage
         this.testingMode = config.testingMode !== undefined ? config.testingMode : true;
@@ -137,19 +139,44 @@ class Trader {
             console.log(`❌ Invalid start price for ${this.symbol}: ${this.startPrice}`);
             return;
         }
-        
-        // Calculate the multiplier based on trade direction
-        const multiplier = this.tradeDirection === 'SHORT' 
-            ? (1 + this.levelPercentage / 100)  // 1.1 for SHORT (10% increase - sell at higher prices)
-            : (1 - this.levelPercentage / 100); // 0.9 for LONG (10% decrease - buy at lower prices)
-        
-        // Generate price levels
-        for (let i = 0; i < this.maxLevels; i++) {
-            this.priceLevels.push(currentPrice);
-            currentPrice = currentPrice * multiplier;
+
+        // Validate array gaps if using them
+        if (this.useArrayGaps) {
+            if (!this.levelPercentages || this.levelPercentages.length === 0) {
+                console.log(`❌ ${this.symbol}: useArrayGaps is true but levelPercentages array is empty, falling back to fixed percentage`);
+                this.useArrayGaps = false;
+            } else if (this.levelPercentages.length < this.maxLevels - 1) {
+                console.log(`❌ ${this.symbol}: levelPercentages array too short (${this.levelPercentages.length}) for maxLevels (${this.maxLevels}), need ${this.maxLevels - 1} gaps`);
+                return;
+            }
         }
         
-        console.log(`Generated ${this.maxLevels} price levels for ${this.tradeDirection} trader:`, 
+        // First level is always the starting price (market order)
+        this.priceLevels.push(currentPrice);
+        
+        // Generate remaining price levels
+        for (let i = 1; i < this.maxLevels; i++) {
+            let multiplier;
+            
+            if (this.useArrayGaps) {
+                // Use array-based gaps - get percentage for this gap (i-1 because first level has no gap)
+                const gapPercentage = this.levelPercentages[i - 1];
+                multiplier = this.tradeDirection === 'SHORT' 
+                    ? (1 + gapPercentage / 100)  // SHORT: increase price by gap%
+                    : (1 - gapPercentage / 100); // LONG: decrease price by gap%
+            } else {
+                // Use fixed percentage gap
+                multiplier = this.tradeDirection === 'SHORT' 
+                    ? (1 + this.levelPercentage / 100)  // 1.1 for SHORT (10% increase - sell at higher prices)
+                    : (1 - this.levelPercentage / 100); // 0.9 for LONG (10% decrease - buy at lower prices)
+            }
+            
+            currentPrice = currentPrice * multiplier;
+            this.priceLevels.push(currentPrice);
+        }
+        
+        const gapType = this.useArrayGaps ? `array gaps [${this.levelPercentages.slice(0, Math.min(5, this.levelPercentages.length)).join(', ')}${this.levelPercentages.length > 5 ? '...' : ''}]` : `fixed ${this.levelPercentage}%`;
+        console.log(`Generated ${this.maxLevels} price levels for ${this.tradeDirection} trader using ${gapType}:`, 
             this.priceLevels.map(p => '$' + parseFloat(p).toFixed(4)));
     }
 
@@ -245,8 +272,50 @@ class Trader {
                     const apiService = this.getApiService();
                     
                     // Use API service's proper step size rounding method (same as in validateMinimumOrderSize)
-                    const roundedQuantity = apiService.roundToStepSize(baseAssetAmount, requirements.stepSize, requirements.quantityPrecision);
-                    const roundedPrice = apiService.roundToStepSize(priceLevel, requirements.tickSize, requirements.pricePrecision);
+                    let roundedQuantity = apiService.roundToStepSize(baseAssetAmount, requirements.stepSize, requirements.quantityPrecision);
+                    let roundedPrice = apiService.roundToStepSize(priceLevel, requirements.tickSize, requirements.pricePrecision);
+                    
+                    // Validate and adjust order size to meet Binance minimum requirements
+                    // For limit orders, validate with the actual level amount, not the full usdtAmount
+                    const levelUsdtAmount = this.usdtAmount; // Each level uses the same USDT amount
+                    const validation = await apiService.validateMinimumOrderSize(this.symbol, levelUsdtAmount, roundedPrice, requirements);
+                    if (!validation || !validation.valid) {
+                        console.log(`${this.symbol}: Level ${i} validation failed, but proceeding with minimum adjustment...`);
+                        
+                        // Instead of skipping, calculate exact minimum quantity needed
+                        const minNotional = 5.10; // Target $5.10 to ensure we're above $5 after rounding
+                        let requiredQuantity = minNotional / roundedPrice;
+                        
+                        // Round up to ensure we meet minimum even after rounding
+                        roundedQuantity = apiService.roundToStepSize(requiredQuantity, requirements.stepSize, requirements.quantityPrecision);
+                        
+                        // Check if the rounded result still meets minimum, if not, add one step
+                        let finalNotional = roundedQuantity * roundedPrice;
+                        let attempts = 0;
+                        while (finalNotional < 5.05 && attempts < 10) {
+                            roundedQuantity += parseFloat(requirements.stepSize);
+                            roundedQuantity = apiService.roundToStepSize(roundedQuantity, requirements.stepSize, requirements.quantityPrecision);
+                            finalNotional = roundedQuantity * roundedPrice;
+                            attempts++;
+                        }
+                        
+                        // If we still can't meet minimum after 10 attempts, skip this level
+                        if (finalNotional < 5.05) {
+                            console.log(`${this.symbol}: Level ${i} skipped - Cannot meet minimum even after multiple adjustments: $${finalNotional.toFixed(2)}`);
+                            continue;
+                        }
+                        
+                        console.log(`${this.symbol}: Level ${i} forced to minimum - ${roundedQuantity} tokens = $${finalNotional.toFixed(2)}`);
+                    } else {
+                        // Use validated/adjusted values from the validation
+                        roundedQuantity = validation.baseAssetAmount;
+                        roundedPrice = validation.price;
+                        
+                        console.log(`${this.symbol}: Level ${i} validated - Notional: $${validation.notionalValue.toFixed(2)} USDT`);
+                        if (validation.adjustedForMinimum) {
+                            console.log(`${this.symbol}: Level ${i} quantity adjusted to meet minimum notional requirement`);
+                        }
+                    }
                     
                     console.log(`📏 ${this.symbol}: Level ${i} precision - Quantity: ${baseAssetAmount} → ${roundedQuantity} (stepSize: ${requirements.stepSize}), Price: ${priceLevel} → ${roundedPrice} (tickSize: ${requirements.tickSize})`);
                     
