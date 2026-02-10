@@ -1,0 +1,28 @@
+{
+  "name": "binance-volatility-trap-bot",
+  "version": "1.0.0",
+  "description": "USDT-M Futures volatility trap bot",
+  "main": "bot.js",
+  "type": "commonjs",
+  "scripts": {
+    "install:all": "npm install && cd dashboard && npm install",
+    "start": "node bot.js",
+    "live": "node bot.js --live",
+    "start:bot": "node bot.js",
+    "start:api": "node server.js",
+    "start:dashboard": "cd dashboard && npm run dev",
+    "dev": "concurrently \"npm run start:api\" \"npm run start:dashboard\"",
+    "test": "jest"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1",
+    "jest": "^29.7.0"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.2",
+    "socket.io": "^4.8.1",
+    "ws": "^8.18.0"
+  }
+}

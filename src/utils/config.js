@@ -1,0 +1,31 @@
+const config = {
+  mode: process.argv.includes("--test") ? "test" : "live",
+  apiKey: process.env.BINANCE_API_KEY || "",
+  apiSecret: process.env.BINANCE_API_SECRET || "",
+  baseRestUrl: "https://fapi.binance.com",
+  baseWsUrl: "wss://fstream.binance.com",
+  maxTraders: 1,
+  enableScannerFilters: true,
+  feeRate: 0.0004,
+  slippageRate: 0.0002,
+  riskPerTradeUSDT: 50,
+  positionNotionalUSDT: 200,
+  leverage: 5,
+  levelCount: 2,
+  levelSpacingPercent: 0.5,
+  takeProfitPercent: 0.5,
+  stopLossPercent: 0.5,
+  startingBalanceUSDT: 1000,
+  scannerIntervalMs: 1 * 60 * 1000,
+  minChange: 1,
+  maxChange: 8,
+  volumeRatio: 0.15,
+  minRangePercent: 1.5,
+  depthMin: 200000,
+  depthMax: 5000000,
+  spreadMin: 0.0001,
+  spreadMax: 0.002,
+  recvWindow: 5000
+};
+
+module.exports = config;
