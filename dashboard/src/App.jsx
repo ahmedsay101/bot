@@ -75,6 +75,38 @@ function calcPositionPnl(position, lastPrice) {
   return (Number(lastPrice) - entry) * size * direction;
 }
 
+function calcTakeProfitProgress(position, lastPrice) {
+  if (!position || lastPrice === null || lastPrice === undefined) return null;
+  const entry = Number(position.entryPrice);
+  const tp = Number(position.takeProfitPrice);
+  const current = Number(lastPrice);
+  if (!Number.isFinite(entry) || !Number.isFinite(tp) || !Number.isFinite(current)) return null;
+  const direction = position.side === "LONG" ? 1 : -1;
+  const total = direction === 1 ? tp - entry : entry - tp;
+  if (!Number.isFinite(total) || total === 0) return null;
+  const traveled = direction === 1 ? current - entry : entry - current;
+  const ratio = Math.max(0, Math.min(1, traveled / total));
+  const remaining = Math.max(0, Math.abs(tp - current));
+  return { ratio, remaining };
+}
+
+function buildPendingTakeProfit(order, takeProfitPercent) {
+  const entry = Number(order.price);
+  const tpPct = Number(takeProfitPercent) || 0;
+  if (!Number.isFinite(entry) || tpPct <= 0) return null;
+  const side = order.side;
+  const tpPrice = side === "LONG"
+    ? entry * (1 + tpPct / 100)
+    : entry * (1 - tpPct / 100);
+  return {
+    entryPrice: entry,
+    takeProfitPrice: tpPrice,
+    side,
+    levelIndex: order.levelIndex,
+    pending: true
+  };
+}
+
 function buildPriceLines(trader) {
   const lines = [];
   const lastPrice = Number(trader.lastPrice) || 0;
@@ -543,6 +575,14 @@ function App() {
                       const basePrice = trader.basePrice || trader.gridLevels?.basePrice;
                       const changePct = calcPercentChange(basePrice, trader.lastPrice);
                       const takeProfitPercent = Number(trader.gridLevels?.takeProfitPercent) || 0;
+                      const positions = trader.openPositionsDetail || [];
+                      const pendingOrders = trader.pendingOrdersDetail || [];
+                      const pendingTargets = positions.length === 0
+                        ? pendingOrders
+                          .map((order) => buildPendingTakeProfit(order, takeProfitPercent))
+                          .filter(Boolean)
+                        : [];
+                      const progressTargets = positions.length > 0 ? positions : pendingTargets;
 
                       return (
                         <div className="mt-4 grid gap-3">
@@ -570,6 +610,50 @@ function App() {
                               Per position, based on level spacing.
                             </p>
                           </div>
+
+                          {progressTargets.length > 0 && (
+                            <div className="rounded-2xl bg-ink-900/70 px-4 py-3">
+                              <div className="flex items-center justify-between text-sm">
+                                <span className="text-slate-400">Take Profit Progress</span>
+                                <span className="text-xs text-slate-500">
+                                  {positions.length > 0 ? "Current vs TP" : "Pending entry vs TP"}
+                                </span>
+                              </div>
+                              <div className="mt-3 grid gap-3">
+                                {progressTargets.map((pos) => {
+                                  const progress = calcTakeProfitProgress(pos, trader.lastPrice);
+                                  const percent = progress ? Math.round(progress.ratio * 100) : null;
+                                  const displayPercent = pos.pending
+                                    ? null
+                                    : (percent ?? 0);
+                                  const barWidth = pos.pending
+                                    ? 35
+                                    : (displayPercent ?? 0);
+                                  const remaining = progress ? progress.remaining : null;
+                                  return (
+                                    <div key={`${trader.id}-${pos.levelIndex}-${pos.side}`}>
+                                      <div className="mb-2 flex items-center justify-between text-xs text-slate-400">
+                                        <span>
+                                          {pos.side} L{pos.levelIndex}
+                                          {pos.pending ? " · pending" : ""}
+                                        </span>
+                                        <span>
+                                          {displayPercent === null ? "-" : `${displayPercent}%`} ·
+                                          {remaining === null ? " -" : ` ${formatPrice(remaining)} left`}
+                                        </span>
+                                      </div>
+                                      <div className="h-2 w-full overflow-hidden rounded-full bg-slate-900/70">
+                                        <div
+                                          className={`h-full rounded-full ${pos.pending ? "bg-sky-400" : (pos.side === "LONG" ? "bg-emerald-400" : "bg-rose-400")}`}
+                                          style={{ width: `${barWidth}%` }}
+                                        />
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
                         </div>
                       );
                     })()}

@@ -12,6 +12,9 @@ class Controller {
   }
 
   async start() {
+    if (config.mode === "live") {
+      await this.api.startUserDataStream();
+    }
     await this._refreshMarketStreams();
     await this._syncAccount();
     this._startAccountSync();

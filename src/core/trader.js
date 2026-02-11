@@ -30,6 +30,7 @@ class Trader {
     this._onMarkPrice = this._onMarkPrice.bind(this);
     this._onBookTicker = this._onBookTicker.bind(this);
     this._onOrderFilled = this._onOrderFilled.bind(this);
+    this._onOrderCancelled = this._onOrderCancelled.bind(this);
   }
 
   _getSpacingPercent() {
@@ -42,6 +43,10 @@ class Trader {
 
   _getStopLossPercent() {
     return Number(config.stopLossPercent) || 1;
+  }
+
+  _getPositionSide(direction) {
+    return direction === "LONG" ? "LONG" : "SHORT";
   }
 
   _calcQuantity(price) {
@@ -61,6 +66,7 @@ class Trader {
     this.api.on("markPrice", this._onMarkPrice);
     this.api.on("bookTicker", this._onBookTicker);
     this.api.on("orderFilled", this._onOrderFilled);
+    this.api.on("orderCancelled", this._onOrderCancelled);
 
     log(`TRADER ${this.symbol}`, "Initialized");
     this._updateStore();
@@ -73,7 +79,22 @@ class Trader {
     this.api.off("markPrice", this._onMarkPrice);
     this.api.off("bookTicker", this._onBookTicker);
     this.api.off("orderFilled", this._onOrderFilled);
+    this.api.off("orderCancelled", this._onOrderCancelled);
 
+    for (const order of this.pendingEntriesById.values()) {
+      try {
+        await this.api.cancelOrder({ symbol: this.symbol, orderId: order.orderId });
+      } catch (err) {
+        log(`TRADER ${this.symbol}`, `Entry cancel failed ${order.orderId}: ${err.message}`);
+      }
+    }
+    for (const order of this.pendingExitsById.values()) {
+      try {
+        await this.api.cancelOrder({ symbol: this.symbol, orderId: order.orderId });
+      } catch (err) {
+        log(`TRADER ${this.symbol}`, `Exit cancel failed ${order.orderId}: ${err.message}`);
+      }
+    }
     await this.api.cancelAllOpenOrders(this.symbol);
     if (closePositions) await this._closeAllPositions("destroy", this.lastPrice || this.basePrice);
 
@@ -102,13 +123,14 @@ class Trader {
   async _placeEntryOrder(direction, price, levelIndex) {
     const side = direction === "LONG" ? "BUY" : "SELL";
     const qty = this._calcQuantity(price);
+    const positionSide = this._getPositionSide(direction);
     const result = await this.api.placeStopLimitOrder({
       symbol: this.symbol,
       side,
       quantity: qty,
       stopPrice: Number(price.toFixed(6)),
-      price: Number(price.toFixed(6)),
-      reduceOnly: false
+      reduceOnly: false,
+      positionSide
     });
 
     this.pendingEntriesById.set(result.orderId, {
@@ -121,13 +143,67 @@ class Trader {
 
     log(`TRADER ${this.symbol}`, `Placed ${direction} entry @ ${formatNumber(price, 6)}`);
   }
+  _onOrderCancelled(event) {
+    if (!this.active || event.symbol !== this.symbol) return;
+
+    const entryMatch = this._findPending(this.pendingEntriesById, event);
+    if (entryMatch) {
+      log(`TRADER ${this.symbol}`, `Entry order ${event.status}: id=${event.orderId} type=${event.orderType} side=${event.side}`);
+      this.pendingEntriesById.delete(entryMatch.key);
+      this._updateStore();
+      return;
+    }
+
+    const exitMatch = this._findPending(this.pendingExitsById, event);
+    if (exitMatch) {
+      const pendingExit = exitMatch.value;
+      log(`TRADER ${this.symbol}`, `Exit order ${event.status}: id=${event.orderId} reason=${pendingExit.reason} type=${event.orderType}`);
+      this.pendingExitsById.delete(exitMatch.key);
+      // If SL was rejected, the position is unprotected — close at market
+      const position = this.positions.get(pendingExit.positionId);
+      if (position && pendingExit.reason === "stop-loss" && !position.isClosing) {
+        log(`TRADER ${this.symbol}`, `SL REJECTED — closing position at market`);
+        const currentPrice = Number(this.lastPrice) || Number(position.entryPrice);
+        this._closePosition(position, "sl-rejected", currentPrice);
+      }
+      this._updateStore();
+      return;
+    }
+  }
+
+  _findPending(map, event) {
+    let match = map.get(event.orderId);
+    if (match) return { key: event.orderId, value: match };
+    // Try numeric orderId (standard orders store numeric key from REST)
+    if (event.numericOrderId !== undefined) {
+      match = map.get(event.numericOrderId);
+      if (match) return { key: event.numericOrderId, value: match };
+      match = map.get(String(event.numericOrderId));
+      if (match) return { key: String(event.numericOrderId), value: match };
+    }
+    // Try clientOrderId
+    if (event.clientOrderId) {
+      match = map.get(event.clientOrderId);
+      if (match) return { key: event.clientOrderId, value: match };
+    }
+    // Try string/number coercion of orderId
+    if (typeof event.orderId === "number") {
+      match = map.get(String(event.orderId));
+      if (match) return { key: String(event.orderId), value: match };
+    } else if (typeof event.orderId === "string" && /^\d+$/.test(event.orderId)) {
+      match = map.get(Number(event.orderId));
+      if (match) return { key: Number(event.orderId), value: match };
+    }
+    return null;
+  }
 
   _onOrderFilled(event) {
     if (!this.active || event.symbol !== this.symbol) return;
 
-    const pendingEntry = this.pendingEntriesById.get(event.orderId);
-    if (pendingEntry) {
-      this.pendingEntriesById.delete(event.orderId);
+    const entryMatch = this._findPending(this.pendingEntriesById, event);
+    if (entryMatch) {
+      const pendingEntry = entryMatch.value;
+      this.pendingEntriesById.delete(entryMatch.key);
       const entryPrice = Number(event.price || pendingEntry.price);
       const tpPercent = this._getTakeProfitPercent();
       const slPercent = this._getStopLossPercent();
@@ -160,9 +236,13 @@ class Trader {
       return;
     }
 
-    const pendingExit = this.pendingExitsById.get(event.orderId);
-    if (!pendingExit) return;
-    this.pendingExitsById.delete(event.orderId);
+    const exitMatch = this._findPending(this.pendingExitsById, event);
+    if (!exitMatch) {
+      log(`TRADER ${this.symbol}`, `No pending found for fill id=${event.orderId} numId=${event.numericOrderId || ""} clientId=${event.clientOrderId || ""}`);
+      return;
+    }
+    const pendingExit = exitMatch.value;
+    this.pendingExitsById.delete(exitMatch.key);
 
     const position = this.positions.get(pendingExit.positionId);
     if (!position) return;
@@ -175,23 +255,59 @@ class Trader {
   async _placeExitOrders(position) {
     const tpSide = position.direction === "LONG" ? "SELL" : "BUY";
     const slSide = position.direction === "LONG" ? "SELL" : "BUY";
+    const positionSide = this._getPositionSide(position.direction);
+    const currentPrice = Number(this.lastPrice) || Number(position.entryPrice);
+    const triggerHit = position.direction === "LONG"
+      ? currentPrice <= position.stopLossPrice
+      : currentPrice >= position.stopLossPrice;
+    const closeToTrigger = Math.abs(currentPrice - position.stopLossPrice) <= (currentPrice * 0.0002);
 
-    const tp = await this.api.placeLimitOrder({
-      symbol: this.symbol,
-      side: tpSide,
-      quantity: position.quantity,
-      price: Number(position.takeProfitPrice.toFixed(6)),
-      reduceOnly: true
-    });
+    let tp;
+    let sl;
+    try {
+      tp = await this.api.placeLimitOrder({
+        symbol: this.symbol,
+        side: tpSide,
+        quantity: position.quantity,
+        price: Number(position.takeProfitPrice.toFixed(6)),
+        reduceOnly: true,
+        positionSide
+      });
+      log(
+        `TRADER ${this.symbol}`,
+        `TP order placed id=${tp.orderId || ""} price=${formatNumber(position.takeProfitPrice, 6)} side=${tpSide} pos=${positionSide}`
+      );
+    } catch (err) {
+      log(`TRADER ${this.symbol}`, `TP order failed: ${err.message}`);
+      throw err;
+    }
 
-    const sl = await this.api.placeStopLimitOrder({
-      symbol: this.symbol,
-      side: slSide,
-      quantity: position.quantity,
-      stopPrice: Number(position.stopLossPrice.toFixed(6)),
-      price: Number(position.stopLossPrice.toFixed(6)),
-      reduceOnly: true
-    });
+    if (triggerHit || closeToTrigger) {
+      log(
+        `TRADER ${this.symbol}`,
+        `SL trigger unsafe at ${formatNumber(currentPrice, 6)}; closing market now`
+      );
+      await this._closePosition(position, "stop-loss", currentPrice);
+      return;
+    }
+
+    try {
+      sl = await this.api.placeStopLimitOrder({
+        symbol: this.symbol,
+        side: slSide,
+        quantity: position.quantity,
+        stopPrice: Number(position.stopLossPrice.toFixed(6)),
+        reduceOnly: true,
+        positionSide
+      });
+      log(
+        `TRADER ${this.symbol}`,
+        `SL order placed id=${sl.orderId || ""} trigger=${formatNumber(position.stopLossPrice, 6)} side=${slSide} pos=${positionSide}`
+      );
+    } catch (err) {
+      log(`TRADER ${this.symbol}`, `SL order failed: ${err.message}`);
+      throw err;
+    }
 
     position.tpOrderId = tp.orderId;
     position.slOrderId = sl.orderId;
@@ -265,10 +381,12 @@ class Trader {
 
   async _closePosition(pos, reason, fallbackPrice) {
     const side = pos.direction === "LONG" ? "SELL" : "BUY";
+    const positionSide = this._getPositionSide(pos.direction);
     const result = await this.api.placeMarketOrder({
       symbol: this.symbol,
       side,
-      quantity: pos.quantity
+      quantity: pos.quantity,
+      positionSide
     });
     const exitPrice = result.price || fallbackPrice;
     await this._finalizeClose(pos, reason, exitPrice, result.orderId);
