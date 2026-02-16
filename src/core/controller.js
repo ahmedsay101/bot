@@ -59,6 +59,7 @@ class Controller {
           log("CONTROLLER", `Leverage set ${config.leverage}x for ${symbol}`);
         } catch (err) {
           log("CONTROLLER", `Leverage set failed for ${symbol}: ${err.message}`);
+          continue;
         }
       }
 

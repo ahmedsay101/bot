@@ -306,6 +306,11 @@ class Trader {
       );
     } catch (err) {
       log(`TRADER ${this.symbol}`, `SL order failed: ${err.message}`);
+      if (err.message && err.message.includes("-2021")) {
+        log(`TRADER ${this.symbol}`, `SL would immediately trigger — closing at market`);
+        await this._closePosition(position, "stop-loss", currentPrice);
+        return;
+      }
       throw err;
     }
 
@@ -430,6 +435,7 @@ class Trader {
       `Closed ${pos.direction} @ ${formatNumber(exitPrice, 6)} (PnL ${formatNumber(pnl - fees)}) reason=${reason}`
     );
     this._updateStore();
+
     if (reason === "take-profit" || reason === "stop-loss") {
       await this.destroy(reason, { closePositions: false });
     }
