@@ -12,10 +12,19 @@ const { log } = require("./src/utils/logger");
 const { startBot } = require("./bot");
 const config = require("./src/utils/config");
 
+const path = require("path");
+
 const app = express();
 app.use(cors());
 app.use(express.json());
 app.use("/api", router);
+
+// Serve the built dashboard in production
+const dashboardDist = path.join(__dirname, "dashboard", "dist");
+app.use(express.static(dashboardDist));
+app.get(/^\/(?!api|socket\.io).*/, (_req, res) => {
+  res.sendFile(path.join(dashboardDist, "index.html"));
+});
 
 const server = http.createServer(app);
 const io = new Server(server, {
