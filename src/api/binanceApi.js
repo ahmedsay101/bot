@@ -53,7 +53,10 @@ class BinanceApi extends EventEmitter {
   }
 
   async _connectMarketWs() {
-    if (this.symbolStreams.size === 0) return;
+    if (this.symbolStreams.size === 0) {
+      store.setMarketStatus({ ws: "idle" });
+      return;
+    }
     const streams = [];
     for (const symbol of this.symbolStreams) {
       const lower = symbol.toLowerCase();
