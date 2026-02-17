@@ -46,7 +46,7 @@ class Controller {
   _isWithinTradingHours() {
     const now = new Date();
     const hour = now.getUTCHours();
-    return hour >= 3 && hour < 10;
+    return hour >= 3 && hour < 9;
   }
 
   _getTimeUntilTradingWindow() {
@@ -72,7 +72,7 @@ class Controller {
 
     if (!this._isWithinTradingHours()) {
       if (candidates.length > 0) {
-        log("CONTROLLER", `Trading window closed (03:00–10:00 UTC). Next window in ${this._getTimeUntilTradingWindow()}`);
+        log("CONTROLLER", `Trading window closed (03:00–9:00 UTC). Next window in ${this._getTimeUntilTradingWindow()}`);
       }
       return;
     }
