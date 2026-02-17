@@ -30,6 +30,8 @@ class BinanceApi extends EventEmitter {
       updatedAt: 0,
       symbols: new Map()
     };
+
+    store.setMarketStatus({ ws: "idle" });
   }
 
   async startMarketStreams(symbols) {
