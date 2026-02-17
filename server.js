@@ -28,6 +28,7 @@ app.get(/^\/(?!api|socket\.io).*/, (_req, res) => {
 
 const server = http.createServer(app);
 const io = new Server(server, {
+  path: "/api/socket.io",
   cors: { origin: "*" }
 });
 

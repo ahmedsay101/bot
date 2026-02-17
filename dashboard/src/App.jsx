@@ -263,6 +263,7 @@ function App() {
       ]);
 
       setStatus(statusRes.data);
+      if (statusRes.data.marketStatus) setMarketStatus(statusRes.data.marketStatus);
       setTraders(tradersRes.data);
       setPerformance((prev) => ({
         ...prev,
@@ -289,7 +290,7 @@ function App() {
   }, []);
 
   useEffect(() => {
-    const socket = io(API_URL, { transports: ["websocket"] });
+    const socket = io(API_URL, { path: "/api/socket.io", transports: ["websocket"] });
 
     socket.on("connect", () => setSocketStatus("connected"));
     socket.on("disconnect", () => setSocketStatus("disconnected"));
@@ -690,7 +691,7 @@ function App() {
 
           <section className="glass animate-fade-up rounded-3xl p-6" style={{ animationDelay: "0.45s" }}>
             <h3 className="text-lg font-semibold">System Status</h3>
-            <div className="mt-4 grid gap-4 md:grid-cols-5">
+            <div className="mt-4 grid gap-4 md:grid-cols-3 xl:grid-cols-6">
               <div className="rounded-2xl bg-ink-800/70 p-4">
                 <p className="text-xs text-slate-400">Total Active Traders</p>
                 <p className="text-xl font-semibold">{status.activeTraders}</p>
@@ -708,7 +709,11 @@ function App() {
                 <p className="text-xl font-semibold capitalize">{marketStatus.api}</p>
               </div>
               <div className="rounded-2xl bg-ink-800/70 p-4">
-                <p className="text-xs text-slate-400">WebSocket</p>
+                <p className="text-xs text-slate-400">Binance WS</p>
+                <p className="text-xl font-semibold capitalize">{marketStatus.ws}</p>
+              </div>
+              <div className="rounded-2xl bg-ink-800/70 p-4">
+                <p className="text-xs text-slate-400">Dashboard Socket</p>
                 <p className="text-xl font-semibold capitalize">{socketStatus}</p>
               </div>
             </div>

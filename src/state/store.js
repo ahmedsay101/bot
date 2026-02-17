@@ -91,7 +91,8 @@ function getStatus() {
     equity: state.equity,
     pnlToday: state.pnlToday,
     activeTraders: state.activeTraders.size,
-    maxTraders: config.maxTraders
+    maxTraders: config.maxTraders,
+    marketStatus: state.marketStatus
   };
 }
 
