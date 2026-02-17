@@ -12,6 +12,10 @@
     "start:api": "node server.js",
     "start:dashboard": "cd dashboard && npm run dev",
     "dev": "concurrently \"npm run start:api\" \"npm run start:dashboard\"",
+    "build": "cd dashboard && npm run build",
+    "prod": "npm run build && pm2 start ecosystem.config.js",
+    "prod:stop": "pm2 delete ecosystem.config.js",
+    "prod:logs": "pm2 logs",
     "test": "jest"
   },
   "devDependencies": {
