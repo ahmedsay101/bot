@@ -22,6 +22,7 @@ class Trader {
     this.realizedPnl = 0;
     this.feesPaid = 0;
     this.lastPrice = null;
+    this.equity = 0;
 
     this.pendingEntriesById = new Map();
     this.pendingExitsById = new Map();
@@ -50,14 +51,17 @@ class Trader {
   }
 
   _calcQuantity(price) {
-    const baseNotional = Number(config.positionNotionalUSDT) || 0;
+    const equity = this.equity || 0;
+    const fraction = Number(config.equityFraction) || 0.25;
     const leverage = Number(config.leverage) || 1;
-    const notional = config.mode === "test" ? baseNotional * leverage : baseNotional;
+    const notional = Math.floor(equity * fraction * leverage);
+    if (notional <= 0) return 0;
     const qty = notional / price;
     return Number(qty.toFixed(4));
   }
 
   async start() {
+    this.equity = await this.api.getBalance();
     this.basePrice = await this.api.getMarkPrice(this.symbol);
     this.lastPrice = this.basePrice;
 
