@@ -51,7 +51,7 @@ class Trader {
   }
 
   _calcQuantity(price) {
-    const equity = this.equity || 0;
+    const equity = this.equity || 200;
     const fraction = Number(config.equityFraction) || 0.25;
     const leverage = Number(config.leverage) || 1;
     const notional = Math.floor(equity * fraction * leverage);
