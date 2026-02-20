@@ -43,23 +43,43 @@ class Controller {
     }, config.scannerIntervalMs);
   }
 
+  _isWithinTradingHours() {
+    const now = new Date();
+    const hour = now.getUTCHours();
+    return hour >= 3 && hour < 9;
+  }
+
+  _getTimeUntilTradingWindow() {
+    const now = new Date();
+    const hour = now.getUTCHours();
+    const min = now.getUTCMinutes();
+    const sec = now.getUTCSeconds();
+    const currentMinutes = hour * 60 + min;
+    const startMinutes = 3 * 60;
+    let diffMinutes = startMinutes - currentMinutes;
+    if (diffMinutes <= 0) diffMinutes += 24 * 60;
+    const totalSeconds = diffMinutes * 60 - sec;
+    const h = Math.floor(totalSeconds / 3600);
+    const m = Math.floor((totalSeconds % 3600) / 60);
+    return `${h}h ${m}m`;
+  }
+
   async _scanAndLaunch() {
     const activeCount = this.traders.size;
     if (activeCount >= config.maxTraders) return;
 
     const candidates = await this.scanner.scan();
-    const minChange = Number(config.minChangePercent) || 40;
 
-    for (const candidate of candidates) {
-      if (this.traders.size >= config.maxTraders) break;
-      if (this.traders.has(candidate.symbol)) continue;
-
-      if (Math.abs(candidate.change) < minChange) {
-        log("CONTROLLER", `${candidate.symbol} skipped: 24h change ${candidate.change.toFixed(1)}% < ${minChange}%`);
-        continue;
+    if (config.enableTradingWindow && !this._isWithinTradingHours()) {
+      if (candidates.length > 0) {
+        log("CONTROLLER", `Trading window closed (03:00–9:00 UTC). Next window in ${this._getTimeUntilTradingWindow()}`);
       }
+      return;
+    }
 
-      const symbol = candidate.symbol;
+    for (const symbol of candidates) {
+      if (this.traders.size >= config.maxTraders) break;
+      if (this.traders.has(symbol)) continue;
 
       if (config.mode === "live" && !this.leverageSet.has(symbol)) {
         try {

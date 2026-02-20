@@ -49,7 +49,7 @@ class SymbolScanner {
       return candidates
         .sort((a, b) => b.change - a.change)
         .slice(0, Math.max(1, Number(config.maxTraders) || 1))
-        .map((t) => ({ symbol: t.symbol, change: t.change }));
+        .map((t) => t.symbol);
     }
 
     const filtered = [];
@@ -85,7 +85,7 @@ class SymbolScanner {
     filtered.sort((a, b) => b.score - a.score);
     return filtered
       .slice(0, Math.max(1, Number(config.maxTraders) || 1))
-      .map((t) => ({ symbol: t.symbol, change: t.score }));
+      .map((t) => t.symbol);
   }
 }
 
