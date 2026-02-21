@@ -26,6 +26,7 @@ class VolatilityTrader {
 
     this.pendingExitsById = new Map();
     this.positions = new Map();
+    this.equity = 0;
 
     // Track which side has taken profit
     this.tpHitSide = null;
@@ -49,16 +50,22 @@ class VolatilityTrader {
   }
 
   _calcQuantity(price) {
-    // Halve the notional since we open 2 positions (long + short) simultaneously
-    const totalNotional = Number(config.volatilityPositionNotionalUSDT) || 300;
-    const perSideNotional = totalNotional / 2;
-    const leverage = Number(config.leverage) || 1;
-    const effectiveNotional = config.mode === "test" ? perSideNotional * leverage : perSideNotional;
+    // Use equity-based sizing, halved because we open both LONG + SHORT
+    const equity = this.equity || 200;
+    const fraction = Number(config.equityFraction) || 0.25;
+    const leverage = Number(config.leverage) || 10;
+    const maxTraders = Number(config.maxTraders) || 2;
+    // Per-trader notional based on equity share, halved for each side
+    const perTraderNotional = equity * fraction * leverage / maxTraders;
+    const perSideNotional = perTraderNotional / 2;
+    if (perSideNotional <= 0) return 0;
+    const effectiveNotional = config.mode === "test" ? perSideNotional : perSideNotional;
     const qty = effectiveNotional / price;
     return Number(qty.toFixed(4));
   }
 
   async start() {
+    this.equity = await this.api.getBalance();
     this.basePrice = await this.api.getMarkPrice(this.symbol);
     this.lastPrice = this.basePrice;
 

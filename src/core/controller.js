@@ -10,6 +10,7 @@ class Controller {
     this.scanner = scanner;
     this.traders = new Map();
     this.leverageSet = new Set();
+    this.leverageBlacklist = new Set();
   }
 
   _getSlotCounts() {
@@ -100,10 +101,14 @@ class Controller {
 
     const { expansionSlots, volatilitySlots } = this._getSlotCounts();
     const counts = this._countByType();
+    let volatilityFails = 0;
+    let expansionFails = 0;
+    const MAX_TYPE_FAILURES = 3;
 
     for (const symbol of candidates) {
       if (this.traders.size >= config.maxTraders) break;
       if (this.traders.has(symbol)) continue;
+      if (this.leverageBlacklist.has(symbol)) continue;
 
       if (config.mode === "live" && !this.leverageSet.has(symbol)) {
         try {
@@ -112,13 +117,17 @@ class Controller {
           log("CONTROLLER", `Leverage set ${config.leverage}x for ${symbol}`);
         } catch (err) {
           log("CONTROLLER", `Leverage set failed for ${symbol}: ${err.message}`);
+          this.leverageBlacklist.add(symbol);
           continue;
         }
       }
 
-      // Decide which type to launch based on available slots
+      // Decide which type to launch based on available slots and recent failures
+      const canVolatility = counts.volatility < volatilitySlots && volatilityFails < MAX_TYPE_FAILURES;
+      const canExpansion = counts.expansion < expansionSlots && expansionFails < MAX_TYPE_FAILURES;
+
       let trader;
-      if (counts.volatility < volatilitySlots) {
+      if (canVolatility) {
         trader = new VolatilityTrader({
           symbol,
           api: this.api,
@@ -126,7 +135,7 @@ class Controller {
         });
         counts.volatility += 1;
         log("CONTROLLER", `Launching VolatilityTrader for ${symbol}`);
-      } else if (counts.expansion < expansionSlots) {
+      } else if (canExpansion) {
         trader = new ExpansionTrader({
           symbol,
           api: this.api,
@@ -144,8 +153,13 @@ class Controller {
       } catch (err) {
         log("CONTROLLER", `Trader ${symbol} failed to start: ${err.message}`);
         this.traders.delete(symbol);
-        if (trader.traderType === "VOLATILITY") counts.volatility -= 1;
-        else counts.expansion -= 1;
+        if (trader.traderType === "VOLATILITY") {
+          counts.volatility -= 1;
+          volatilityFails += 1;
+        } else {
+          counts.expansion -= 1;
+          expansionFails += 1;
+        }
         try { await trader.destroy("start-failed", { closePositions: true }); } catch (_) {}
       }
     }
