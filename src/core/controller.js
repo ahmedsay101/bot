@@ -1,4 +1,5 @@
-const Trader = require("./trader");
+const ExpansionTrader = require("./expansionTrader");
+const VolatilityTrader = require("./volatilityTrader");
 const { log } = require("../utils/logger");
 const config = require("../utils/config");
 const store = require("../state/store");
@@ -9,6 +10,26 @@ class Controller {
     this.scanner = scanner;
     this.traders = new Map();
     this.leverageSet = new Set();
+  }
+
+  _getSlotCounts() {
+    const total = Number(config.maxTraders) || 2;
+    const volatilitySlots = Math.floor(total / 2);
+    const expansionSlots = total - volatilitySlots;
+    return { expansionSlots, volatilitySlots };
+  }
+
+  _countByType() {
+    let expansion = 0;
+    let volatility = 0;
+    for (const trader of this.traders.values()) {
+      if (trader.traderType === "VOLATILITY") {
+        volatility += 1;
+      } else {
+        expansion += 1;
+      }
+    }
+    return { expansion, volatility };
   }
 
   async start() {
@@ -77,6 +98,9 @@ class Controller {
       return;
     }
 
+    const { expansionSlots, volatilitySlots } = this._getSlotCounts();
+    const counts = this._countByType();
+
     for (const symbol of candidates) {
       if (this.traders.size >= config.maxTraders) break;
       if (this.traders.has(symbol)) continue;
@@ -92,11 +116,28 @@ class Controller {
         }
       }
 
-      const trader = new Trader({
-        symbol,
-        api: this.api,
-        onDestroy: (sym) => this._destroy(sym)
-      });
+      // Decide which type to launch based on available slots
+      let trader;
+      if (counts.volatility < volatilitySlots) {
+        trader = new VolatilityTrader({
+          symbol,
+          api: this.api,
+          onDestroy: (sym) => this._destroy(sym)
+        });
+        counts.volatility += 1;
+        log("CONTROLLER", `Launching VolatilityTrader for ${symbol}`);
+      } else if (counts.expansion < expansionSlots) {
+        trader = new ExpansionTrader({
+          symbol,
+          api: this.api,
+          onDestroy: (sym) => this._destroy(sym)
+        });
+        counts.expansion += 1;
+        log("CONTROLLER", `Launching ExpansionTrader for ${symbol}`);
+      } else {
+        break;
+      }
+
       this.traders.set(symbol, trader);
       await trader.start();
     }

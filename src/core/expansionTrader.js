@@ -8,12 +8,13 @@ function formatNumber(value, digits = 2) {
   return Number(value).toFixed(digits);
 }
 
-class Trader {
+class ExpansionTrader {
   constructor({ symbol, api, onDestroy }) {
-    this.id = `${symbol}-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+    this.id = `EXP-${symbol}-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
     this.symbol = symbol;
     this.api = api;
     this.onDestroy = onDestroy;
+    this.traderType = "EXPANSION";
 
     this.basePrice = null;
     this.active = true;
@@ -105,6 +106,7 @@ class Trader {
     store.removeTrader(this.id, {
       id: this.id,
       symbol: this.symbol,
+      traderType: "EXPANSION",
       realizedPnl: this.realizedPnl,
       createdAt: this.createdAt,
       closedAt: new Date().toISOString(),
@@ -501,6 +503,7 @@ class Trader {
     store.upsertTrader({
       id: this.id,
       symbol: this.symbol,
+      traderType: "EXPANSION",
       lastPrice: price,
       sideExposure: 0,
       openPositions: this.positions.size,
@@ -552,4 +555,4 @@ class Trader {
   }
 }
 
-module.exports = Trader;
+module.exports = ExpansionTrader;

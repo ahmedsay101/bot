@@ -10,7 +10,7 @@ jest.mock("../src/state/store", () => ({
   recordTrade: jest.fn()
 }));
 
-const Trader = require("../src/core/trader");
+const ExpansionTrader = require("../src/core/expansionTrader");
 const config = require("../src/utils/config");
 
 class FakeApi extends EventEmitter {
@@ -23,6 +23,10 @@ class FakeApi extends EventEmitter {
 
   async getMarkPrice() {
     return this.price;
+  }
+
+  async getBalance() {
+    return 1000;
   }
 
   async placeMarketOrder() {
@@ -62,7 +66,7 @@ function emitFill(api, orderId) {
   });
 }
 
-describe("Trader grid behavior", () => {
+describe("ExpansionTrader grid behavior", () => {
   const baseConfig = { ...config };
 
   beforeEach(() => {
@@ -84,7 +88,7 @@ describe("Trader grid behavior", () => {
 
   test("places two initial entry orders", async () => {
     const api = new FakeApi({ price: 100 });
-    const trader = new Trader({ symbol: "TESTUSDT", api, onDestroy: jest.fn() });
+    const trader = new ExpansionTrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn() });
 
     await trader.start();
 
@@ -93,7 +97,7 @@ describe("Trader grid behavior", () => {
 
   test("fills entry and closes on take profit", async () => {
     const api = new FakeApi({ price: 100 });
-    const trader = new Trader({ symbol: "TESTUSDT", api, onDestroy: jest.fn() });
+    const trader = new ExpansionTrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn() });
 
     await trader.start();
 
