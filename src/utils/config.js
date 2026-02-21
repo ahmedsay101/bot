@@ -4,7 +4,7 @@ const config = {
   apiSecret: process.env.BINANCE_API_SECRET || "",
   baseRestUrl: "https://fapi.binance.com",
   baseWsUrl: "wss://fstream.binance.com",
-  maxTraders: 2,
+  maxTraders: 5,
   enableTradingWindow: true,
   enableScannerFilters: false,
   feeRate: 0.0004,
