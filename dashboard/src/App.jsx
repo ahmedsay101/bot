@@ -541,7 +541,16 @@ function App() {
                     })()}
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <div>
-                        <p className="text-xs uppercase tracking-[0.2em] text-slate-400">{trader.status}</p>
+                        <div className="flex items-center gap-2">
+                          <p className="text-xs uppercase tracking-[0.2em] text-slate-400">{trader.status}</p>
+                          <span className={`rounded-full px-2 py-0.5 text-[10px] uppercase tracking-[0.15em] font-medium ${
+                            trader.traderType === "VOLATILITY"
+                              ? "bg-violet-500/20 text-violet-300 border border-violet-400/30"
+                              : "bg-sky-500/20 text-sky-300 border border-sky-400/30"
+                          }`}>
+                            {trader.traderType === "VOLATILITY" ? "Volatility" : "Expansion"}
+                          </span>
+                        </div>
                         <h4 className="text-lg font-semibold text-slate-100">{trader.symbol}</h4>
                       </div>
                       <div className="flex flex-wrap items-center gap-3 text-xs text-slate-300">

@@ -10,6 +10,7 @@ router.get("/traders", (req, res) => {
   const traders = store.getTraders().map((trader) => ({
     id: trader.id,
     symbol: trader.symbol,
+    traderType: trader.traderType || "EXPANSION",
     lastPrice: trader.lastPrice,
     sideExposure: trader.sideExposure,
     openPositions: trader.openPositions,
