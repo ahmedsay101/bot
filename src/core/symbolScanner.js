@@ -48,7 +48,7 @@ class SymbolScanner {
     if (!config.enableScannerFilters) {
       return candidates
         .sort((a, b) => b.change - a.change)
-        .slice(0, Math.max(1, Number(config.maxTraders) || 1))
+        .slice(0, Math.max(1, Number(config.maxTraders) * 2 || 4))
         .map((t) => t.symbol);
     }
 
@@ -84,7 +84,7 @@ class SymbolScanner {
 
     filtered.sort((a, b) => b.score - a.score);
     return filtered
-      .slice(0, Math.max(1, Number(config.maxTraders) || 1))
+      .slice(0, Math.max(1, Number(config.maxTraders) * 2 || 4))
       .map((t) => t.symbol);
   }
 }

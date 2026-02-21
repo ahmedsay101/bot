@@ -559,6 +559,97 @@ class VolatilityTrader {
     const tp = this._getTakeProfitPercent();
     const sl = this._getStopLossPercent();
 
+    // Build levels from positions for the grid ladder display
+    const levels = [];
+    const longPos = Array.from(this.positions.values()).find((p) => p.direction === "LONG");
+    const shortPos = Array.from(this.positions.values()).find((p) => p.direction === "SHORT");
+
+    if (longPos) {
+      levels.push({
+        index: 3,
+        price: longPos.takeProfitPrice,
+        status: "LONG",
+        label: "Long TP",
+        entryPrice: longPos.entryPrice,
+        takeProfitPrice: longPos.takeProfitPrice
+      });
+    } else {
+      levels.push({
+        index: 3,
+        price: pctChange(this.basePrice, tp),
+        status: "EMPTY",
+        label: "Long TP",
+        entryPrice: null,
+        takeProfitPrice: null
+      });
+    }
+
+    levels.push({
+      index: 2,
+      price: longPos ? longPos.entryPrice : this.basePrice,
+      status: longPos ? "LONG" : "EMPTY",
+      label: "Long Entry",
+      entryPrice: longPos ? longPos.entryPrice : null,
+      takeProfitPrice: longPos ? longPos.takeProfitPrice : null
+    });
+
+    levels.push({
+      index: 0,
+      price: this.basePrice,
+      status: "EMPTY",
+      label: "Base",
+      entryPrice: null,
+      takeProfitPrice: null
+    });
+
+    levels.push({
+      index: -2,
+      price: shortPos ? shortPos.entryPrice : this.basePrice,
+      status: shortPos ? "SHORT" : "EMPTY",
+      label: "Short Entry",
+      entryPrice: shortPos ? shortPos.entryPrice : null,
+      takeProfitPrice: shortPos ? shortPos.takeProfitPrice : null
+    });
+
+    if (shortPos) {
+      levels.push({
+        index: -3,
+        price: shortPos.takeProfitPrice,
+        status: "SHORT",
+        label: "Short TP",
+        entryPrice: shortPos.entryPrice,
+        takeProfitPrice: shortPos.takeProfitPrice
+      });
+    } else {
+      levels.push({
+        index: -3,
+        price: pctChange(this.basePrice, -tp),
+        status: "EMPTY",
+        label: "Short TP",
+        entryPrice: null,
+        takeProfitPrice: null
+      });
+    }
+
+    // SL levels
+    levels.push({
+      index: 4,
+      price: shortPos ? shortPos.stopLossPrice : pctChange(this.basePrice, sl),
+      status: shortPos ? "PENDING_SHORT" : "EMPTY",
+      label: "Short SL",
+      entryPrice: null,
+      takeProfitPrice: null
+    });
+
+    levels.push({
+      index: -4,
+      price: longPos ? longPos.stopLossPrice : pctChange(this.basePrice, -sl),
+      status: longPos ? "PENDING_LONG" : "EMPTY",
+      label: "Long SL",
+      entryPrice: null,
+      takeProfitPrice: null
+    });
+
     store.upsertTrader({
       id: this.id,
       symbol: this.symbol,
@@ -574,7 +665,7 @@ class VolatilityTrader {
         basePrice: this.basePrice,
         takeProfitPercent: tp,
         stopLossPercent: sl,
-        levels: []
+        levels
       },
       openPositionsDetail: Array.from(this.positions.values()).map((pos) => ({
         side: pos.direction,
