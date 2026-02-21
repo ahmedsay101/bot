@@ -139,7 +139,15 @@ class Controller {
       }
 
       this.traders.set(symbol, trader);
-      await trader.start();
+      try {
+        await trader.start();
+      } catch (err) {
+        log("CONTROLLER", `Trader ${symbol} failed to start: ${err.message}`);
+        this.traders.delete(symbol);
+        if (trader.traderType === "VOLATILITY") counts.volatility -= 1;
+        else counts.expansion -= 1;
+        try { await trader.destroy("start-failed", { closePositions: true }); } catch (_) {}
+      }
     }
 
     await this._refreshMarketStreams();

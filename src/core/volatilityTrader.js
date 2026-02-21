@@ -49,9 +49,11 @@ class VolatilityTrader {
   }
 
   _calcQuantity(price) {
-    const notional = Number(config.volatilityPositionNotionalUSDT) || 300;
+    // Halve the notional since we open 2 positions (long + short) simultaneously
+    const totalNotional = Number(config.volatilityPositionNotionalUSDT) || 300;
+    const perSideNotional = totalNotional / 2;
     const leverage = Number(config.leverage) || 1;
-    const effectiveNotional = config.mode === "test" ? notional * leverage : notional;
+    const effectiveNotional = config.mode === "test" ? perSideNotional * leverage : perSideNotional;
     const qty = effectiveNotional / price;
     return Number(qty.toFixed(4));
   }
