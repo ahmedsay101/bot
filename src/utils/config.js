@@ -11,7 +11,7 @@ const config = {
   slippageRate: 0.0002,
   riskPerTradeUSDT: 20,
   positionNotionalUSDT: 300,
-  equityFraction: 0.25,
+  equityFraction: 0.40,
   leverage: 10,
   levelCount: 2,
   levelSpacingPercent: 3,
