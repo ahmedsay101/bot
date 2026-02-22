@@ -12,6 +12,7 @@ class Controller {
     this.failedSymbols = new Map(); // symbol -> { count, until }
     this.consecutiveLosses = 0;
     this.lossCooldownUntil = 0;
+    this._scanning = false;
   }
 
   async start() {
@@ -68,6 +69,16 @@ class Controller {
   }
 
   async _scanAndLaunch() {
+    if (this._scanning) return;
+    this._scanning = true;
+    try {
+      await this._doScanAndLaunch();
+    } finally {
+      this._scanning = false;
+    }
+  }
+
+  async _doScanAndLaunch() {
     const activeCount = this.traders.size;
     if (activeCount >= config.maxTraders) return;
 
