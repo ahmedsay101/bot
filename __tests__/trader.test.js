@@ -25,6 +25,10 @@ class FakeApi extends EventEmitter {
     return this.price;
   }
 
+  async getBalance() {
+    return 1000;
+  }
+
   async placeMarketOrder() {
     return { status: "FILLED", price: this.price, orderId: `M-${++this.orderSeq}` };
   }

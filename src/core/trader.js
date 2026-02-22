@@ -117,11 +117,11 @@ class Trader {
 
   async _placeInitialEntries() {
     const spacing = this._getSpacingPercent();
-    const longPrice = pctChange(this.basePrice, spacing);
-    const shortPrice = pctChange(this.basePrice, -spacing);
+    const longPrice = pctChange(this.basePrice, -spacing);
+    const shortPrice = pctChange(this.basePrice, spacing);
 
-    await this._placeEntryOrder("LONG", longPrice, 1);
-    await this._placeEntryOrder("SHORT", shortPrice, -1);
+    await this._placeEntryOrder("LONG", longPrice, -1);
+    await this._placeEntryOrder("SHORT", shortPrice, 1);
   }
 
   async _placeEntryOrder(direction, price, levelIndex) {
@@ -493,9 +493,9 @@ class Trader {
     const sl = this._getStopLossPercent();
 
     const levels = [
-      { index: -1, price: pctChange(this.basePrice, -spacing), direction: "SHORT" },
+      { index: 1, price: pctChange(this.basePrice, spacing), direction: "SHORT" },
       { index: 0, price: this.basePrice, direction: "EMPTY" },
-      { index: 1, price: pctChange(this.basePrice, spacing), direction: "LONG" }
+      { index: -1, price: pctChange(this.basePrice, -spacing), direction: "LONG" }
     ];
 
     store.upsertTrader({
