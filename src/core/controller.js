@@ -98,7 +98,13 @@ class Controller {
         onDestroy: (sym) => this._destroy(sym)
       });
       this.traders.set(symbol, trader);
-      await trader.start();
+      try {
+        await trader.start();
+      } catch (err) {
+        log("CONTROLLER", `Trader ${symbol} failed to start: ${err.message}`);
+        this.traders.delete(symbol);
+        try { await trader.destroy("start-failed", { closePositions: true }); } catch (_) {}
+      }
     }
 
     await this._refreshMarketStreams();

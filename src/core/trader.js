@@ -128,11 +128,11 @@ class Trader {
     const side = direction === "LONG" ? "BUY" : "SELL";
     const qty = this._calcQuantity(price);
     const positionSide = this._getPositionSide(direction);
-    const result = await this.api.placeStopLimitOrder({
+    const result = await this.api.placeLimitOrder({
       symbol: this.symbol,
       side,
       quantity: qty,
-      stopPrice: Number(price.toFixed(6)),
+      price: Number(price.toFixed(6)),
       reduceOnly: false,
       positionSide
     });
