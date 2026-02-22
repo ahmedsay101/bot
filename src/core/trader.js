@@ -54,9 +54,12 @@ class Trader {
     const equity = this.equity || 200;
     const fraction = Number(config.equityFraction) || 0.25;
     const leverage = Number(config.leverage) || 10;
-    const notional = Math.floor(equity * fraction * leverage);
-    if (notional <= 0) return 0;
-    const qty = notional / price;
+    const maxTraders = Number(config.maxTraders) || 2;
+    // Split equity across traders, then across 2 entry orders (long + short)
+    const perTrader = equity * fraction * leverage / maxTraders;
+    const perSide = perTrader / 2;
+    if (perSide <= 0) return 0;
+    const qty = perSide / price;
     return Number(qty.toFixed(4));
   }
 
@@ -112,7 +115,7 @@ class Trader {
     });
 
     log(`TRADER ${this.symbol}`, `Destroyed (${reason})`);
-    if (this.onDestroy) this.onDestroy(this.symbol);
+    if (this.onDestroy) this.onDestroy(this.symbol, this.realizedPnl);
   }
 
   async _placeInitialEntries() {
