@@ -64,7 +64,7 @@ class Trader {
   }
 
   async start() {
-    this.equity = await this.api.getBalance();
+    this.equity = await this.api.getAvailableBalance();
     this.basePrice = await this.api.getMarkPrice(this.symbol);
     this.lastPrice = this.basePrice;
 

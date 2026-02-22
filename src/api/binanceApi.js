@@ -626,6 +626,27 @@ class BinanceApi extends EventEmitter {
     return usdt ? Number(usdt.balance) : 0;
   }
 
+  async getAvailableBalance() {
+    if (this.mode === "test") {
+      return this.testBalance;
+    }
+    const data = await this._request("GET", "/fapi/v2/balance", {}, true);
+    const usdt = data.find((b) => b.asset === "USDT");
+    return usdt ? Number(usdt.availableBalance || usdt.balance) : 0;
+  }
+
+  async getOpenOrders(symbol) {
+    if (this.mode === "test") {
+      const orders = [];
+      for (const order of this.testOrders.values()) {
+        if (!symbol || order.symbol === symbol) orders.push(order);
+      }
+      return orders;
+    }
+    const params = symbol ? { symbol } : {};
+    return this._request("GET", "/fapi/v1/openOrders", params, true);
+  }
+
   async getOrderTrades(symbol, orderId) {
     if (this.mode === "test") {
       return [];

@@ -18,11 +18,28 @@ class Controller {
   async start() {
     if (config.mode === "live") {
       await this.api.startUserDataStream();
+      await this._cleanupStaleOrders();
     }
     await this._refreshMarketStreams();
     await this._syncAccount();
     this._startAccountSync();
     await this._launchLoop();
+  }
+
+  async _cleanupStaleOrders() {
+    try {
+      const openOrders = await this.api.getOpenOrders();
+      const symbols = [...new Set(openOrders.map(o => o.symbol))];
+      for (const symbol of symbols) {
+        log("CONTROLLER", `Cleanup: cancelling ${openOrders.filter(o => o.symbol === symbol).length} stale orders for ${symbol}`);
+        await this.api.cancelAllOpenOrders(symbol);
+      }
+      if (symbols.length > 0) {
+        log("CONTROLLER", `Startup cleanup: cancelled orders for ${symbols.length} symbol(s)`);
+      }
+    } catch (err) {
+      log("CONTROLLER", `Startup cleanup error: ${err.message}`);
+    }
   }
 
   _startAccountSync() {
