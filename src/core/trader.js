@@ -55,16 +55,14 @@ class Trader {
     const fraction = Number(config.equityFraction) || 0.25;
     const leverage = Number(config.leverage) || 10;
     const maxTraders = Number(config.maxTraders) || 2;
-    // Split equity across traders, then across 2 entry orders (long + short)
-    const perTrader = equity * fraction * leverage / maxTraders;
-    const perSide = perTrader / 2;
-    if (perSide <= 0) return 0;
-    const qty = perSide / price;
+    const notional = equity * fraction * leverage / maxTraders;
+    if (notional <= 0) return 0;
+    const qty = notional / price;
     return Number(qty.toFixed(4));
   }
 
   async start() {
-    this.equity = await this.api.getAvailableBalance();
+    this.equity = await this.api.getBalance();
     this.basePrice = await this.api.getMarkPrice(this.symbol);
     this.lastPrice = this.basePrice;
 
