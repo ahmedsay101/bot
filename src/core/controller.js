@@ -203,6 +203,7 @@ class Controller {
       }
     }
 
+    store.setCooldownStatus({ consecutiveLosses: this.consecutiveLosses, lossCooldownUntil: this.lossCooldownUntil });
     log("CONTROLLER", `Trader ${symbol} destroyed`);
     await this._refreshMarketStreams();
   }

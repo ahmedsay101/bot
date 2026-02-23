@@ -421,6 +421,20 @@ function App() {
               </span>
             </div>
           </div>
+
+          {status.cooldown && (
+            <div className="mt-6 rounded-2xl border border-white/5 bg-ink-800/70 px-4 py-3">
+              <p className="text-xs text-slate-400">Loss Streak</p>
+              <p className={`text-lg font-semibold ${(status.cooldown.consecutiveLosses || 0) >= 2 ? "text-rose-400" : "text-slate-200"}`}>
+                {status.cooldown.consecutiveLosses || 0} consecutive
+              </p>
+              {status.cooldown.active && (
+                <p className="mt-1 text-xs text-amber-400">
+                  Cooldown active — {status.cooldown.remainingMin}m remaining
+                </p>
+              )}
+            </div>
+          )}
         </aside>
 
         <main className="flex flex-col gap-6">

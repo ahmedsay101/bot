@@ -23,6 +23,12 @@ const state = {
     api: "unknown",
     ws: "unknown",
     updatedAt: null
+  },
+  cooldown: {
+    consecutiveLosses: 0,
+    lossCooldownUntil: 0,
+    active: false,
+    remainingMin: 0
   }
 };
 
@@ -84,6 +90,17 @@ function recordTrade({ pnl, fees }) {
   state.pnlToday += gross - fee;
 }
 
+function setCooldownStatus({ consecutiveLosses, lossCooldownUntil }) {
+  const now = Date.now();
+  const active = lossCooldownUntil > now;
+  state.cooldown = {
+    consecutiveLosses,
+    lossCooldownUntil,
+    active,
+    remainingMin: active ? Math.ceil((lossCooldownUntil - now) / 60000) : 0
+  };
+}
+
 function getStatus() {
   return {
     mode: state.mode,
@@ -92,7 +109,8 @@ function getStatus() {
     pnlToday: state.pnlToday,
     activeTraders: state.activeTraders.size,
     maxTraders: config.maxTraders,
-    marketStatus: state.marketStatus
+    marketStatus: state.marketStatus,
+    cooldown: state.cooldown
   };
 }
 
@@ -152,6 +170,7 @@ module.exports = {
   setMarketStatus,
   setBalance,
   setEquity,
+  setCooldownStatus,
   upsertTrader,
   removeTrader,
   recordTrade,
