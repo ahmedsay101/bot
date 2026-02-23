@@ -147,10 +147,10 @@ class Controller {
         log("CONTROLLER", `Trader ${symbol} failed to start: ${err.message}`);
         this.traders.delete(symbol);
 
-        // Back off: 5 min after 1st fail, 15 min after 2nd, 60 min after 3+
+        // Back off: 10 min after 1st fail, 30 min after 2nd, 120 min after 3+
         const prev = this.failedSymbols.get(symbol) || { count: 0 };
         const count = prev.count + 1;
-        const cooldown = count >= 3 ? 60 : count >= 2 ? 15 : 5;
+        const cooldown = count >= 3 ? 120 : count >= 2 ? 30 : 10;
         this.failedSymbols.set(symbol, { count, until: Date.now() + cooldown * 60 * 1000 });
         log("CONTROLLER", `${symbol} blacklisted for ${cooldown}m (fail #${count})`);
 
@@ -190,7 +190,7 @@ class Controller {
         this.consecutiveLosses += 1;
         log("CONTROLLER", `Trader ${symbol} closed with loss ($${pnl.toFixed(2)}). Consecutive losses: ${this.consecutiveLosses}`);
         if (this.consecutiveLosses >= 2) {
-          const cooldownMin = this.consecutiveLosses >= 4 ? 60 : this.consecutiveLosses >= 3 ? 30 : 15;
+          const cooldownMin = this.consecutiveLosses >= 4 ? 120 : this.consecutiveLosses >= 3 ? 60 : 30;
           this.lossCooldownUntil = Date.now() + cooldownMin * 60 * 1000;
           log("CONTROLLER", `Loss cooldown activated: ${cooldownMin}m pause after ${this.consecutiveLosses} consecutive losses`);
         }
