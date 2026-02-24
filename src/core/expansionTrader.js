@@ -8,13 +8,13 @@ function formatNumber(value, digits = 2) {
   return Number(value).toFixed(digits);
 }
 
-class VolatilityTrader {
+class ExpansionTrader {
   constructor({ symbol, api, onDestroy }) {
     this.id = `${symbol}-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
     this.symbol = symbol;
     this.api = api;
     this.onDestroy = onDestroy;
-    this.traderType = "VOLATILITY";
+    this.traderType = "EXPANSION";
 
     this.basePrice = null;
     this.active = true;
@@ -74,7 +74,7 @@ class VolatilityTrader {
     this.api.on("orderFilled", this._onOrderFilled);
     this.api.on("orderCancelled", this._onOrderCancelled);
 
-    log(`TRADER ${this.symbol}`, "Initialized");
+    log(`TRADER ${this.symbol}`, "Initialized (EXPANSION)");
     this._updateStore();
   }
 
@@ -117,23 +117,25 @@ class VolatilityTrader {
     if (this.onDestroy) this.onDestroy(this.symbol, this.realizedPnl);
   }
 
+  /* ── Expansion: LONG above price, SHORT below price via stop-limit ── */
   async _placeInitialEntries() {
     const spacing = this._getSpacingPercent();
-    const longPrice = pctChange(this.basePrice, -spacing);
-    const shortPrice = pctChange(this.basePrice, spacing);
+    const longPrice = pctChange(this.basePrice, spacing);    // above
+    const shortPrice = pctChange(this.basePrice, -spacing);  // below
 
-    await this._placeEntryOrder("LONG", longPrice, -1);
-    await this._placeEntryOrder("SHORT", shortPrice, 1);
+    await this._placeEntryOrder("LONG", longPrice, 1);
+    await this._placeEntryOrder("SHORT", shortPrice, -1);
   }
 
   async _placeEntryOrder(direction, price, levelIndex) {
     const side = direction === "LONG" ? "BUY" : "SELL";
     const qty = this._calcQuantity(price);
     const positionSide = this._getPositionSide(direction);
-    const result = await this.api.placeLimitOrder({
+    const result = await this.api.placeStopLimitOrder({
       symbol: this.symbol,
       side,
       quantity: qty,
+      stopPrice: Number(price.toFixed(6)),
       price: Number(price.toFixed(6)),
       reduceOnly: false,
       positionSide
@@ -147,8 +149,9 @@ class VolatilityTrader {
       levelIndex
     });
 
-    log(`TRADER ${this.symbol}`, `Placed ${direction} entry @ ${formatNumber(price, 6)}`);
+    log(`TRADER ${this.symbol}`, `Placed ${direction} stop-limit entry @ ${formatNumber(price, 6)}`);
   }
+
   _onOrderCancelled(event) {
     if (!this.active || event.symbol !== this.symbol) return;
 
@@ -165,7 +168,6 @@ class VolatilityTrader {
       const pendingExit = exitMatch.value;
       log(`TRADER ${this.symbol}`, `Exit order ${event.status}: id=${event.orderId} reason=${pendingExit.reason} type=${event.orderType}`);
       this.pendingExitsById.delete(exitMatch.key);
-      // If SL was rejected, the position is unprotected — close at market
       const position = this.positions.get(pendingExit.positionId);
       if (position && pendingExit.reason === "stop-loss" && !position.isClosing) {
         log(`TRADER ${this.symbol}`, `SL REJECTED — closing position at market`);
@@ -180,19 +182,16 @@ class VolatilityTrader {
   _findPending(map, event) {
     let match = map.get(event.orderId);
     if (match) return { key: event.orderId, value: match };
-    // Try numeric orderId (standard orders store numeric key from REST)
     if (event.numericOrderId !== undefined) {
       match = map.get(event.numericOrderId);
       if (match) return { key: event.numericOrderId, value: match };
       match = map.get(String(event.numericOrderId));
       if (match) return { key: String(event.numericOrderId), value: match };
     }
-    // Try clientOrderId
     if (event.clientOrderId) {
       match = map.get(event.clientOrderId);
       if (match) return { key: event.clientOrderId, value: match };
     }
-    // Try string/number coercion of orderId
     if (typeof event.orderId === "number") {
       match = map.get(String(event.orderId));
       if (match) return { key: String(event.orderId), value: match };
@@ -494,10 +493,11 @@ class VolatilityTrader {
     const tp = this._getTakeProfitPercent();
     const sl = this._getStopLossPercent();
 
+    /* Expansion: LONG above (+spacing), SHORT below (-spacing) */
     const levels = [
-      { index: 1, price: pctChange(this.basePrice, spacing), direction: "SHORT" },
+      { index: 1, price: pctChange(this.basePrice, spacing), direction: "LONG" },
       { index: 0, price: this.basePrice, direction: "EMPTY" },
-      { index: -1, price: pctChange(this.basePrice, -spacing), direction: "LONG" }
+      { index: -1, price: pctChange(this.basePrice, -spacing), direction: "SHORT" }
     ];
 
     store.upsertTrader({
@@ -555,4 +555,4 @@ class VolatilityTrader {
   }
 }
 
-module.exports = VolatilityTrader;
+module.exports = ExpansionTrader;

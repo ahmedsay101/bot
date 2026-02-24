@@ -422,17 +422,12 @@ function App() {
             </div>
           </div>
 
-          {status.cooldown && (
+          {status.traderType && (
             <div className="mt-6 rounded-2xl border border-white/5 bg-ink-800/70 px-4 py-3">
-              <p className="text-xs text-slate-400">Loss Streak</p>
-              <p className={`text-lg font-semibold ${(status.cooldown.consecutiveLosses || 0) >= 2 ? "text-rose-400" : "text-slate-200"}`}>
-                {status.cooldown.consecutiveLosses || 0} consecutive
+              <p className="text-xs text-slate-400">Active Regime</p>
+              <p className={`text-lg font-semibold ${status.traderType === "EXPANSION" ? "text-sky-400" : "text-amber-400"}`}>
+                {status.traderType}
               </p>
-              {status.cooldown.active && (
-                <p className="mt-1 text-xs text-amber-400">
-                  Cooldown active — {status.cooldown.remainingMin}m remaining
-                </p>
-              )}
             </div>
           )}
         </aside>
@@ -556,7 +551,18 @@ function App() {
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <div>
                         <p className="text-xs uppercase tracking-[0.2em] text-slate-400">{trader.status}</p>
-                        <h4 className="text-lg font-semibold text-slate-100">{trader.symbol}</h4>
+                        <div className="flex items-center gap-2">
+                          <h4 className="text-lg font-semibold text-slate-100">{trader.symbol}</h4>
+                          {trader.traderType && (
+                            <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${
+                              trader.traderType === "EXPANSION"
+                                ? "bg-sky-500/20 text-sky-300 border border-sky-500/30"
+                                : "bg-amber-500/20 text-amber-300 border border-amber-500/30"
+                            }`}>
+                              {trader.traderType}
+                            </span>
+                          )}
+                        </div>
                       </div>
                       <div className="flex flex-wrap items-center gap-3 text-xs text-slate-300">
                         <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1">

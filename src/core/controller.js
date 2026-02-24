@@ -1,4 +1,5 @@
-const Trader = require("./trader");
+const VolatilityTrader = require("./trader");
+const ExpansionTrader = require("./expansionTrader");
 const { log } = require("../utils/logger");
 const config = require("../utils/config");
 const store = require("../state/store");
@@ -10,8 +11,8 @@ class Controller {
     this.traders = new Map();
     this.leverageSet = new Set();
     this.failedSymbols = new Map(); // symbol -> { count, until }
+    this.traderType = "VOLATILITY";
     this.consecutiveLosses = 0;
-    this.lossCooldownUntil = 0;
     this._scanning = false;
   }
 
@@ -99,13 +100,6 @@ class Controller {
     const activeCount = this.traders.size;
     if (activeCount >= config.maxTraders) return;
 
-    // Loss cooldown: pause launching after 2 consecutive losses
-    if (this.lossCooldownUntil > Date.now()) {
-      const remaining = Math.ceil((this.lossCooldownUntil - Date.now()) / 60000);
-      log("CONTROLLER", `Loss cooldown active (${this.consecutiveLosses} consecutive losses). Resuming in ${remaining}m`);
-      return;
-    }
-
     const candidates = await this.scanner.scan();
 
     if (config.enableTradingWindow && !this._isWithinTradingHours()) {
@@ -135,7 +129,8 @@ class Controller {
         }
       }
 
-      const trader = new Trader({
+      const TraderClass = this.traderType === "EXPANSION" ? ExpansionTrader : VolatilityTrader;
+      const trader = new TraderClass({
         symbol,
         api: this.api,
         onDestroy: (sym, pnl) => this._destroy(sym, pnl)
@@ -143,6 +138,7 @@ class Controller {
       this.traders.set(symbol, trader);
       try {
         await trader.start();
+        log("CONTROLLER", `Launched ${this.traderType} trader for ${symbol}`);
       } catch (err) {
         log("CONTROLLER", `Trader ${symbol} failed to start: ${err.message}`);
         this.traders.delete(symbol);
@@ -180,30 +176,35 @@ class Controller {
     await this.api.updateSymbols(symbols);
   }
 
+  shouldSwitch() {
+    if (this.consecutiveLosses >= 2) {
+      const oldType = this.traderType;
+      this.traderType = this.traderType === "VOLATILITY" ? "EXPANSION" : "VOLATILITY";
+      this.consecutiveLosses = 0;
+      log("CONTROLLER", `Regime switch: ${oldType} → ${this.traderType} after ${2}+ consecutive losses`);
+      store.setTraderType(this.traderType);
+      return true;
+    }
+    return false;
+  }
+
   async _destroy(symbol, pnl) {
     if (!this.traders.has(symbol)) return;
     this.traders.delete(symbol);
 
-    // Track consecutive losses for cooldown
     if (typeof pnl === "number") {
       if (pnl < 0) {
         this.consecutiveLosses += 1;
         log("CONTROLLER", `Trader ${symbol} closed with loss ($${pnl.toFixed(2)}). Consecutive losses: ${this.consecutiveLosses}`);
-        if (this.consecutiveLosses >= 2) {
-          const cooldownMin = this.consecutiveLosses >= 4 ? 120 : this.consecutiveLosses >= 3 ? 60 : 30;
-          this.lossCooldownUntil = Date.now() + cooldownMin * 60 * 1000;
-          log("CONTROLLER", `Loss cooldown activated: ${cooldownMin}m pause after ${this.consecutiveLosses} consecutive losses`);
-        }
+        this.shouldSwitch();
       } else {
         if (this.consecutiveLosses > 0) {
           log("CONTROLLER", `Trader ${symbol} closed with profit ($${pnl.toFixed(2)}). Loss streak reset.`);
         }
         this.consecutiveLosses = 0;
-        this.lossCooldownUntil = 0;
       }
     }
 
-    store.setCooldownStatus({ consecutiveLosses: this.consecutiveLosses, lossCooldownUntil: this.lossCooldownUntil });
     log("CONTROLLER", `Trader ${symbol} destroyed`);
     await this._refreshMarketStreams();
   }

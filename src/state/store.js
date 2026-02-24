@@ -24,12 +24,7 @@ const state = {
     ws: "unknown",
     updatedAt: null
   },
-  cooldown: {
-    consecutiveLosses: 0,
-    lossCooldownUntil: 0,
-    active: false,
-    remainingMin: 0
-  }
+  traderType: "VOLATILITY"
 };
 
 function setMarketStatus(patch) {
@@ -90,15 +85,8 @@ function recordTrade({ pnl, fees }) {
   state.pnlToday += gross - fee;
 }
 
-function setCooldownStatus({ consecutiveLosses, lossCooldownUntil }) {
-  const now = Date.now();
-  const active = lossCooldownUntil > now;
-  state.cooldown = {
-    consecutiveLosses,
-    lossCooldownUntil,
-    active,
-    remainingMin: active ? Math.ceil((lossCooldownUntil - now) / 60000) : 0
-  };
+function setTraderType(traderType) {
+  state.traderType = traderType;
 }
 
 function getStatus() {
@@ -110,7 +98,7 @@ function getStatus() {
     activeTraders: state.activeTraders.size,
     maxTraders: config.maxTraders,
     marketStatus: state.marketStatus,
-    cooldown: state.cooldown
+    traderType: state.traderType
   };
 }
 
@@ -170,7 +158,8 @@ module.exports = {
   setMarketStatus,
   setBalance,
   setEquity,
-  setCooldownStatus,
+  setCooldownStatus: setTraderType,
+  setTraderType,
   upsertTrader,
   removeTrader,
   recordTrade,

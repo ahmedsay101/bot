@@ -10,7 +10,8 @@ jest.mock("../src/state/store", () => ({
   recordTrade: jest.fn()
 }));
 
-const Trader = require("../src/core/trader");
+const VolatilityTrader = require("../src/core/trader");
+const ExpansionTrader = require("../src/core/expansionTrader");
 const config = require("../src/utils/config");
 
 class FakeApi extends EventEmitter {
@@ -70,7 +71,7 @@ function emitFill(api, orderId) {
   });
 }
 
-describe("Trader grid behavior", () => {
+describe("VolatilityTrader grid behavior", () => {
   const baseConfig = { ...config };
 
   beforeEach(() => {
@@ -90,18 +91,19 @@ describe("Trader grid behavior", () => {
     Object.assign(config, baseConfig);
   });
 
-  test("places two initial entry orders", async () => {
+  test("places two initial entry orders (limit)", async () => {
     const api = new FakeApi({ price: 100 });
-    const trader = new Trader({ symbol: "TESTUSDT", api, onDestroy: jest.fn() });
+    const trader = new VolatilityTrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn() });
 
     await trader.start();
 
     expect(trader.pendingEntriesById.size).toBe(2);
+    expect(trader.traderType).toBe("VOLATILITY");
   });
 
   test("fills entry and closes on take profit", async () => {
     const api = new FakeApi({ price: 100 });
-    const trader = new Trader({ symbol: "TESTUSDT", api, onDestroy: jest.fn() });
+    const trader = new VolatilityTrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn() });
 
     await trader.start();
 
@@ -120,5 +122,40 @@ describe("Trader grid behavior", () => {
 
     expect(trader.positions.size).toBeLessThan(initialCount);
     expect(trader.tradeHistory.length).toBeGreaterThan(0);
+  });
+});
+
+describe("ExpansionTrader grid behavior", () => {
+  const baseConfig = { ...config };
+
+  beforeEach(() => {
+    Object.assign(config, baseConfig, {
+      mode: "test",
+      levelSpacingPercent: 1,
+      levelCount: 2,
+      takeProfitPercent: 1,
+      stopLossPercent: 1,
+      positionNotionalUSDT: 100,
+      leverage: 1,
+      feeRate: 0
+    });
+  });
+
+  afterEach(() => {
+    Object.assign(config, baseConfig);
+  });
+
+  test("places two initial entry orders (stop-limit)", async () => {
+    const api = new FakeApi({ price: 100 });
+    const trader = new ExpansionTrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn() });
+
+    await trader.start();
+
+    expect(trader.pendingEntriesById.size).toBe(2);
+    expect(trader.traderType).toBe("EXPANSION");
+
+    // Entries should use stop-limit (stored in api.orders with stopPrice)
+    const orders = Array.from(api.orders.values());
+    expect(orders.every((o) => o.stopPrice !== undefined)).toBe(true);
   });
 });
