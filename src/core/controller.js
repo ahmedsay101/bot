@@ -181,6 +181,7 @@ class Controller {
       const oldType = this.traderType;
       this.traderType = this.traderType === "VOLATILITY" ? "EXPANSION" : "VOLATILITY";
       this.consecutiveLosses = 0;
+      store.setConsecutiveLosses(0);
       log("CONTROLLER", `Regime switch: ${oldType} → ${this.traderType} after ${2}+ consecutive losses`);
       store.setTraderType(this.traderType);
       return true;
@@ -195,6 +196,7 @@ class Controller {
     if (typeof pnl === "number") {
       if (pnl < 0) {
         this.consecutiveLosses += 1;
+        store.setConsecutiveLosses(this.consecutiveLosses);
         log("CONTROLLER", `Trader ${symbol} closed with loss ($${pnl.toFixed(2)}). Consecutive losses: ${this.consecutiveLosses}`);
         this.shouldSwitch();
       } else {
@@ -202,6 +204,7 @@ class Controller {
           log("CONTROLLER", `Trader ${symbol} closed with profit ($${pnl.toFixed(2)}). Loss streak reset.`);
         }
         this.consecutiveLosses = 0;
+        store.setConsecutiveLosses(0);
       }
     }
 

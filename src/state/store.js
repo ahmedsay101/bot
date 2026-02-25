@@ -24,7 +24,8 @@ const state = {
     ws: "unknown",
     updatedAt: null
   },
-  traderType: "VOLATILITY"
+  traderType: "VOLATILITY",
+  consecutiveLosses: 0
 };
 
 function setMarketStatus(patch) {
@@ -89,6 +90,10 @@ function setTraderType(traderType) {
   state.traderType = traderType;
 }
 
+function setConsecutiveLosses(count) {
+  state.consecutiveLosses = count;
+}
+
 function getStatus() {
   return {
     mode: state.mode,
@@ -98,7 +103,8 @@ function getStatus() {
     activeTraders: state.activeTraders.size,
     maxTraders: config.maxTraders,
     marketStatus: state.marketStatus,
-    traderType: state.traderType
+    traderType: state.traderType,
+    consecutiveLosses: state.consecutiveLosses
   };
 }
 
@@ -160,6 +166,7 @@ module.exports = {
   setEquity,
   setCooldownStatus: setTraderType,
   setTraderType,
+  setConsecutiveLosses,
   upsertTrader,
   removeTrader,
   recordTrade,

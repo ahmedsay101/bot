@@ -428,6 +428,11 @@ function App() {
               <p className={`text-lg font-semibold ${status.traderType === "EXPANSION" ? "text-sky-400" : "text-amber-400"}`}>
                 {status.traderType}
               </p>
+              {status.consecutiveLosses > 0 && (
+                <p className="mt-1 text-xs text-red-400">
+                  {status.consecutiveLosses} consecutive loss{status.consecutiveLosses !== 1 ? "es" : ""}
+                </p>
+              )}
             </div>
           )}
         </aside>
