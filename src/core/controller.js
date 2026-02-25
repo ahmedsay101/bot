@@ -177,12 +177,12 @@ class Controller {
   }
 
   shouldSwitch() {
-    if (this.consecutiveLosses >= 2) {
+    if (this.consecutiveLosses >= 3) {
       const oldType = this.traderType;
       this.traderType = this.traderType === "VOLATILITY" ? "EXPANSION" : "VOLATILITY";
       this.consecutiveLosses = 0;
       store.setConsecutiveLosses(0);
-      log("CONTROLLER", `Regime switch: ${oldType} → ${this.traderType} after ${2}+ consecutive losses`);
+      log("CONTROLLER", `Regime switch: ${oldType} → ${this.traderType} after ${3}+ consecutive losses`);
       store.setTraderType(this.traderType);
       return true;
     }
