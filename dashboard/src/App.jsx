@@ -574,6 +574,17 @@ function App() {
                               {trader.traderType}
                             </span>
                           )}
+                          <button
+                            type="button"
+                            className="ml-auto rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-1 text-xs font-semibold text-rose-400 transition hover:bg-rose-500/30"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (!window.confirm(`Destroy trader for ${trader.symbol}? This will close all positions.`)) return;
+                              axios.delete(`${API_URL}/api/traders/${trader.symbol}`).catch(() => {});
+                            }}
+                          >
+                            Destroy
+                          </button>
                         </div>
                       </div>
                       <div className="flex flex-wrap items-center gap-3 text-xs text-slate-300">

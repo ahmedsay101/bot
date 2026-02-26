@@ -136,6 +136,7 @@ startBot().catch((err) => {
   process.exit(1);
 }).then((bot) => {
   app.set("botApi", bot.api);
+  app.set("controller", bot.controller);
   if (!priceFeedAttached) {
     priceFeedAttached = true;
     bot.api.on("bookTicker", ({ symbol, bid, ask }) => {

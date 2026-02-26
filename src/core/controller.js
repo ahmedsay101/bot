@@ -190,6 +190,17 @@ class Controller {
     log("CONTROLLER", `Trader ${symbol} destroyed`);
     await this._refreshMarketStreams();
   }
+
+  /**
+   * Destroy a trader by symbol. Called from the API when the user
+   * clicks the destroy button on the frontend.
+   */
+  async destroyTrader(symbol) {
+    const trader = this.traders.get(symbol);
+    if (!trader) return false;
+    await trader.destroy("manual", { closePositions: true });
+    return true;
+  }
 }
 
 module.exports = Controller;
