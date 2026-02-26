@@ -1,6 +1,4 @@
-const VolatilityTrader = require("./trader");
-const ExpansionTrader = require("./expansionTrader");
-const RegimeAnalyzer = require("./RegimeAnalyzer");
+const LadderTrader = require("./ladderTrader");
 const { log } = require("../utils/logger");
 const config = require("../utils/config");
 const store = require("../state/store");
@@ -12,7 +10,6 @@ class Controller {
     this.traders = new Map();
     this.leverageSet = new Set();
     this.failedSymbols = new Map(); // symbol -> { count, until }
-    this.regimeAnalyzer = new RegimeAnalyzer(config.regime || {});
     this._scanning = false;
   }
 
@@ -129,20 +126,10 @@ class Controller {
         }
       }
 
-      // Determine regime for this symbol before creating a trader
-      const regime = await this._determineRegime(symbol);
-      if (!regime) continue; // Could not fetch market data – skip
+      // Always create a LadderTrader
+      store.setTraderType("LADDER");
 
-      if (regime.regime === "TRANSITION") {
-        log("CONTROLLER", `Skipping ${symbol}: TRANSITION regime (exp=${regime.expansionScore} comp=${regime.compressionScore} conf=${regime.confidence.toFixed(2)})`);
-        continue;
-      }
-
-      const traderType = regime.regime; // "EXPANSION" or "VOLATILITY"
-      const TraderClass = traderType === "EXPANSION" ? ExpansionTrader : VolatilityTrader;
-      store.setTraderType(traderType);
-
-      const trader = new TraderClass({
+      const trader = new LadderTrader({
         symbol,
         api: this.api,
         onDestroy: (sym, pnl) => this._destroy(sym, pnl)
@@ -150,7 +137,7 @@ class Controller {
       this.traders.set(symbol, trader);
       try {
         await trader.start();
-        log("CONTROLLER", `Launched ${traderType} trader for ${symbol} (conf=${regime.confidence.toFixed(2)})`);
+        log("CONTROLLER", `Launched LADDER trader for ${symbol}`);
       } catch (err) {
         log("CONTROLLER", `Trader ${symbol} failed to start: ${err.message}`);
         this.traders.delete(symbol);
@@ -186,65 +173,6 @@ class Controller {
   async _refreshMarketStreams() {
     const symbols = [...this.traders.keys()];
     await this.api.updateSymbols(symbols);
-  }
-
-  /**
-   * Fetch market data for a symbol and run the regime analyzer.
-   * Returns the regime result, or null if data could not be fetched.
-   */
-  async _determineRegime(symbol) {
-    try {
-      // Fetch klines for the symbol and BTC in parallel
-      const [raw5m, raw1h, rawBtc1h, ticker] = await Promise.all([
-        this.api.getKlines(symbol, "5m", 100),
-        this.api.getKlines(symbol, "1h", 50),
-        this.api.getKlines("BTCUSDT", "1h", 50),
-        this.api.getTickerPrice(symbol)
-      ]);
-
-      // Convert Binance kline arrays to candle objects
-      const toCandle = (k) => ({
-        open: Number(k[1]),
-        high: Number(k[2]),
-        low: Number(k[3]),
-        close: Number(k[4]),
-        volume: Number(k[5])
-      });
-
-      const klines5m = raw5m.map(toCandle);
-      const klines1h = raw1h.map(toCandle);
-      const btcKlines1h = rawBtc1h.map(toCandle);
-      const volume5m = klines5m.map((c) => c.volume);
-      const currentPrice = Number(ticker);
-
-      // Derive 24h high/low from the 1h candles (last 24 bars)
-      const recent24 = klines1h.slice(-24);
-      const high24h = Math.max(...recent24.map((c) => c.high));
-      const low24h = Math.min(...recent24.map((c) => c.low));
-
-      const result = this.regimeAnalyzer.analyzeRegime({
-        klines5m,
-        klines1h,
-        btcKlines1h,
-        volume5m,
-        currentPrice,
-        high24h,
-        low24h
-      });
-
-      // Persist regime info to the store for the dashboard
-      store.setRegime({
-        regime: result.regime,
-        confidence: result.confidence,
-        expansionScore: result.expansionScore,
-        compressionScore: result.compressionScore
-      });
-
-      return result;
-    } catch (err) {
-      log("CONTROLLER", `Regime analysis failed for ${symbol}: ${err.message}`);
-      return null;
-    }
   }
 
   async _destroy(symbol, pnl) {
