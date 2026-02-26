@@ -25,7 +25,12 @@ const state = {
     updatedAt: null
   },
   traderType: "VOLATILITY",
-  consecutiveLosses: 0
+  regime: {
+    regime: "UNKNOWN",
+    confidence: 0,
+    expansionScore: 0,
+    compressionScore: 0
+  }
 };
 
 function setMarketStatus(patch) {
@@ -91,7 +96,15 @@ function setTraderType(traderType) {
 }
 
 function setConsecutiveLosses(count) {
-  state.consecutiveLosses = count;
+  // Kept for backward compat – no-op now that regime is market-driven
+  // state.consecutiveLosses = count;
+}
+
+function setRegime(regime) {
+  state.regime = {
+    ...state.regime,
+    ...regime
+  };
 }
 
 function getStatus() {
@@ -104,7 +117,7 @@ function getStatus() {
     maxTraders: config.maxTraders,
     marketStatus: state.marketStatus,
     traderType: state.traderType,
-    consecutiveLosses: state.consecutiveLosses
+    regime: state.regime
   };
 }
 
@@ -167,6 +180,7 @@ module.exports = {
   setCooldownStatus: setTraderType,
   setTraderType,
   setConsecutiveLosses,
+  setRegime,
   upsertTrader,
   removeTrader,
   recordTrade,

@@ -424,14 +424,21 @@ function App() {
 
           {status.traderType && (
             <div className="mt-6 rounded-2xl border border-white/5 bg-ink-800/70 px-4 py-3">
-              <p className="text-xs text-slate-400">Active Regime</p>
-              <p className={`text-lg font-semibold ${status.traderType === "EXPANSION" ? "text-sky-400" : "text-amber-400"}`}>
-                {status.traderType}
+              <p className="text-xs text-slate-400">Market Regime</p>
+              <p className={`text-lg font-semibold ${
+                status.regime?.regime === "EXPANSION" ? "text-sky-400"
+                : status.regime?.regime === "VOLATILITY" ? "text-amber-400"
+                : "text-slate-400"
+              }`}>
+                {status.regime?.regime || status.traderType}
               </p>
-              {status.consecutiveLosses > 0 && (
-                <p className="mt-1 text-xs text-red-400">
-                  {status.consecutiveLosses} consecutive loss{status.consecutiveLosses !== 1 ? "es" : ""}
-                </p>
+              {status.regime && (
+                <div className="mt-1 flex items-center gap-2 text-xs text-slate-400">
+                  <span>Confidence {formatPercent((status.regime.confidence || 0) * 100)}%</span>
+                  <span className="text-white/20">|</span>
+                  <span className="text-emerald-400">E{status.regime.expansionScore || 0}</span>
+                  <span className="text-orange-400">C{status.regime.compressionScore || 0}</span>
+                </div>
               )}
             </div>
           )}
