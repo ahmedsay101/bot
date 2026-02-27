@@ -13,6 +13,7 @@ jest.mock("../src/state/store", () => ({
 const VolatilityTrader = require("../src/core/trader");
 const ExpansionTrader = require("../src/core/expansionTrader");
 const LadderTrader = require("../src/core/ladderTrader");
+const FlipTrader = require("../src/core/flipTrader");
 const config = require("../src/utils/config");
 const store = require("../src/state/store");
 
@@ -340,6 +341,312 @@ describe("LadderTrader behavior", () => {
 
     const firstLong = Array.from(trader.pendingEntriesById.values()).find((e) => e.direction === "LONG");
     emitFill(api, firstLong.orderId);
+
+    await trader.destroy("manual", { closePositions: true });
+
+    expect(trader.active).toBe(false);
+    expect(trader.positions.size).toBe(0);
+    expect(destroyFn).toHaveBeenCalledWith("TESTUSDT", expect.any(Number));
+    expect(store.removeTrader).toHaveBeenCalled();
+  });
+});
+
+describe("FlipTrader behavior", () => {
+  const baseConfig = { ...config };
+
+  beforeEach(() => {
+    Object.assign(config, baseConfig, {
+      mode: "test",
+      levelSpacingPercent: 1,
+      takeProfitPercent: 1,
+      stopLossPercent: 1,
+      positionNotionalUSDT: 100,
+      maxDoubles: 5,
+      feeRate: 0
+    });
+    jest.clearAllMocks();
+  });
+
+  afterEach(() => {
+    Object.assign(config, baseConfig);
+  });
+
+  test("places one LONG and one SHORT initial stop-limit entry", async () => {
+    const api = new FakeApi({ price: 100 });
+    const trader = new FlipTrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn() });
+
+    await trader.start();
+
+    expect(trader.pendingEntriesById.size).toBe(2);
+    expect(trader.traderType).toBe("FLIP");
+
+    const entries = Array.from(trader.pendingEntriesById.values());
+    const longs = entries.filter((e) => e.direction === "LONG");
+    const shorts = entries.filter((e) => e.direction === "SHORT");
+    expect(longs.length).toBe(1);
+    expect(shorts.length).toBe(1);
+
+    // Both should be stop-limit orders
+    const orders = Array.from(api.orders.values());
+    expect(orders.every((o) => o.stopPrice !== undefined)).toBe(true);
+
+    // Both at base notional
+    expect(longs[0].notional).toBe(100);
+    expect(shorts[0].notional).toBe(100);
+  });
+
+  test("filling LONG places TP/SL and doubles the SHORT entry", async () => {
+    const api = new FakeApi({ price: 100 });
+    api.cancelOrder = jest.fn().mockResolvedValue({});
+    const trader = new FlipTrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn() });
+
+    await trader.start();
+
+    const longEntry = Array.from(trader.pendingEntriesById.values()).find((e) => e.direction === "LONG");
+    const shortEntry = Array.from(trader.pendingEntriesById.values()).find((e) => e.direction === "SHORT");
+
+    // Fill the LONG
+    await trader._onOrderFilled({
+      symbol: "TESTUSDT",
+      orderId: longEntry.orderId,
+      side: "BUY",
+      price: longEntry.price,
+      quantity: longEntry.quantity
+    });
+
+    // Position should exist
+    expect(trader.positions.size).toBe(1);
+    const pos = Array.from(trader.positions.values())[0];
+    expect(pos.direction).toBe("LONG");
+
+    // TP and SL exit orders should be placed
+    expect(trader.pendingExitsById.size).toBe(2);
+    const exits = Array.from(trader.pendingExitsById.values());
+    expect(exits.some((e) => e.type === "TP")).toBe(true);
+    expect(exits.some((e) => e.type === "SL")).toBe(true);
+
+    // Old SHORT entry should have been cancelled
+    expect(api.cancelOrder).toHaveBeenCalledWith({ symbol: "TESTUSDT", orderId: shortEntry.orderId });
+
+    // New SHORT entry should exist with 2x notional
+    const newShort = Array.from(trader.pendingEntriesById.values()).find((e) => e.direction === "SHORT");
+    expect(newShort).toBeTruthy();
+    expect(newShort.notional).toBe(200);
+
+    expect(trader.doubleCount).toBe(1);
+    expect(trader.currentMultiplier).toBe(2);
+  });
+
+  test("filling SHORT places TP/SL and doubles the LONG entry", async () => {
+    const api = new FakeApi({ price: 100 });
+    api.cancelOrder = jest.fn().mockResolvedValue({});
+    const trader = new FlipTrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn() });
+
+    await trader.start();
+
+    const shortEntry = Array.from(trader.pendingEntriesById.values()).find((e) => e.direction === "SHORT");
+
+    // Fill the SHORT
+    await trader._onOrderFilled({
+      symbol: "TESTUSDT",
+      orderId: shortEntry.orderId,
+      side: "SELL",
+      price: shortEntry.price,
+      quantity: shortEntry.quantity
+    });
+
+    // New LONG entry should exist with 2x notional
+    const newLong = Array.from(trader.pendingEntriesById.values()).find((e) => e.direction === "LONG");
+    expect(newLong).toBeTruthy();
+    expect(newLong.notional).toBe(200);
+    expect(trader.doubleCount).toBe(1);
+  });
+
+  test("take profit hit destroys the trader", async () => {
+    const api = new FakeApi({ price: 100 });
+    api.cancelOrder = jest.fn().mockResolvedValue({});
+    const destroyFn = jest.fn();
+    const trader = new FlipTrader({ symbol: "TESTUSDT", api, onDestroy: destroyFn });
+
+    await trader.start();
+
+    const longEntry = Array.from(trader.pendingEntriesById.values()).find((e) => e.direction === "LONG");
+
+    // Fill the LONG entry
+    await trader._onOrderFilled({
+      symbol: "TESTUSDT",
+      orderId: longEntry.orderId,
+      side: "BUY",
+      price: longEntry.price,
+      quantity: longEntry.quantity
+    });
+
+    // Find the TP exit order
+    const tpExit = Array.from(trader.pendingExitsById.values()).find((e) => e.type === "TP");
+    expect(tpExit).toBeTruthy();
+
+    // Fill the TP
+    await trader._onOrderFilled({
+      symbol: "TESTUSDT",
+      orderId: tpExit.orderId,
+      side: "SELL",
+      price: tpExit.price,
+      quantity: longEntry.quantity
+    });
+
+    // Trader should be destroyed
+    expect(trader.active).toBe(false);
+    expect(destroyFn).toHaveBeenCalledWith("TESTUSDT", expect.any(Number));
+    expect(store.removeTrader).toHaveBeenCalled();
+  });
+
+  test("stop loss hit keeps trader alive, opposite entry remains", async () => {
+    const api = new FakeApi({ price: 100 });
+    api.cancelOrder = jest.fn().mockResolvedValue({});
+    const destroyFn = jest.fn();
+    const trader = new FlipTrader({ symbol: "TESTUSDT", api, onDestroy: destroyFn });
+
+    await trader.start();
+
+    const longEntry = Array.from(trader.pendingEntriesById.values()).find((e) => e.direction === "LONG");
+
+    // Fill the LONG
+    await trader._onOrderFilled({
+      symbol: "TESTUSDT",
+      orderId: longEntry.orderId,
+      side: "BUY",
+      price: longEntry.price,
+      quantity: longEntry.quantity
+    });
+
+    // Find the SL exit order
+    const slExit = Array.from(trader.pendingExitsById.values()).find((e) => e.type === "SL");
+    expect(slExit).toBeTruthy();
+
+    // Fill the SL
+    await trader._onOrderFilled({
+      symbol: "TESTUSDT",
+      orderId: slExit.orderId,
+      side: "SELL",
+      price: slExit.price,
+      quantity: longEntry.quantity
+    });
+
+    // Trader should still be alive
+    expect(trader.active).toBe(true);
+    expect(destroyFn).not.toHaveBeenCalled();
+
+    // Position should be closed
+    expect(trader.positions.size).toBe(0);
+    expect(trader.tradeHistory.length).toBe(1);
+    expect(trader.tradeHistory[0].reason).toBe("stop-loss");
+
+    // Doubled SHORT entry should still be pending
+    const pendingShort = Array.from(trader.pendingEntriesById.values()).find((e) => e.direction === "SHORT");
+    expect(pendingShort).toBeTruthy();
+    expect(pendingShort.notional).toBe(200);
+  });
+
+  test("maxDoubles reached destroys the trader", async () => {
+    Object.assign(config, { maxDoubles: 1 });
+    const api = new FakeApi({ price: 100 });
+    api.cancelOrder = jest.fn().mockResolvedValue({});
+    const destroyFn = jest.fn();
+    const trader = new FlipTrader({ symbol: "TESTUSDT", api, onDestroy: destroyFn });
+
+    await trader.start();
+
+    // Fill LONG → doubles to 1 (within limit)
+    const longEntry = Array.from(trader.pendingEntriesById.values()).find((e) => e.direction === "LONG");
+    await trader._onOrderFilled({
+      symbol: "TESTUSDT",
+      orderId: longEntry.orderId,
+      side: "BUY",
+      price: longEntry.price,
+      quantity: longEntry.quantity
+    });
+
+    expect(trader.doubleCount).toBe(1);
+    expect(trader.active).toBe(true);
+
+    // SL fills → position closes
+    const slExit = Array.from(trader.pendingExitsById.values()).find((e) => e.type === "SL");
+    await trader._onOrderFilled({
+      symbol: "TESTUSDT",
+      orderId: slExit.orderId,
+      side: "SELL",
+      price: slExit.price,
+      quantity: longEntry.quantity
+    });
+
+    // Doubled SHORT should fill → triggers another double which exceeds maxDoubles
+    const shortEntry = Array.from(trader.pendingEntriesById.values()).find((e) => e.direction === "SHORT");
+    expect(shortEntry).toBeTruthy();
+
+    await trader._onOrderFilled({
+      symbol: "TESTUSDT",
+      orderId: shortEntry.orderId,
+      side: "SELL",
+      price: shortEntry.price,
+      quantity: shortEntry.quantity
+    });
+
+    // doubleCount is now 2, which exceeds maxDoubles=1 → destroyed
+    expect(trader.active).toBe(false);
+    expect(destroyFn).toHaveBeenCalledWith("TESTUSDT", expect.any(Number));
+  });
+
+  test("multiplier doubles correctly through multiple flips", async () => {
+    Object.assign(config, { maxDoubles: 10 });
+    const api = new FakeApi({ price: 100 });
+    api.cancelOrder = jest.fn().mockResolvedValue({});
+    const trader = new FlipTrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn() });
+
+    await trader.start();
+
+    // Flip 1: LONG fills → SHORT becomes 2x
+    const long1 = Array.from(trader.pendingEntriesById.values()).find((e) => e.direction === "LONG");
+    await trader._onOrderFilled({
+      symbol: "TESTUSDT", orderId: long1.orderId,
+      side: "BUY", price: long1.price, quantity: long1.quantity
+    });
+    expect(trader.currentMultiplier).toBe(2);
+
+    // SL on LONG → position closed
+    const sl1 = Array.from(trader.pendingExitsById.values()).find((e) => e.type === "SL");
+    await trader._onOrderFilled({
+      symbol: "TESTUSDT", orderId: sl1.orderId,
+      side: "SELL", price: sl1.price, quantity: long1.quantity
+    });
+
+    // Flip 2: SHORT fills → LONG becomes 4x
+    const short1 = Array.from(trader.pendingEntriesById.values()).find((e) => e.direction === "SHORT");
+    await trader._onOrderFilled({
+      symbol: "TESTUSDT", orderId: short1.orderId,
+      side: "SELL", price: short1.price, quantity: short1.quantity
+    });
+    expect(trader.currentMultiplier).toBe(4);
+    expect(trader.doubleCount).toBe(2);
+
+    // Verify the new LONG entry has 4x notional
+    const long2 = Array.from(trader.pendingEntriesById.values()).find((e) => e.direction === "LONG");
+    expect(long2.notional).toBe(400);
+  });
+
+  test("destroy closes positions and marks inactive", async () => {
+    const api = new FakeApi({ price: 100 });
+    api.cancelOrder = jest.fn().mockResolvedValue({});
+    const destroyFn = jest.fn();
+    const trader = new FlipTrader({ symbol: "TESTUSDT", api, onDestroy: destroyFn });
+
+    await trader.start();
+
+    // Fill an entry to have an open position
+    const longEntry = Array.from(trader.pendingEntriesById.values()).find((e) => e.direction === "LONG");
+    await trader._onOrderFilled({
+      symbol: "TESTUSDT", orderId: longEntry.orderId,
+      side: "BUY", price: longEntry.price, quantity: longEntry.quantity
+    });
 
     await trader.destroy("manual", { closePositions: true });
 

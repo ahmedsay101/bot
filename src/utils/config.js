@@ -19,6 +19,8 @@ const config = {
   stopLossPercent: 1,
   ladderInitialLevels: 10,
   ladderRefillThreshold: 1,
+  maxDoubles: 5,
+  traderType: "FLIP",
   startingBalanceUSDT: 1000,
   scannerIntervalMs: 1 * 60 * 1000,
   minChange: 1,

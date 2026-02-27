@@ -1,4 +1,5 @@
 const LadderTrader = require("./ladderTrader");
+const FlipTrader = require("./flipTrader");
 const { log } = require("../utils/logger");
 const config = require("../utils/config");
 const store = require("../state/store");
@@ -126,10 +127,11 @@ class Controller {
         }
       }
 
-      // Always create a LadderTrader
-      store.setTraderType("LADDER");
+      const traderType = (config.traderType || "LADDER").toUpperCase();
+      store.setTraderType(traderType);
 
-      const trader = new LadderTrader({
+      const TraderClass = traderType === "FLIP" ? FlipTrader : LadderTrader;
+      const trader = new TraderClass({
         symbol,
         api: this.api,
         onDestroy: (sym, pnl) => this._destroy(sym, pnl)
@@ -137,7 +139,7 @@ class Controller {
       this.traders.set(symbol, trader);
       try {
         await trader.start();
-        log("CONTROLLER", `Launched LADDER trader for ${symbol}`);
+        log("CONTROLLER", `Launched ${traderType} trader for ${symbol}`);
       } catch (err) {
         log("CONTROLLER", `Trader ${symbol} failed to start: ${err.message}`);
         this.traders.delete(symbol);
