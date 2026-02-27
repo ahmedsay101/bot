@@ -14,7 +14,11 @@ function formatNumber(value, digits = 2) {
  * LONG stop-limit orders are placed ABOVE the current price (breakout-buy).
  * SHORT stop-limit orders are placed BELOW the current price (breakout-sell).
  *
- * Each filled order gets its own individual TP and SL.
+ * Stop-loss: when price returns to the starting price (basePrice), ALL open
+ * positions are closed at market. This does NOT destroy the trader — the
+ * ladder keeps running.
+ *
+ * Take-profit: not implemented yet (to be decided later).
  *
  * The ladder is "infinite": when the number of unfilled orders on one side
  * drops to `ladderRefillThreshold`, a fresh batch of orders is added further
@@ -43,8 +47,8 @@ class LadderTrader {
     this.nextShortLevel = 1;  // level 1, 2, 3, ...
 
     this.pendingEntriesById = new Map();   // orderId → entry info
-    this.pendingExitsById = new Map();     // orderId → exit info
     this.positions = new Map();            // positionId → position
+    this._closingOnBase = false;           // guard to avoid re-entrant base-price closes
 
     this._onMarkPrice = this._onMarkPrice.bind(this);
     this._onBookTicker = this._onBookTicker.bind(this);
@@ -56,14 +60,6 @@ class LadderTrader {
 
   _getSpacingPercent() {
     return Number(config.levelSpacingPercent) || 1;
-  }
-
-  _getTakeProfitPercent() {
-    return Number(config.takeProfitPercent) || 1;
-  }
-
-  _getStopLossPercent() {
-    return Number(config.stopLossPercent) || 1;
   }
 
   /** How many orders to place per side on each fill/refill. */
@@ -121,14 +117,6 @@ class LadderTrader {
         await this.api.cancelOrder({ symbol: this.symbol, orderId: order.orderId });
       } catch (err) {
         log(`TRADER ${this.symbol}`, `Entry cancel failed ${order.orderId}: ${err.message}`);
-      }
-    }
-    // Cancel all pending exits
-    for (const order of this.pendingExitsById.values()) {
-      try {
-        await this.api.cancelOrder({ symbol: this.symbol, orderId: order.orderId });
-      } catch (err) {
-        log(`TRADER ${this.symbol}`, `Exit cancel failed ${order.orderId}: ${err.message}`);
       }
     }
 
@@ -288,21 +276,6 @@ class LadderTrader {
       this._updateStore();
       return;
     }
-
-    const exitMatch = this._findPending(this.pendingExitsById, event);
-    if (exitMatch) {
-      const pendingExit = exitMatch.value;
-      log(`TRADER ${this.symbol}`, `Exit order ${event.status}: id=${event.orderId} reason=${pendingExit.reason} type=${event.orderType}`);
-      this.pendingExitsById.delete(exitMatch.key);
-      const position = this.positions.get(pendingExit.positionId);
-      if (position && pendingExit.reason === "stop-loss" && !position.isClosing) {
-        log(`TRADER ${this.symbol}`, `SL REJECTED — closing position at market`);
-        const currentPrice = Number(this.lastPrice) || Number(position.entryPrice);
-        this._closePosition(position, "sl-rejected", currentPrice);
-      }
-      this._updateStore();
-      return;
-    }
   }
 
   _onOrderFilled(event) {
@@ -315,16 +288,6 @@ class LadderTrader {
       this.pendingEntriesById.delete(entryMatch.key);
 
       const entryPrice = Number(event.price || pendingEntry.price);
-      const tpPercent = this._getTakeProfitPercent();
-      const slPercent = this._getStopLossPercent();
-      const takeProfitPrice =
-        pendingEntry.direction === "LONG"
-          ? pctChange(entryPrice, tpPercent)
-          : pctChange(entryPrice, -tpPercent);
-      const stopLossPrice =
-        pendingEntry.direction === "LONG"
-          ? pctChange(entryPrice, -slPercent)
-          : pctChange(entryPrice, slPercent);
 
       const positionId = `POS-${event.orderId}`;
       const position = {
@@ -333,15 +296,10 @@ class LadderTrader {
         entryOrderId: event.orderId,
         entryPrice,
         quantity: pendingEntry.quantity,
-        takeProfitPrice,
-        stopLossPrice,
-        tpOrderId: null,
-        slOrderId: null,
         levelIndex: pendingEntry.levelIndex
       };
 
       this.positions.set(positionId, position);
-      this._placeExitOrders(position);
 
       log(
         `TRADER ${this.symbol}`,
@@ -354,120 +312,16 @@ class LadderTrader {
       return;
     }
 
-    // ── Exit fill ──
-    const exitMatch = this._findPending(this.pendingExitsById, event);
-    if (!exitMatch) {
-      log(`TRADER ${this.symbol}`, `No pending found for fill id=${event.orderId} numId=${event.numericOrderId || ""} clientId=${event.clientOrderId || ""}`);
-      return;
-    }
-    const pendingExit = exitMatch.value;
-    this.pendingExitsById.delete(exitMatch.key);
-
-    const position = this.positions.get(pendingExit.positionId);
-    if (!position) return;
-    if (position.isClosing) return;
-
-    const exitPrice = Number(event.price || pendingExit.price);
-    this._finalizeClose(position, pendingExit.reason, exitPrice, event.orderId);
+    // ── Exit fill (not expected in current design, but handle gracefully) ──
+    log(`TRADER ${this.symbol}`, `Unexpected fill id=${event.orderId} numId=${event.numericOrderId || ""} clientId=${event.clientOrderId || ""}`);
   }
 
-  // ── Exit (TP / SL) orders ──────────────────────────────────────
-
-  async _placeExitOrders(position) {
-    const tpSide = position.direction === "LONG" ? "SELL" : "BUY";
-    const slSide = position.direction === "LONG" ? "SELL" : "BUY";
-    const positionSide = this._getPositionSide(position.direction);
-    const currentPrice = Number(this.lastPrice) || Number(position.entryPrice);
-
-    const triggerHit = position.direction === "LONG"
-      ? currentPrice <= position.stopLossPrice
-      : currentPrice >= position.stopLossPrice;
-    const closeToTrigger =
-      Math.abs(currentPrice - position.stopLossPrice) <= currentPrice * 0.0002;
-
-    // Place TP first
-    let tp;
-    try {
-      tp = await this.api.placeLimitOrder({
-        symbol: this.symbol,
-        side: tpSide,
-        quantity: position.quantity,
-        price: Number(position.takeProfitPrice.toFixed(6)),
-        reduceOnly: true,
-        positionSide
-      });
-      log(
-        `TRADER ${this.symbol}`,
-        `TP order placed id=${tp.orderId || ""} price=${formatNumber(position.takeProfitPrice, 6)} side=${tpSide}`
-      );
-    } catch (err) {
-      log(`TRADER ${this.symbol}`, `TP order failed: ${err.message}`);
-      throw err;
-    }
-
-    // If SL would trigger immediately, close at market
-    if (triggerHit || closeToTrigger) {
-      log(
-        `TRADER ${this.symbol}`,
-        `SL trigger unsafe at ${formatNumber(currentPrice, 6)}; closing market now`
-      );
-      await this._closePosition(position, "stop-loss", currentPrice);
-      return;
-    }
-
-    // Place SL
-    let sl;
-    try {
-      sl = await this.api.placeStopLimitOrder({
-        symbol: this.symbol,
-        side: slSide,
-        quantity: position.quantity,
-        stopPrice: Number(position.stopLossPrice.toFixed(6)),
-        reduceOnly: true,
-        positionSide
-      });
-      log(
-        `TRADER ${this.symbol}`,
-        `SL order placed id=${sl.orderId || ""} trigger=${formatNumber(position.stopLossPrice, 6)} side=${slSide}`
-      );
-    } catch (err) {
-      log(`TRADER ${this.symbol}`, `SL order failed: ${err.message}`);
-      if (err.message && err.message.includes("-2021")) {
-        log(`TRADER ${this.symbol}`, `SL would immediately trigger — closing at market`);
-        await this._closePosition(position, "stop-loss", currentPrice);
-        return;
-      }
-      throw err;
-    }
-
-    position.tpOrderId = tp.orderId;
-    position.slOrderId = sl.orderId;
-
-    this.pendingExitsById.set(tp.orderId, {
-      orderId: tp.orderId,
-      positionId: position.id,
-      reason: "take-profit",
-      price: position.takeProfitPrice
-    });
-    this.pendingExitsById.set(sl.orderId, {
-      orderId: sl.orderId,
-      positionId: position.id,
-      reason: "stop-loss",
-      price: position.stopLossPrice
-    });
-
-    log(
-      `TRADER ${this.symbol}`,
-      `TP @ ${formatNumber(position.takeProfitPrice, 6)} / SL @ ${formatNumber(position.stopLossPrice, 6)}`
-    );
-  }
-
-  // ── Price events ────────────────────────────────────────────────
+  // ── Base-price stop-loss ─────────────────────────────────────────
 
   async _onMarkPrice({ symbol, price }) {
     if (!this.active || symbol !== this.symbol) return;
     this.lastPrice = price;
-    await this._maybeForceClose(price);
+    await this._checkBaseStop(price);
     this._updateStore();
   }
 
@@ -485,29 +339,37 @@ class LadderTrader {
     }
     if (!Number.isFinite(price)) return;
     this.lastPrice = price;
-    await this._maybeForceClose(price);
+    await this._checkBaseStop(price);
     this._updateStore();
   }
 
-  /** In test mode, simulate TP/SL hits since there is no exchange. */
-  async _maybeForceClose(price) {
-    if (config.mode !== "test" || this.positions.size === 0) return;
-    for (const pos of Array.from(this.positions.values())) {
-      if (pos.isClosing) continue;
-      const hitTp =
-        pos.direction === "LONG"
-          ? price >= pos.takeProfitPrice
-          : price <= pos.takeProfitPrice;
-      const hitSl =
-        pos.direction === "LONG"
-          ? price <= pos.stopLossPrice
-          : price >= pos.stopLossPrice;
+  /**
+   * When the price returns to basePrice, close ALL open positions.
+   * This is the only stop-loss mechanism — no per-position TP/SL.
+   * The trader keeps running after the close.
+   */
+  async _checkBaseStop(price) {
+    if (this._closingOnBase || this.positions.size === 0) return;
 
-      if (!hitTp && !hitSl) continue;
-      const reason = hitTp ? "take-profit" : "stop-loss";
-      await this._finalizeClose(pos, reason, price, null);
-      if (!this.active) return;
-    }
+    // Check if price has crossed back to (or through) the starting price.
+    // LONG positions exist above basePrice → price fell back.
+    // SHORT positions exist below basePrice → price rose back.
+    const hasLongs = Array.from(this.positions.values()).some((p) => p.direction === "LONG");
+    const hasShorts = Array.from(this.positions.values()).some((p) => p.direction === "SHORT");
+
+    const longHit = hasLongs && price <= this.basePrice;
+    const shortHit = hasShorts && price >= this.basePrice;
+
+    if (!longHit && !shortHit) return;
+
+    this._closingOnBase = true;
+    const count = this.positions.size;
+    log(`TRADER ${this.symbol}`, `Price returned to base (${formatNumber(this.basePrice, 6)}) — closing ${count} position(s)`);
+
+    await this._closeAllPositions("base-stop", price);
+
+    this._closingOnBase = false;
+    this._updateStore();
   }
 
   // ── Position closing ────────────────────────────────────────────
@@ -535,10 +397,6 @@ class LadderTrader {
   async _finalizeClose(pos, reason, exitPrice, exitOrderId) {
     if (pos.isClosing) return;
     pos.isClosing = true;
-
-    // Cancel the opposite exit order
-    if (pos.tpOrderId) await this.api.cancelOrder({ symbol: this.symbol, orderId: pos.tpOrderId });
-    if (pos.slOrderId) await this.api.cancelOrder({ symbol: this.symbol, orderId: pos.slOrderId });
 
     let pnl = this._calcPnl(pos, exitPrice);
     let fees = this._estimateFees(pos.entryPrice, exitPrice, pos.quantity);
@@ -625,8 +483,6 @@ class LadderTrader {
     if (!this.active) return;
     const price = this.lastPrice || this.basePrice || 0;
     const spacing = this._getSpacingPercent();
-    const tp = this._getTakeProfitPercent();
-    const sl = this._getStopLossPercent();
 
     // Build visible level list from pending entries + open positions
     const levels = [];
@@ -644,9 +500,7 @@ class LadderTrader {
         price: pos.entryPrice,
         direction: pos.direction,
         status: pos.direction,
-        entryPrice: pos.entryPrice,
-        takeProfitPrice: pos.takeProfitPrice,
-        stopLossPrice: pos.stopLossPrice
+        entryPrice: pos.entryPrice
       });
     }
     levels.sort((a, b) => a.index - b.index);
@@ -665,16 +519,12 @@ class LadderTrader {
       gridLevels: {
         basePrice: this.basePrice,
         spacingPercent: spacing,
-        takeProfitPercent: tp,
-        stopLossPercent: sl,
         levels
       },
       openPositionsDetail: Array.from(this.positions.values()).map((pos) => ({
         levelIndex: pos.levelIndex,
         side: pos.direction,
         entryPrice: pos.entryPrice,
-        takeProfitPrice: pos.takeProfitPrice,
-        stopLossPrice: pos.stopLossPrice,
         size: pos.quantity
       })),
       pendingOrdersDetail: Array.from(this.pendingEntriesById.values()).map((order) => ({
