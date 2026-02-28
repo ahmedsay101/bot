@@ -1,4 +1,4 @@
-const MartingaleTrader = require("./martingaleTrader");
+const PerpetualTrader = require("./perpetualTrader");
 const { log } = require("../utils/logger");
 const config = require("../utils/config");
 const store = require("../state/store");
@@ -86,38 +86,31 @@ class Controller {
       if (failure && Date.now() < failure.until) continue;
       if (failure) this.failedSymbols.delete(symbol);
 
-      // Get max leverage for the worst-case notional (last round doubles)
-      // Notional at round N = base * leverage * 2^(N-1)
-      // We need leverage that's valid for the largest round, but leverage itself
-      // affects the notional. Use base notional without leverage first to find a
-      // bracket, then compute the leveraged notional and re-check.
+      // Get max leverage for the notional (constant — no doubling)
       let leverage = Number(config.leverage) || 20;
       try {
         const baseNotional = Number(config.positionNotionalUSDT) || 10;
-        const maxRounds = Number(config.maxRounds) || 5;
-        const worstCaseMultiplier = Math.pow(2, maxRounds - 1);
+        const notional = baseNotional * leverage;
 
-        // First pass: get max leverage for rough worst-case notional estimate
-        const roughNotional = baseNotional * worstCaseMultiplier * leverage;
-        const maxLev = await this.api.getMaxLeverage(symbol, roughNotional);
+        const maxLev = await this.api.getMaxLeverage(symbol, notional);
         leverage = maxLev;
 
-        // Second pass: recalculate with actual leverage and verify
-        const actualNotional = baseNotional * worstCaseMultiplier * leverage;
+        // Recalculate with actual leverage and verify
+        const actualNotional = baseNotional * leverage;
         const verifiedLev = await this.api.getMaxLeverage(symbol, actualNotional);
         leverage = Math.min(leverage, verifiedLev);
 
         await this.api.setLeverage(symbol, leverage);
         this.leverageSet.set(symbol, leverage);
-        log("CONTROLLER", `Leverage set to ${leverage}x for ${symbol} (worst-case notional $${(baseNotional * worstCaseMultiplier * leverage).toFixed(0)})`);
+        log("CONTROLLER", `Leverage set to ${leverage}x for ${symbol} (notional $${(baseNotional * leverage).toFixed(0)})`);
       } catch (err) {
         log("CONTROLLER", `Leverage setup failed for ${symbol}: ${err.message}`);
         continue;
       }
 
-      store.setTraderType("MARTINGALE");
+      store.setTraderType("PERPETUAL");
 
-      const trader = new MartingaleTrader({
+      const trader = new PerpetualTrader({
         symbol,
         api: this.api,
         onDestroy: (sym, pnl) => this._destroy(sym, pnl),
@@ -127,7 +120,7 @@ class Controller {
       this.traders.set(symbol, trader);
       try {
         await trader.start();
-        log("CONTROLLER", `Launched MARTINGALE trader for ${symbol} at ${leverage}x`);
+        log("CONTROLLER", `Launched PERPETUAL trader for ${symbol} at ${leverage}x`);
       } catch (err) {
         log("CONTROLLER", `Trader ${symbol} failed to start: ${err.message}`);
         this.traders.delete(symbol);
@@ -171,18 +164,14 @@ class Controller {
     const trader = this.traders.get(symbol);
     this.traders.delete(symbol);
 
-    // Record round stats for the dashboard
-    if (trader && trader.tradeHistory) {
-      const lastTrade = trader.tradeHistory[trader.tradeHistory.length - 1];
-      if (lastTrade) {
-        const wonAtRound = lastTrade.reason === "take-profit" ? lastTrade.round : null;
-        store.recordTraderResult({
-          rounds: trader.currentRound,
-          maxRounds: trader.maxRounds,
-          wonAtRound,
-          pnl: trader.realizedPnl
-        });
-      }
+    // Record trader result for the dashboard
+    if (trader) {
+      store.recordTraderResult({
+        totalTrades: trader.totalTrades || 0,
+        wins: trader.wins || 0,
+        losses: trader.losses || 0,
+        pnl: trader.realizedPnl || 0
+      });
     }
 
     if (typeof pnl === "number") {

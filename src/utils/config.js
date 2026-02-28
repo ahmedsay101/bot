@@ -13,7 +13,6 @@ const config = {
   leverage: 50,
   takeProfitPercent: 3,
   stopLossPercent: 3,
-  maxRounds: 5,
   startingBalanceUSDT: 80,
   scannerIntervalMs: 1 * 60 * 1000,
   minChange: 1,

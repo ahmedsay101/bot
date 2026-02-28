@@ -24,13 +24,14 @@ const state = {
     ws: "unknown",
     updatedAt: null
   },
-  traderType: "MARTINGALE",
-  // Round-win statistics: how many traders won at each round
-  roundStats: {
-    totalTraders: 0,
-    totalWins: 0,
-    totalLosses: 0,
-    winsByRound: {}  // { "1": count, "2": count, ... }
+  traderType: "PERPETUAL",
+  // Aggregated perpetual trader statistics
+  perpetualStats: {
+    totalDestroyedTraders: 0,
+    totalTradesAllTime: 0,
+    totalWinsAllTime: 0,
+    totalLossesAllTime: 0,
+    totalPnlAllTime: 0
   }
 };
 
@@ -97,18 +98,15 @@ function setTraderType(traderType) {
 }
 
 /**
- * Record a completed trader's result for round-win statistics.
- * @param {{ rounds: number, maxRounds: number, wonAtRound: number|null, pnl: number }} result
+ * Record a destroyed trader's aggregate result for perpetual statistics.
+ * @param {{ totalTrades: number, wins: number, losses: number, pnl: number }} result
  */
 function recordTraderResult(result) {
-  state.roundStats.totalTraders++;
-  if (result.wonAtRound != null) {
-    state.roundStats.totalWins++;
-    const key = String(result.wonAtRound);
-    state.roundStats.winsByRound[key] = (state.roundStats.winsByRound[key] || 0) + 1;
-  } else {
-    state.roundStats.totalLosses++;
-  }
+  state.perpetualStats.totalDestroyedTraders++;
+  state.perpetualStats.totalTradesAllTime += result.totalTrades || 0;
+  state.perpetualStats.totalWinsAllTime += result.wins || 0;
+  state.perpetualStats.totalLossesAllTime += result.losses || 0;
+  state.perpetualStats.totalPnlAllTime += result.pnl || 0;
 }
 
 function getStatus() {
@@ -121,7 +119,7 @@ function getStatus() {
     maxTraders: config.maxTraders,
     marketStatus: state.marketStatus,
     traderType: state.traderType,
-    roundStats: state.roundStats
+    perpetualStats: state.perpetualStats
   };
 }
 
