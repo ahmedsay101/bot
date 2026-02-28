@@ -154,7 +154,7 @@ describe("MartingaleTrader", () => {
 
   // ── Stop Loss → Next Round ────────────────────────────────────
 
-  test("stop loss re-opens SHORT with doubled notional", async () => {
+  test("stop loss opens opposite direction with doubled notional", async () => {
     const { trader, api } = makeTrader({ price: 100 });
     const spy = jest.spyOn(api, "placeMarketOrder");
 
@@ -166,11 +166,11 @@ describe("MartingaleTrader", () => {
     api.setPrice(101.5);
     await trader._checkPosition(101.5);
 
-    // Should now be on round 2, still SHORT, doubled notional
+    // Should now be on round 2, LONG direction, doubled notional
     expect(trader.active).toBe(true);
     expect(trader.currentRound).toBe(2);
     expect(trader.position).not.toBeNull();
-    expect(trader.position.direction).toBe("SHORT");
+    expect(trader.position.direction).toBe("LONG");
     expect(trader.position.notional).toBe(origNotional * 2);
 
     // Should have called placeMarketOrder 3 times: initial open, close, re-open
@@ -193,30 +193,30 @@ describe("MartingaleTrader", () => {
 
   // ── Multiple Rounds ───────────────────────────────────────────
 
-  test("multiple SL hits stay SHORT and double notional", async () => {
+  test("multiple SL hits alternate direction and double notional", async () => {
     Object.assign(config, { maxRounds: 5 });
     const { trader, api } = makeTrader({ price: 100 });
     await trader.start();
 
     const baseNotional = trader.position.notional;
 
-    // Round 1: SHORT at 100, SL hit
+    // Round 1: SHORT, SL hit
     api.setPrice(101.5);
     await trader._checkPosition(101.5);
     expect(trader.currentRound).toBe(2);
-    expect(trader.position.direction).toBe("SHORT");
+    expect(trader.position.direction).toBe("LONG");
     expect(trader.position.notional).toBe(baseNotional * 2);
 
-    // Round 2: SHORT at 101.5, SL hit (SL = 101.5 * 1.01 ≈ 102.515)
-    api.setPrice(103);
-    await trader._checkPosition(103);
+    // Round 2: LONG, SL hit (SL = 101.5 * 0.99 ≈ 100.485)
+    api.setPrice(100);
+    await trader._checkPosition(100);
     expect(trader.currentRound).toBe(3);
     expect(trader.position.direction).toBe("SHORT");
     expect(trader.position.notional).toBe(baseNotional * 4);
 
-    // Round 3: SHORT at 103, TP hit (TP = 103 * 0.99 ≈ 101.97)
-    api.setPrice(101);
-    await trader._checkPosition(101);
+    // Round 3: SHORT, TP hit (TP = 100 * 0.99 = 99)
+    api.setPrice(98.5);
+    await trader._checkPosition(98.5);
     expect(trader.active).toBe(false);
     expect(trader.tradeHistory.length).toBe(3);
   });
@@ -234,9 +234,9 @@ describe("MartingaleTrader", () => {
     expect(trader.currentRound).toBe(2);
     expect(trader.active).toBe(true);
 
-    // Round 2: SHORT at 101.5, SL hit (SL ≈ 102.515) → maxRounds reached → destroy
-    api.setPrice(103);
-    await trader._checkPosition(103);
+    // Round 2: LONG, SL hit (SL ≈ 100.485) → maxRounds reached → destroy
+    api.setPrice(100);
+    await trader._checkPosition(100);
 
     expect(trader.active).toBe(false);
     expect(onDestroy).toHaveBeenCalledWith("TESTUSDT", expect.any(Number));
@@ -325,9 +325,9 @@ describe("MartingaleTrader", () => {
     const feesAfterR1 = trader.feesPaid;
     expect(feesAfterR1).toBeGreaterThan(0);
 
-    // Round 2: TP hit (SHORT entered at ~101.5, TP ~100.485)
-    api.setPrice(100);
-    await trader._checkPosition(100);
+    // Round 2: TP hit (LONG entered at ~101.5, TP ~102.515)
+    api.setPrice(103);
+    await trader._checkPosition(103);
 
     expect(trader.feesPaid).toBeGreaterThan(feesAfterR1);
     expect(trader.tradeHistory.length).toBe(2);
@@ -375,9 +375,9 @@ describe("MartingaleTrader", () => {
     await trader._checkPosition(101.5);
     expect(store.recordTrade).toHaveBeenCalledTimes(1);
 
-    // Round 2: TP (SHORT entered at ~101.5, TP ~100.485)
-    api.setPrice(100);
-    await trader._checkPosition(100);
+    // Round 2: TP (LONG entered at ~101.5, TP ~102.515)
+    api.setPrice(103);
+    await trader._checkPosition(103);
     expect(store.recordTrade).toHaveBeenCalledTimes(2);
   });
 
