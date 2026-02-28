@@ -86,10 +86,12 @@ class Controller {
       if (failure && Date.now() < failure.until) continue;
       if (failure) this.failedSymbols.delete(symbol);
 
-      // Get max leverage for the notional (constant — no doubling)
+      // Get max leverage for the equity-based notional
       let leverage = Number(config.leverage) || 20;
       try {
-        const baseNotional = Number(config.positionNotionalUSDT) || 10;
+        const equityFraction = Number(config.equityFraction) || 0.01;
+        const currentEquity = store.getStatus().equity || Number(config.startingBalanceUSDT) || 100;
+        const baseNotional = equityFraction * currentEquity;
         const notional = baseNotional * leverage;
 
         const maxLev = await this.api.getMaxLeverage(symbol, notional);
@@ -102,7 +104,7 @@ class Controller {
 
         await this.api.setLeverage(symbol, leverage);
         this.leverageSet.set(symbol, leverage);
-        log("CONTROLLER", `Leverage set to ${leverage}x for ${symbol} (notional $${(baseNotional * leverage).toFixed(0)})`);
+        log("CONTROLLER", `Leverage set to ${leverage}x for ${symbol} (equity-based notional $${actualNotional.toFixed(2)})`);
       } catch (err) {
         log("CONTROLLER", `Leverage setup failed for ${symbol}: ${err.message}`);
         continue;

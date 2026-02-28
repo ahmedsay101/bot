@@ -38,8 +38,10 @@ class PerpetualTrader {
     this.feesPaid = 0;
     this.lastPrice = null;
 
-    // Notional (constant — no doubling)
-    this.baseNotional = Number(config.positionNotionalUSDT) || 10;
+    // Notional based on equity fraction
+    const equityFraction = Number(config.equityFraction) || 0.01;
+    const currentEquity = store.getStatus().equity || Number(config.startingBalanceUSDT) || 100;
+    this.baseNotional = equityFraction * currentEquity;
     this.notional = this.baseNotional * this.leverage;
 
     // Current position (at most one at a time)

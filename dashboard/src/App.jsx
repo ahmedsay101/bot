@@ -360,6 +360,7 @@ function App() {
                             </div>
                           </div>
                           <div className="mt-2 flex items-center justify-between text-xs text-slate-400">
+                            <span>Amount ${fmt(pos.notional)}</span>
                             <span>Price {fmtPrice(t.lastPrice)}</span>
                             <span className={pnlColor(t.unrealizedPnl)}>
                               Unrealized ${fmt(t.unrealizedPnl, 4)}
@@ -573,6 +574,10 @@ function App() {
                     <p className="text-xs text-slate-500">Trade #</p>
                     <p className="text-slate-200">{detailTrader.position.tradeNumber}</p>
                   </div>
+                  <div>
+                    <p className="text-xs text-slate-500">Amount</p>
+                    <p className="text-slate-200">${fmt(detailTrader.position.notional)}</p>
+                  </div>
                 </div>
               </div>
             )}
@@ -611,6 +616,7 @@ function App() {
                       <span className={pnlColor(trade.netPnl)}>${fmt(trade.netPnl, 4)}</span>
                     </div>
                     <div className="mt-1 flex items-center gap-3 text-xs text-slate-500">
+                      <span>Amount ${fmt(trade.notional)}</span>
                       <span>Entry {fmtPrice(trade.entry)}</span>
                       <span>Exit {fmtPrice(trade.exit)}</span>
                       {trade.fees != null && <span>Fee ${fmt(trade.fees, 4)}</span>}

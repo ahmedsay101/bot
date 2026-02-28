@@ -8,7 +8,8 @@ jest.mock("../src/state/store", () => ({
   upsertTrader: jest.fn(),
   removeTrader: jest.fn(),
   recordTrade: jest.fn(),
-  recordTraderResult: jest.fn()
+  recordTraderResult: jest.fn(),
+  getStatus: jest.fn(() => ({ equity: 80 }))
 }));
 
 const PerpetualTrader = require("../src/core/perpetualTrader");
