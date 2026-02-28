@@ -16,7 +16,7 @@ class Controller {
     this._scanning = false;
 
     // Trader type rotation: swap every 6 hours
-    this.traderType = "VOLATILITY";
+    this.traderType = "EXPANSION";
     this._lastRotation = Date.now();
 
     // Consecutive-loss cooldown
