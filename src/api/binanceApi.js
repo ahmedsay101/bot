@@ -467,22 +467,41 @@ class BinanceApi extends EventEmitter {
   }
 
   /**
-   * Get the maximum allowed leverage for a symbol.
-   * Binance returns brackets sorted by notionalCap ascending;
-   * the first bracket contains the highest leverage.
+   * Get the maximum allowed leverage for a symbol given a position notional.
+   * Binance brackets are sorted by notionalCap ascending. Each bracket defines
+   * the max leverage for positions up to that notionalCap.
+   * We pick the bracket whose notionalCap >= notional (the first one that fits).
+   * @param {string} symbol
+   * @param {number} [notional=0] - position notional in USDT to check against brackets
    */
-  async getMaxLeverage(symbol) {
+  async getMaxLeverage(symbol, notional = 0) {
     if (this.mode === "test") {
-      return Number(config.leverage) || 125;
+      // In test mode, still query the exchange for accurate bracket data
+      // but fall back to config if unavailable
+      return Number(config.leverage) || 20;
     }
     try {
       const data = await this._request("GET", "/fapi/v1/leverageBracket", { symbol }, true);
-      // data is an array of { symbol, brackets: [{ bracket, initialLeverage, ... }] }
       const entry = Array.isArray(data) ? data.find((d) => d.symbol === symbol) : null;
       if (!entry || !Array.isArray(entry.brackets) || entry.brackets.length === 0) {
         return Number(config.leverage) || 20;
       }
-      // First bracket has the highest leverage
+
+      // Brackets are sorted by notionalCap ascending.
+      // Find the first bracket whose notionalCap >= our notional.
+      if (notional > 0) {
+        for (const bracket of entry.brackets) {
+          const cap = Number(bracket.notionalCap) || Infinity;
+          if (notional <= cap) {
+            return Number(bracket.initialLeverage) || 20;
+          }
+        }
+        // If notional exceeds all brackets, use the last bracket (lowest leverage)
+        const last = entry.brackets[entry.brackets.length - 1];
+        return Number(last.initialLeverage) || 1;
+      }
+
+      // No notional specified — return the highest possible leverage (first bracket)
       return Number(entry.brackets[0].initialLeverage) || 20;
     } catch (err) {
       log("BINANCE", `getMaxLeverage failed for ${symbol}: ${err.message}`);

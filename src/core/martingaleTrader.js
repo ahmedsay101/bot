@@ -240,8 +240,8 @@ class MartingaleTrader {
         return;
       }
 
-      // Enter next round: opposite direction, double notional
-      const nextDirection = pos.direction === "LONG" ? "SHORT" : "LONG";
+      // Enter next round: always SHORT, double notional
+      const nextDirection = "SHORT";
       const nextNotional = pos.notional * 2;
       await this._enterRound(nextDirection, nextNotional);
       this._processing = false;

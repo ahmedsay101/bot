@@ -10,7 +10,7 @@ const config = {
   feeRate: 0.0004,
   slippageRate: 0.0002,
   positionNotionalUSDT: 1,
-  leverage: 125,
+  leverage: 20,
   takeProfitPercent: 0.5,
   stopLossPercent: 0.5,
   maxRounds: 5,

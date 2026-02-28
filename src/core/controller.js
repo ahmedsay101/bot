@@ -86,14 +86,30 @@ class Controller {
       if (failure && Date.now() < failure.until) continue;
       if (failure) this.failedSymbols.delete(symbol);
 
-      // Get max leverage and set it
-      let leverage = Number(config.leverage) || 125;
+      // Get max leverage for the worst-case notional (last round doubles)
+      // Notional at round N = base * leverage * 2^(N-1)
+      // We need leverage that's valid for the largest round, but leverage itself
+      // affects the notional. Use base notional without leverage first to find a
+      // bracket, then compute the leveraged notional and re-check.
+      let leverage = Number(config.leverage) || 20;
       try {
-        const maxLev = await this.api.getMaxLeverage(symbol);
+        const baseNotional = Number(config.positionNotionalUSDT) || 10;
+        const maxRounds = Number(config.maxRounds) || 5;
+        const worstCaseMultiplier = Math.pow(2, maxRounds - 1);
+
+        // First pass: get max leverage for rough worst-case notional estimate
+        const roughNotional = baseNotional * worstCaseMultiplier * leverage;
+        const maxLev = await this.api.getMaxLeverage(symbol, roughNotional);
         leverage = maxLev;
+
+        // Second pass: recalculate with actual leverage and verify
+        const actualNotional = baseNotional * worstCaseMultiplier * leverage;
+        const verifiedLev = await this.api.getMaxLeverage(symbol, actualNotional);
+        leverage = Math.min(leverage, verifiedLev);
+
         await this.api.setLeverage(symbol, leverage);
         this.leverageSet.set(symbol, leverage);
-        log("CONTROLLER", `Leverage set to max ${leverage}x for ${symbol}`);
+        log("CONTROLLER", `Leverage set to ${leverage}x for ${symbol} (worst-case notional $${(baseNotional * worstCaseMultiplier * leverage).toFixed(0)})`);
       } catch (err) {
         log("CONTROLLER", `Leverage setup failed for ${symbol}: ${err.message}`);
         continue;
