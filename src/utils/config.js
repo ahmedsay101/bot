@@ -9,7 +9,7 @@ const config = {
   enableScannerFilters: false,
   feeRate: 0.0004,
   slippageRate: 0.0002,
-  positionNotionalUSDT: 10,
+  positionNotionalUSDT: 1,
   leverage: 125,
   takeProfitPercent: 0.2,
   stopLossPercent: 0.2,
