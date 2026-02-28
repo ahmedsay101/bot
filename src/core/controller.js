@@ -1,8 +1,10 @@
-const LadderTrader = require("./ladderTrader");
-const FlipTrader = require("./flipTrader");
+const VolatilityTrader = require("./trader");
+const ExpansionTrader = require("./expansionTrader");
 const { log } = require("../utils/logger");
 const config = require("../utils/config");
 const store = require("../state/store");
+
+const ROTATION_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 hours
 
 class Controller {
   constructor({ api, scanner }) {
@@ -12,6 +14,14 @@ class Controller {
     this.leverageSet = new Set();
     this.failedSymbols = new Map(); // symbol -> { count, until }
     this._scanning = false;
+
+    // Trader type rotation: swap every 6 hours
+    this.traderType = "VOLATILITY";
+    this._lastRotation = Date.now();
+
+    // Consecutive-loss cooldown
+    this.consecutiveLosses = 0;
+    this._cooldownUntil = 0;      // timestamp — no new traders until this time
   }
 
   async start() {
@@ -95,6 +105,16 @@ class Controller {
   }
 
   async _doScanAndLaunch() {
+    // ── Rotate trader type every 6 hours ──
+    this._maybeRotateType();
+
+    // ── Consecutive-loss cooldown ──
+    if (Date.now() < this._cooldownUntil) {
+      const remaining = Math.ceil((this._cooldownUntil - Date.now()) / 60000);
+      log("CONTROLLER", `Loss cooldown active — ${remaining}m remaining`);
+      return;
+    }
+
     const activeCount = this.traders.size;
     if (activeCount >= config.maxTraders) return;
 
@@ -127,10 +147,10 @@ class Controller {
         }
       }
 
-      const traderType = (config.traderType || "LADDER").toUpperCase();
+      const traderType = this.traderType;
       store.setTraderType(traderType);
 
-      const TraderClass = traderType === "FLIP" ? FlipTrader : LadderTrader;
+      const TraderClass = traderType === "EXPANSION" ? ExpansionTrader : VolatilityTrader;
       const trader = new TraderClass({
         symbol,
         api: this.api,
@@ -183,14 +203,49 @@ class Controller {
 
     if (typeof pnl === "number") {
       if (pnl < 0) {
-        log("CONTROLLER", `Trader ${symbol} closed with loss ($${pnl.toFixed(2)})`);
+        this.consecutiveLosses++;
+        log("CONTROLLER", `Trader ${symbol} closed with loss ($${pnl.toFixed(2)}) — consecutive losses: ${this.consecutiveLosses}`);
+        this._applyLossCooldown();
       } else {
-        log("CONTROLLER", `Trader ${symbol} closed with profit ($${pnl.toFixed(2)})`);
+        this.consecutiveLosses = 0;
+        log("CONTROLLER", `Trader ${symbol} closed with profit ($${pnl.toFixed(2)}) — streak reset`);
       }
     }
 
     log("CONTROLLER", `Trader ${symbol} destroyed`);
     await this._refreshMarketStreams();
+  }
+
+  // ── Trader-type rotation ──────────────────────────────────────
+
+  _maybeRotateType() {
+    const now = Date.now();
+    if (now - this._lastRotation >= ROTATION_INTERVAL_MS) {
+      const prev = this.traderType;
+      this.traderType = prev === "VOLATILITY" ? "EXPANSION" : "VOLATILITY";
+      this._lastRotation = now;
+      log("CONTROLLER", `Rotated trader type: ${prev} → ${this.traderType}`);
+      store.setTraderType(this.traderType);
+    }
+  }
+
+  // ── Consecutive-loss cooldown ─────────────────────────────────
+
+  /**
+   * 2 consecutive losses → 1 hour cooldown
+   * 3 consecutive losses → 2 hours cooldown
+   * 4+ consecutive losses → 6 hours cooldown
+   */
+  _applyLossCooldown() {
+    let cooldownHours = 0;
+    if (this.consecutiveLosses >= 4) cooldownHours = 6;
+    else if (this.consecutiveLosses >= 3) cooldownHours = 2;
+    else if (this.consecutiveLosses >= 2) cooldownHours = 1;
+
+    if (cooldownHours > 0) {
+      this._cooldownUntil = Date.now() + cooldownHours * 60 * 60 * 1000;
+      log("CONTROLLER", `Cooldown activated: ${cooldownHours}h (${this.consecutiveLosses} consecutive losses)`);
+    }
   }
 
   /**

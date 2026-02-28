@@ -612,6 +612,11 @@ function App() {
                             Math.max(0, -(Number(trader.realizedPnl || 0) + Number(trader.unrealizedPnl || 0)))
                           )}
                         </span>
+                        {trader.traderType === "FLIP" && trader.currentMultiplier != null && (
+                          <span className="rounded-full border border-violet-500/30 bg-violet-500/10 px-3 py-1 text-violet-300">
+                            {trader.currentMultiplier}x · Double {trader.doubleCount}/{trader.maxDoubles}
+                          </span>
+                        )}
                       </div>
                     </div>
 
@@ -675,10 +680,11 @@ function App() {
                                     : (displayPercent ?? 0);
                                   const remaining = progress ? progress.remaining : null;
                                   return (
-                                    <div key={`${trader.id}-${pos.levelIndex}-${pos.side}`}>
+                                    <div key={`${trader.id}-${pos.levelIndex ?? pos.side}-${pos.side}`}>
                                       <div className="mb-2 flex items-center justify-between text-xs text-slate-400">
                                         <span>
-                                          {pos.side} L{pos.levelIndex}
+                                          {pos.side}{pos.levelIndex != null ? ` L${pos.levelIndex}` : ""}
+                                          {pos.notional != null ? ` · $${formatNumber(pos.notional)}` : ""}
                                           {pos.pending ? " · pending" : ""}
                                         </span>
                                         <span>
@@ -793,7 +799,7 @@ function App() {
                       ref={ladderRef}
                       className="mt-3 max-h-[520px] overflow-y-auto rounded-2xl border border-white/5 bg-ink-800/60"
                     >
-                      {sortedLevels.map((level) => {
+                      {sortedLevels.map((level, idx) => {
                         const isCurrent = nearest && nearest.index === level.index;
                         const tone = level.status === "LONG" || level.status === "PENDING_LONG"
                           ? "text-emerald-300"
@@ -805,15 +811,18 @@ function App() {
                           : "";
                         return (
                           <div
-                            key={`level-${level.index}`}
+                            key={`level-${level.index ?? level.direction ?? idx}`}
                             data-current={isCurrent ? "true" : "false"}
                             className={`flex items-center justify-between border-b border-white/5 px-4 py-2 text-sm ${
                               isCurrent ? "bg-white/5" : ""
                             } ${opacityClass}`}
                           >
                             <div className="flex items-center gap-3">
-                              <span className="text-xs uppercase tracking-[0.2em] text-slate-500">L{level.index}</span>
+                              <span className="text-xs uppercase tracking-[0.2em] text-slate-500">{level.index != null ? `L${level.index}` : (level.direction || "-")}</span>
                               <span className={tone}>{level.status}</span>
+                              {level.notional != null && (
+                                <span className="text-xs text-slate-500">${formatNumber(level.notional)}</span>
+                              )}
                             </div>
                             <div className="flex items-center gap-4 text-xs text-slate-400">
                               <span>Price {formatPrice(level.price)}</span>
