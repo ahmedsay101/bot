@@ -150,7 +150,7 @@ class Controller {
       const traderType = this.traderType;
       store.setTraderType(traderType);
 
-      const TraderClass = traderType === "EXPANSION" ? ExpansionTrader : VolatilityTrader;
+      const TraderClass = traderType === "EXPANSION" ? ExpansionTrader : ExpansionTrader;
       const trader = new TraderClass({
         symbol,
         api: this.api,
