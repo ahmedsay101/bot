@@ -10,16 +10,21 @@ router.get("/traders", (req, res) => {
   const traders = store.getTraders().map((trader) => ({
     id: trader.id,
     symbol: trader.symbol,
+    traderType: trader.traderType,
     lastPrice: trader.lastPrice,
-    sideExposure: trader.sideExposure,
+    leverage: trader.leverage,
     openPositions: trader.openPositions,
     pendingOrders: trader.pendingOrders,
     realizedPnl: trader.realizedPnl,
     unrealizedPnl: trader.unrealizedPnl,
-    basePrice: trader.gridLevels?.basePrice || null,
-    gridLevels: trader.gridLevels || null,
+    feesPaid: trader.feesPaid,
     createdAt: trader.createdAt,
-    openPositionsDetail: trader.openPositionsDetail || [],
+    currentRound: trader.currentRound,
+    maxRounds: trader.maxRounds,
+    baseNotional: trader.baseNotional,
+    currentNotional: trader.currentNotional,
+    position: trader.position,
+    tradeHistory: trader.tradeHistory || [],
     status: trader.status
   }));
   res.json(traders);
@@ -30,10 +35,21 @@ router.get("/traders/:id", (req, res) => {
   if (!trader) return res.status(404).json({ error: "Trader not found" });
 
   res.json({
+    id: trader.id,
     symbol: trader.symbol,
-    gridLevels: trader.gridLevels,
-    openPositions: trader.openPositionsDetail || [],
-    tradeHistory: trader.tradeHistory || []
+    traderType: trader.traderType,
+    lastPrice: trader.lastPrice,
+    leverage: trader.leverage,
+    currentRound: trader.currentRound,
+    maxRounds: trader.maxRounds,
+    baseNotional: trader.baseNotional,
+    currentNotional: trader.currentNotional,
+    position: trader.position,
+    tradeHistory: trader.tradeHistory || [],
+    realizedPnl: trader.realizedPnl,
+    unrealizedPnl: trader.unrealizedPnl,
+    feesPaid: trader.feesPaid,
+    status: trader.status
   });
 });
 

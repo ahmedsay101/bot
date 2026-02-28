@@ -1,27 +1,16 @@
-const VolatilityTrader = require("./trader");
-const ExpansionTrader = require("./expansionTrader");
+const MartingaleTrader = require("./martingaleTrader");
 const { log } = require("../utils/logger");
 const config = require("../utils/config");
 const store = require("../state/store");
-
-const ROTATION_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 hours
 
 class Controller {
   constructor({ api, scanner }) {
     this.api = api;
     this.scanner = scanner;
     this.traders = new Map();
-    this.leverageSet = new Set();
+    this.leverageSet = new Map(); // symbol -> leverage value
     this.failedSymbols = new Map(); // symbol -> { count, until }
     this._scanning = false;
-
-    // Trader type rotation: swap every 6 hours
-    this.traderType = "EXPANSION";
-    this._lastRotation = Date.now();
-
-    // Consecutive-loss cooldown
-    this.consecutiveLosses = 0;
-    this._cooldownUntil = 0;      // timestamp — no new traders until this time
   }
 
   async start() {
@@ -38,9 +27,9 @@ class Controller {
   async _cleanupStaleOrders() {
     try {
       const openOrders = await this.api.getOpenOrders();
-      const symbols = [...new Set(openOrders.map(o => o.symbol))];
+      const symbols = [...new Set(openOrders.map((o) => o.symbol))];
       for (const symbol of symbols) {
-        log("CONTROLLER", `Cleanup: cancelling ${openOrders.filter(o => o.symbol === symbol).length} stale orders for ${symbol}`);
+        log("CONTROLLER", `Cleanup: cancelling stale orders for ${symbol}`);
         await this.api.cancelAllOpenOrders(symbol);
       }
       if (symbols.length > 0) {
@@ -73,27 +62,6 @@ class Controller {
     }, config.scannerIntervalMs);
   }
 
-  _isWithinTradingHours() {
-    const now = new Date();
-    const hour = now.getUTCHours();
-    return hour >= 3 && hour < 9;
-  }
-
-  _getTimeUntilTradingWindow() {
-    const now = new Date();
-    const hour = now.getUTCHours();
-    const min = now.getUTCMinutes();
-    const sec = now.getUTCSeconds();
-    const currentMinutes = hour * 60 + min;
-    const startMinutes = 3 * 60;
-    let diffMinutes = startMinutes - currentMinutes;
-    if (diffMinutes <= 0) diffMinutes += 24 * 60;
-    const totalSeconds = diffMinutes * 60 - sec;
-    const h = Math.floor(totalSeconds / 3600);
-    const m = Math.floor((totalSeconds % 3600) / 60);
-    return `${h}h ${m}m`;
-  }
-
   async _scanAndLaunch() {
     if (this._scanning) return;
     this._scanning = true;
@@ -105,27 +73,9 @@ class Controller {
   }
 
   async _doScanAndLaunch() {
-    // ── Rotate trader type every 6 hours ──
-    this._maybeRotateType();
-
-    // ── Consecutive-loss cooldown ──
-    if (Date.now() < this._cooldownUntil) {
-      const remaining = Math.ceil((this._cooldownUntil - Date.now()) / 60000);
-      log("CONTROLLER", `Loss cooldown active — ${remaining}m remaining`);
-      return;
-    }
-
-    const activeCount = this.traders.size;
-    if (activeCount >= config.maxTraders) return;
+    if (this.traders.size >= config.maxTraders) return;
 
     const candidates = await this.scanner.scan();
-
-    if (config.enableTradingWindow && !this._isWithinTradingHours()) {
-      if (candidates.length > 0) {
-        log("CONTROLLER", `Trading window closed (03:00–9:00 UTC). Next window in ${this._getTimeUntilTradingWindow()}`);
-      }
-      return;
-    }
 
     for (const symbol of candidates) {
       if (this.traders.size >= config.maxTraders) break;
@@ -136,42 +86,45 @@ class Controller {
       if (failure && Date.now() < failure.until) continue;
       if (failure) this.failedSymbols.delete(symbol);
 
-      if (config.mode === "live" && !this.leverageSet.has(symbol)) {
-        try {
-          await this.api.setLeverage(symbol, config.leverage);
-          this.leverageSet.add(symbol);
-          log("CONTROLLER", `Leverage set ${config.leverage}x for ${symbol}`);
-        } catch (err) {
-          log("CONTROLLER", `Leverage set failed for ${symbol}: ${err.message}`);
-          continue;
-        }
+      // Get max leverage and set it
+      let leverage = Number(config.leverage) || 125;
+      try {
+        const maxLev = await this.api.getMaxLeverage(symbol);
+        leverage = maxLev;
+        await this.api.setLeverage(symbol, leverage);
+        this.leverageSet.set(symbol, leverage);
+        log("CONTROLLER", `Leverage set to max ${leverage}x for ${symbol}`);
+      } catch (err) {
+        log("CONTROLLER", `Leverage setup failed for ${symbol}: ${err.message}`);
+        continue;
       }
 
-      const traderType = this.traderType;
-      store.setTraderType(traderType);
+      store.setTraderType("MARTINGALE");
 
-      const TraderClass = traderType === "EXPANSION" ? ExpansionTrader : ExpansionTrader;
-      const trader = new TraderClass({
+      const trader = new MartingaleTrader({
         symbol,
         api: this.api,
-        onDestroy: (sym, pnl) => this._destroy(sym, pnl)
+        onDestroy: (sym, pnl) => this._destroy(sym, pnl),
+        leverage
       });
+
       this.traders.set(symbol, trader);
       try {
         await trader.start();
-        log("CONTROLLER", `Launched ${traderType} trader for ${symbol}`);
+        log("CONTROLLER", `Launched MARTINGALE trader for ${symbol} at ${leverage}x`);
       } catch (err) {
         log("CONTROLLER", `Trader ${symbol} failed to start: ${err.message}`);
         this.traders.delete(symbol);
 
-        // Back off: 10 min after 1st fail, 30 min after 2nd, 120 min after 3+
         const prev = this.failedSymbols.get(symbol) || { count: 0 };
         const count = prev.count + 1;
         const cooldown = count >= 3 ? 120 : count >= 2 ? 30 : 10;
         this.failedSymbols.set(symbol, { count, until: Date.now() + cooldown * 60 * 1000 });
         log("CONTROLLER", `${symbol} blacklisted for ${cooldown}m (fail #${count})`);
 
-        try { await trader.destroy("start-failed", { closePositions: true }); } catch (_) {}
+        try {
+          await trader.destroy("start-failed", { closePositions: true });
+        } catch (_) {}
       }
     }
 
@@ -188,7 +141,7 @@ class Controller {
     store.setBalance(balance);
 
     const traders = store.getTraders();
-    const unrealized = traders.reduce((sum, trader) => sum + (trader.unrealizedPnl || 0), 0);
+    const unrealized = traders.reduce((sum, t) => sum + (t.unrealizedPnl || 0), 0);
     store.setEquity(balance + unrealized);
   }
 
@@ -199,59 +152,32 @@ class Controller {
 
   async _destroy(symbol, pnl) {
     if (!this.traders.has(symbol)) return;
+    const trader = this.traders.get(symbol);
     this.traders.delete(symbol);
 
-    if (typeof pnl === "number") {
-      if (pnl < 0) {
-        this.consecutiveLosses++;
-        log("CONTROLLER", `Trader ${symbol} closed with loss ($${pnl.toFixed(2)}) — consecutive losses: ${this.consecutiveLosses}`);
-        this._applyLossCooldown();
-      } else {
-        this.consecutiveLosses = 0;
-        log("CONTROLLER", `Trader ${symbol} closed with profit ($${pnl.toFixed(2)}) — streak reset`);
+    // Record round stats for the dashboard
+    if (trader && trader.tradeHistory) {
+      const lastTrade = trader.tradeHistory[trader.tradeHistory.length - 1];
+      if (lastTrade) {
+        const wonAtRound = lastTrade.reason === "take-profit" ? lastTrade.round : null;
+        store.recordTraderResult({
+          rounds: trader.currentRound,
+          maxRounds: trader.maxRounds,
+          wonAtRound,
+          pnl: trader.realizedPnl
+        });
       }
+    }
+
+    if (typeof pnl === "number") {
+      const label = pnl >= 0 ? "profit" : "loss";
+      log("CONTROLLER", `Trader ${symbol} closed with ${label} ($${pnl.toFixed(2)})`);
     }
 
     log("CONTROLLER", `Trader ${symbol} destroyed`);
     await this._refreshMarketStreams();
   }
 
-  // ── Trader-type rotation ──────────────────────────────────────
-
-  _maybeRotateType() {
-    const now = Date.now();
-    if (now - this._lastRotation >= ROTATION_INTERVAL_MS) {
-      const prev = this.traderType;
-      this.traderType = prev === "VOLATILITY" ? "EXPANSION" : "VOLATILITY";
-      this._lastRotation = now;
-      log("CONTROLLER", `Rotated trader type: ${prev} → ${this.traderType}`);
-      store.setTraderType(this.traderType);
-    }
-  }
-
-  // ── Consecutive-loss cooldown ─────────────────────────────────
-
-  /**
-   * 2 consecutive losses → 1 hour cooldown
-   * 3 consecutive losses → 2 hours cooldown
-   * 4+ consecutive losses → 6 hours cooldown
-   */
-  _applyLossCooldown() {
-    let cooldownHours = 0;
-    if (this.consecutiveLosses >= 4) cooldownHours = 6;
-    else if (this.consecutiveLosses >= 3) cooldownHours = 2;
-    else if (this.consecutiveLosses >= 2) cooldownHours = 1;
-
-    if (cooldownHours > 0) {
-      this._cooldownUntil = Date.now() + cooldownHours * 60 * 60 * 1000;
-      log("CONTROLLER", `Cooldown activated: ${cooldownHours}h (${this.consecutiveLosses} consecutive losses)`);
-    }
-  }
-
-  /**
-   * Destroy a trader by symbol. Called from the API when the user
-   * clicks the destroy button on the frontend.
-   */
   async destroyTrader(symbol) {
     const trader = this.traders.get(symbol);
     if (!trader) return false;

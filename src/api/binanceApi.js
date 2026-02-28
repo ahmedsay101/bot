@@ -466,6 +466,30 @@ class BinanceApi extends EventEmitter {
     );
   }
 
+  /**
+   * Get the maximum allowed leverage for a symbol.
+   * Binance returns brackets sorted by notionalCap ascending;
+   * the first bracket contains the highest leverage.
+   */
+  async getMaxLeverage(symbol) {
+    if (this.mode === "test") {
+      return Number(config.leverage) || 125;
+    }
+    try {
+      const data = await this._request("GET", "/fapi/v1/leverageBracket", { symbol }, true);
+      // data is an array of { symbol, brackets: [{ bracket, initialLeverage, ... }] }
+      const entry = Array.isArray(data) ? data.find((d) => d.symbol === symbol) : null;
+      if (!entry || !Array.isArray(entry.brackets) || entry.brackets.length === 0) {
+        return Number(config.leverage) || 20;
+      }
+      // First bracket has the highest leverage
+      return Number(entry.brackets[0].initialLeverage) || 20;
+    } catch (err) {
+      log("BINANCE", `getMaxLeverage failed for ${symbol}: ${err.message}`);
+      return Number(config.leverage) || 20;
+    }
+  }
+
   async placeStopLimitOrder({
     symbol,
     side,

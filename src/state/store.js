@@ -24,12 +24,13 @@ const state = {
     ws: "unknown",
     updatedAt: null
   },
-  traderType: "VOLATILITY",
-  regime: {
-    regime: "UNKNOWN",
-    confidence: 0,
-    expansionScore: 0,
-    compressionScore: 0
+  traderType: "MARTINGALE",
+  // Round-win statistics: how many traders won at each round
+  roundStats: {
+    totalTraders: 0,
+    totalWins: 0,
+    totalLosses: 0,
+    winsByRound: {}  // { "1": count, "2": count, ... }
   }
 };
 
@@ -95,16 +96,19 @@ function setTraderType(traderType) {
   state.traderType = traderType;
 }
 
-function setConsecutiveLosses(count) {
-  // Kept for backward compat – no-op now that regime is market-driven
-  // state.consecutiveLosses = count;
-}
-
-function setRegime(regime) {
-  state.regime = {
-    ...state.regime,
-    ...regime
-  };
+/**
+ * Record a completed trader's result for round-win statistics.
+ * @param {{ rounds: number, maxRounds: number, wonAtRound: number|null, pnl: number }} result
+ */
+function recordTraderResult(result) {
+  state.roundStats.totalTraders++;
+  if (result.wonAtRound != null) {
+    state.roundStats.totalWins++;
+    const key = String(result.wonAtRound);
+    state.roundStats.winsByRound[key] = (state.roundStats.winsByRound[key] || 0) + 1;
+  } else {
+    state.roundStats.totalLosses++;
+  }
 }
 
 function getStatus() {
@@ -117,7 +121,7 @@ function getStatus() {
     maxTraders: config.maxTraders,
     marketStatus: state.marketStatus,
     traderType: state.traderType,
-    regime: state.regime
+    roundStats: state.roundStats
   };
 }
 
@@ -177,10 +181,8 @@ module.exports = {
   setMarketStatus,
   setBalance,
   setEquity,
-  setCooldownStatus: setTraderType,
   setTraderType,
-  setConsecutiveLosses,
-  setRegime,
+  recordTraderResult,
   upsertTrader,
   removeTrader,
   recordTrade,
