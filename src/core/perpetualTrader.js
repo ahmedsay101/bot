@@ -44,6 +44,8 @@ class PerpetualTrader {
     this.baseNotional = equityFraction * currentEquity;
     this.notional = this.baseNotional * this.leverage;
 
+    log(`TRADER ${this.symbol}`, `Equity calculation: fraction=${equityFraction}, equity=${currentEquity}, baseNotional=${this.baseNotional}, notional=${this.notional}`);
+
     // Current position (at most one at a time)
     this.position = null;
     this.startDirection = "SHORT";
