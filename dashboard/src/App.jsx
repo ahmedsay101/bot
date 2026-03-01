@@ -149,7 +149,7 @@ function TopGainersTable({ gainers }) {
   );
 }
 
-function TraderCard({ trader, onDestroy, equity }) {
+function TraderCard({ trader, onDestroy }) {
   const pos = trader.position;
   const history = trader.tradeHistory || [];
   
