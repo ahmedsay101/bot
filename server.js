@@ -75,12 +75,15 @@ function updateTopGainersFromTickers(tickers) {
     .filter((t) => typeof t.symbol === "string" && t.symbol.endsWith("USDT"))
     .filter((t) => Number.isFinite(t.percent));
 
-  // Update per-symbol ticker map (for 24h change lookups)
+  // Merge into persistent ticker map (WS can send partial updates)
   for (const t of parsed) {
     tickerMap.set(t.symbol, t);
   }
 
-  topGainers = parsed
+  // Rebuild top gainers from the FULL ticker map, not just the current message
+  topGainers = [...tickerMap.values()]
+    .filter((t) => typeof t.symbol === "string" && t.symbol.endsWith("USDT"))
+    .filter((t) => Number.isFinite(t.percent))
     .sort((a, b) => b.percent - a.percent)
     .slice(0, 20);
 }
