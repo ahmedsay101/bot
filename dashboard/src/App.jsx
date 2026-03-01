@@ -17,36 +17,35 @@ function fmtPrice(value) {
   return n.toFixed(8);
 }
 
+function fmtVol(v) {
+  if (!Number.isFinite(v) || v === 0) return "-";
+  if (v >= 1e9) return `$${(v / 1e9).toFixed(1)}B`;
+  if (v >= 1e6) return `$${(v / 1e6).toFixed(1)}M`;
+  if (v >= 1e3) return `$${(v / 1e3).toFixed(0)}K`;
+  return `$${v.toFixed(0)}`;
+}
+
 function App() {
   const [status, setStatus] = useState({ mode: "TEST", balance: 0, equity: 0 });
   const [traders, setTraders] = useState([]);
+  const [topGainers, setTopGainers] = useState([]);
   const [connected, setConnected] = useState(false);
 
-  // Load initial data
-  useEffect(() => {
-    Promise.all([
-      axios.get(`${API_URL}/api/status`),
-      axios.get(`${API_URL}/api/traders`)
-    ]).then(([s, t]) => {
-      setStatus(s.data);
-      setTraders(t.data);
-    }).catch(console.error);
-  }, []);
-
-  // WebSocket connection
+  // All data via WebSocket — no HTTP polling
   useEffect(() => {
     const socket = io(API_URL, { path: "/api/socket.io", transports: ["websocket"] });
-    
+
     socket.on("connect", () => setConnected(true));
     socket.on("disconnect", () => setConnected(false));
 
     socket.on("dashboardUpdate", (data) => {
       if (data.status) setStatus(data.status);
       if (data.traders) setTraders(data.traders);
+      if (data.topGainers) setTopGainers(data.topGainers);
     });
 
     socket.on("priceUpdate", ({ symbol, price }) => {
-      setTraders(prev => prev.map(t => 
+      setTraders(prev => prev.map(t =>
         t.symbol === symbol ? { ...t, lastPrice: Number(price) } : t
       ));
     });
@@ -64,14 +63,14 @@ function App() {
   };
 
   return (
-    <div style={{ 
-      fontFamily: "monospace", 
-      padding: "20px", 
-      backgroundColor: "#0a0a0a", 
-      color: "#ffffff", 
-      minHeight: "100vh" 
+    <div style={{
+      fontFamily: "monospace",
+      padding: "20px",
+      backgroundColor: "#0a0a0a",
+      color: "#ffffff",
+      minHeight: "100vh"
     }}>
-      
+
       {/* Header */}
       <div style={{ marginBottom: "30px", borderBottom: "1px solid #333", paddingBottom: "20px" }}>
         <h1 style={{ margin: "0 0 10px 0", fontSize: "24px" }}>Perpetual Trader Dashboard</h1>
@@ -83,6 +82,9 @@ function App() {
         </div>
       </div>
 
+      {/* Top Gainers */}
+      <TopGainersTable gainers={topGainers} />
+
       {/* Traders */}
       {traders.length === 0 ? (
         <div style={{ textAlign: "center", color: "#888", marginTop: "50px" }}>
@@ -91,20 +93,69 @@ function App() {
         </div>
       ) : (
         traders.map(trader => (
-          <TraderCard key={trader.id} trader={trader} onDestroy={() => destroyTrader(trader.symbol)} />
+          <TraderCard key={trader.id} trader={trader} equity={status.equity} onDestroy={() => destroyTrader(trader.symbol)} />
         ))
       )}
     </div>
   );
 }
 
-function TraderCard({ trader, onDestroy }) {
+/* ── Top Gainers Table ───────────────────────────────────────── */
+
+function TopGainersTable({ gainers }) {
+  if (!gainers || gainers.length === 0) return null;
+
+  return (
+    <div style={{
+      marginBottom: "30px",
+      border: "1px solid #333",
+      borderRadius: "8px",
+      padding: "15px",
+      backgroundColor: "#111"
+    }}>
+      <h3 style={{ margin: "0 0 12px 0", color: "#00aaff", fontSize: "16px" }}>Top Gainers (24h) — Live via WebSocket</h3>
+      <div style={{ maxHeight: "260px", overflowY: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "13px" }}>
+          <thead>
+            <tr>
+              <th style={tableHeaderStyle}>#</th>
+              <th style={tableHeaderStyle}>Symbol</th>
+              <th style={{ ...tableHeaderStyle, textAlign: "right" }}>Price</th>
+              <th style={{ ...tableHeaderStyle, textAlign: "right" }}>24h Change</th>
+              <th style={{ ...tableHeaderStyle, textAlign: "right" }}>Volume</th>
+            </tr>
+          </thead>
+          <tbody>
+            {gainers.map((g, i) => (
+              <tr key={g.symbol} style={{ borderBottom: "1px solid #222" }}>
+                <td style={tableCellStyle}>{i + 1}</td>
+                <td style={{ ...tableCellStyle, fontWeight: "bold" }}>{g.symbol.replace("USDT", "")}</td>
+                <td style={{ ...tableCellStyle, textAlign: "right" }}>{fmtPrice(g.price)}</td>
+                <td style={{
+                  ...tableCellStyle,
+                  textAlign: "right",
+                  fontWeight: "bold",
+                  color: g.percent >= 0 ? "#00ff00" : "#ff4444"
+                }}>
+                  {g.percent >= 0 ? "+" : ""}{fmt(g.percent, 2)}%
+                </td>
+                <td style={{ ...tableCellStyle, textAlign: "right", color: "#aaa" }}>{fmtVol(g.volume)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function TraderCard({ trader, onDestroy, equity }) {
   const pos = trader.position;
   const history = trader.tradeHistory || [];
   
-  // Calculate equity-based numbers for verification
-  const equityFraction = 0.50; // From config
-  const currentEquity = 80; // Default, could get from status
+  // Calculate equity-based numbers for verification using live data
+  const equityFraction = 0.50;
+  const currentEquity = equity || 0;
   const expectedBaseNotional = equityFraction * currentEquity;
   const expectedNotional = expectedBaseNotional * trader.leverage;
 
@@ -119,11 +170,26 @@ function TraderCard({ trader, onDestroy }) {
       
       {/* Trader Header */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px" }}>
-        <div>
-          <h2 style={{ margin: "0", color: "#00aaff" }}>{trader.symbol}</h2>
-          <div style={{ fontSize: "12px", color: "#888", marginTop: "5px" }}>
-            Created: {new Date(trader.createdAt).toLocaleString()}
+        <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+          <div>
+            <h2 style={{ margin: "0", color: "#00aaff" }}>{trader.symbol}</h2>
+            <div style={{ fontSize: "12px", color: "#888", marginTop: "5px" }}>
+              Created: {new Date(trader.createdAt).toLocaleString()}
+            </div>
           </div>
+          {trader.change24h != null && (
+            <div style={{
+              padding: "4px 10px",
+              borderRadius: "4px",
+              fontSize: "14px",
+              fontWeight: "bold",
+              backgroundColor: trader.change24h >= 0 ? "#003300" : "#330000",
+              color: trader.change24h >= 0 ? "#00ff00" : "#ff4444",
+              border: `1px solid ${trader.change24h >= 0 ? "#00ff00" : "#ff4444"}`
+            }}>
+              {trader.change24h >= 0 ? "+" : ""}{fmt(trader.change24h, 2)}% 24h
+            </div>
+          )}
         </div>
         <button 
           onClick={onDestroy}
@@ -179,7 +245,7 @@ function TraderCard({ trader, onDestroy }) {
             </div>
           </div>
           <div>
-            <div>Formula: 0.5 × ${currentEquity} × {trader.leverage}x</div>
+            <div>Formula: {equityFraction} × ${fmt(currentEquity, 2)} × {trader.leverage}x</div>
             <div>Result: ${fmt(expectedNotional, 2)}</div>
           </div>
         </div>

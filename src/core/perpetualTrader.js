@@ -61,6 +61,8 @@ class PerpetualTrader {
 
     // Guard flags
     this._processing = false;
+    this._lastTradeTime = 0;
+    this._minTradeIntervalMs = 2000; // Minimum 2 seconds between trades
 
     this._onMarkPrice = this._onMarkPrice.bind(this);
     this._onBookTicker = this._onBookTicker.bind(this);
@@ -224,6 +226,10 @@ class PerpetualTrader {
   async _checkPosition(price) {
     if (!this.position || this._processing) return;
 
+    // Rate-limit: prevent rapid cycling
+    const now = Date.now();
+    if (now - this._lastTradeTime < this._minTradeIntervalMs) return;
+
     const pos = this.position;
     const isLong = pos.direction === "LONG";
 
@@ -231,7 +237,10 @@ class PerpetualTrader {
     const tpHit = isLong ? price >= pos.tpPrice : price <= pos.tpPrice;
     if (tpHit) {
       this._processing = true;
-      await this._closePosition("take-profit");
+      this._lastTradeTime = now;
+
+      // Close at the TP price (simulates a limit TP order)
+      await this._closePosition("take-profit", pos.tpPrice);
 
       // Update statistics
       this.wins++;
@@ -260,7 +269,10 @@ class PerpetualTrader {
     const slHit = isLong ? price <= pos.slPrice : price >= pos.slPrice;
     if (slHit) {
       this._processing = true;
-      await this._closePosition("stop-loss");
+      this._lastTradeTime = now;
+
+      // Close at the SL price (simulates a stop-loss order)
+      await this._closePosition("stop-loss", pos.slPrice);
 
       // Update statistics
       this.losses++;
@@ -277,6 +289,14 @@ class PerpetualTrader {
         this.longestLossStreak = Math.abs(this.currentStreak);
       }
 
+      // Check equity before opening next position
+      const currentEquity = store.getStatus().equity;
+      if (currentEquity <= 0) {
+        log(`TRADER ${this.symbol}`, `HALTED — equity is $${formatNumber(currentEquity)}, refusing to open new trade`);
+        this._processing = false;
+        return;
+      }
+
       // SL → open opposite direction
       const nextDirection = pos.direction === "LONG" ? "SHORT" : "LONG";
       log(`TRADER ${this.symbol}`, `Stop loss hit — flipping to ${nextDirection} (loss #${this.losses})`);
@@ -288,7 +308,12 @@ class PerpetualTrader {
 
   // ── Position closing ────────────────────────────────────────────
 
-  async _closePosition(reason) {
+  /**
+   * Close the current position.
+   * @param {string} reason - "take-profit", "stop-loss", or "destroy"
+   * @param {number|null} targetPrice - For TP/SL, the exact trigger price to use as exit
+   */
+  async _closePosition(reason, targetPrice = null) {
     const pos = this.position;
     if (!pos) return;
 
@@ -302,7 +327,9 @@ class PerpetualTrader {
       positionSide
     });
 
-    const exitPrice = Number(result.price) || this.lastPrice;
+    // Use the TP/SL target price for accurate simulation;
+    // only fall back to market fill for manual destroy
+    const exitPrice = targetPrice || Number(result.price) || this.lastPrice;
 
     // PnL calculation
     const direction = pos.direction === "LONG" ? 1 : -1;

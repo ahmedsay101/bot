@@ -47,17 +47,16 @@ class FakeApi extends EventEmitter {
 function makeTrader(overrides = {}) {
   const api = overrides.api || new FakeApi({ price: overrides.price || 100 });
   const onDestroy = overrides.onDestroy || jest.fn();
-  return {
-    trader: new PerpetualTrader({
-      symbol: "TESTUSDT",
-      api,
-      onDestroy,
-      leverage: overrides.leverage || 10,
-      ...overrides.extra
-    }),
+  const trader = new PerpetualTrader({
+    symbol: "TESTUSDT",
     api,
-    onDestroy
-  };
+    onDestroy,
+    leverage: overrides.leverage || 10,
+    ...overrides.extra
+  });
+  // Disable rate limiter in tests so sequential checks work instantly
+  trader._minTradeIntervalMs = 0;
+  return { trader, api, onDestroy };
 }
 
 describe("PerpetualTrader", () => {
@@ -371,7 +370,10 @@ describe("PerpetualTrader", () => {
     api.setPrice(98.5);
     await trader._checkPosition(98.5);
 
-    const exitFee = 98.5 * pos.quantity * 0.0004;
+    // Exit happens at the TP price (not the market price),
+    // because the trader simulates a limit TP order.
+    const tpPrice = pos.entryPrice * (1 - config.takeProfitPercent / 100); // SHORT TP
+    const exitFee = tpPrice * pos.quantity * 0.0004;
     const totalRound1Fees = entryFee + exitFee;
 
     expect(trader.tradeHistory[0].fees).toBeCloseTo(totalRound1Fees, 8);

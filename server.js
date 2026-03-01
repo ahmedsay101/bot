@@ -33,6 +33,7 @@ const io = new Server(server, {
 });
 
 let topGainers = [];
+let tickerMap = new Map(); // symbol -> { percent, price, volume }
 let topGainersWs = null;
 let priceFeedAttached = false;
 
@@ -61,19 +62,27 @@ function fetchJson(url) {
 
 function updateTopGainersFromTickers(tickers) {
   const list = Array.isArray(tickers) ? tickers : [];
-  topGainers = list
+  const parsed = list
     .map((t) => {
       const symbol = t?.symbol || t?.s;
-      const percent = t?.priceChangePercent ?? t?.P;
-      return {
-        symbol,
-        percent: Number(percent)
-      };
+      const percent = Number(t?.priceChangePercent ?? t?.P);
+      const price = Number(t?.lastPrice ?? t?.c ?? 0);
+      const volume = Number(t?.quoteVolume ?? t?.q ?? 0);
+      const high = Number(t?.highPrice ?? t?.h ?? 0);
+      const low = Number(t?.lowPrice ?? t?.l ?? 0);
+      return { symbol, percent, price, volume, high, low };
     })
     .filter((t) => typeof t.symbol === "string" && t.symbol.endsWith("USDT"))
-    .filter((t) => Number.isFinite(t.percent))
+    .filter((t) => Number.isFinite(t.percent));
+
+  // Update per-symbol ticker map (for 24h change lookups)
+  for (const t of parsed) {
+    tickerMap.set(t.symbol, t);
+  }
+
+  topGainers = parsed
     .sort((a, b) => b.percent - a.percent)
-    .slice(0, 5);
+    .slice(0, 20);
 }
 
 function startTopGainersWs() {
@@ -109,18 +118,24 @@ function startTopGainersWs() {
   });
 }
 
+function buildDashboardPayload() {
+  const update = store.getDashboardUpdate();
+  // Attach 24h change from ticker WS to each trader
+  if (update.traders) {
+    update.traders = update.traders.map((t) => {
+      const ticker = tickerMap.get(t.symbol);
+      return { ...t, change24h: ticker ? ticker.percent : null };
+    });
+  }
+  return { ...update, topGainers };
+}
+
 io.on("connection", (socket) => {
-  socket.emit("dashboardUpdate", {
-    ...store.getDashboardUpdate(),
-    topGainers
-  });
+  socket.emit("dashboardUpdate", buildDashboardPayload());
 });
 
 setInterval(() => {
-  io.emit("dashboardUpdate", {
-    ...store.getDashboardUpdate(),
-    topGainers
-  });
+  io.emit("dashboardUpdate", buildDashboardPayload());
 }, 2000);
 
 startTopGainersWs();
