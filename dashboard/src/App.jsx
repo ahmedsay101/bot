@@ -102,6 +102,7 @@ function App() {
               equity={status.equity}
               onDestroy={() => destroyTrader(trader.symbol)}
               rank={rank >= 0 ? rank + 1 : null}
+              maxTraders={status.maxTraders || 5}
             />
           );
         })
@@ -135,20 +136,16 @@ function TopGainersTable({ gainers, activeSymbols, maxTraders }) {
               <th style={{ ...tableHeaderStyle, textAlign: "right" }}>Price</th>
               <th style={{ ...tableHeaderStyle, textAlign: "right" }}>24h Change</th>
               <th style={{ ...tableHeaderStyle, textAlign: "right" }}>Volume</th>
-              <th style={{ ...tableHeaderStyle, textAlign: "center" }}>Status</th>
+              <th style={{ ...tableHeaderStyle, textAlign: "center" }}>Trader</th>
             </tr>
           </thead>
           <tbody>
             {gainers.map((g, i) => {
-              const isTopN = i < maxTraders;
-              const isActive = activeSymbols.has(g.symbol);
-              const rowBg = isTopN
-                ? (isActive ? "rgba(0, 255, 0, 0.06)" : "rgba(255, 255, 0, 0.06)")
-                : "transparent";
+              const hasTrader = activeSymbols.has(g.symbol);
               return (
                 <tr key={g.symbol} style={{
-                  borderBottom: isTopN && i === maxTraders - 1 ? "2px solid #555" : "1px solid #222",
-                  backgroundColor: rowBg
+                  borderBottom: "1px solid #222",
+                  backgroundColor: hasTrader ? "rgba(0, 255, 0, 0.06)" : "transparent"
                 }}>
                   <td style={tableCellStyle}>{i + 1}</td>
                   <td style={{ ...tableCellStyle, fontWeight: "bold" }}>{g.symbol.replace("USDT", "")}</td>
@@ -163,11 +160,11 @@ function TopGainersTable({ gainers, activeSymbols, maxTraders }) {
                   </td>
                   <td style={{ ...tableCellStyle, textAlign: "right", color: "#aaa" }}>{fmtVol(g.volume)}</td>
                   <td style={{ ...tableCellStyle, textAlign: "center" }}>
-                    {isActive ? (
-                      <span style={{ color: "#00ff00", fontWeight: "bold" }}>● ACTIVE</span>
-                    ) : isTopN ? (
-                      <span style={{ color: "#ffff00" }}>○ PENDING</span>
-                    ) : null}
+                    {hasTrader ? (
+                      <span style={{ color: "#00ff00", fontWeight: "bold" }}>✓</span>
+                    ) : (
+                      <span style={{ color: "#555" }}>—</span>
+                    )}
                   </td>
                 </tr>
               );
@@ -179,9 +176,10 @@ function TopGainersTable({ gainers, activeSymbols, maxTraders }) {
   );
 }
 
-function TraderCard({ trader, onDestroy, rank }) {
+function TraderCard({ trader, onDestroy, rank, maxTraders }) {
   const pos = trader.position;
   const history = trader.tradeHistory || [];
+  const inTopN = rank != null && rank <= maxTraders;
 
   return (
     <div style={{ 
@@ -195,17 +193,29 @@ function TraderCard({ trader, onDestroy, rank }) {
       {/* Trader Header */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px" }}>
         <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-          {rank != null && (
+          {rank != null ? (
             <div style={{
               width: "36px", height: "36px",
               borderRadius: "50%",
-              backgroundColor: rank <= 3 ? "#003300" : "#222",
-              border: `2px solid ${rank <= 3 ? "#00ff00" : "#555"}`,
+              backgroundColor: inTopN ? "#003300" : "#332200",
+              border: `2px solid ${inTopN ? "#00ff00" : "#ff9900"}`,
               display: "flex", alignItems: "center", justifyContent: "center",
               fontSize: "16px", fontWeight: "bold",
-              color: rank <= 3 ? "#00ff00" : "#aaa"
+              color: inTopN ? "#00ff00" : "#ff9900"
             }}>
               #{rank}
+            </div>
+          ) : (
+            <div style={{
+              width: "36px", height: "36px",
+              borderRadius: "50%",
+              backgroundColor: "#220000",
+              border: "2px solid #ff4444",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              fontSize: "12px", fontWeight: "bold",
+              color: "#ff4444"
+            }}>
+              N/A
             </div>
           )}
           <div>
