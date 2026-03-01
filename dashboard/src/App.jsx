@@ -153,10 +153,10 @@ function TraderCard({ trader, onDestroy, equity }) {
   const pos = trader.position;
   const history = trader.tradeHistory || [];
   
-  // Calculate equity-based numbers for verification using live data
-  const equityFraction = 0.50;
-  const currentEquity = equity || 0;
-  const expectedBaseNotional = equityFraction * currentEquity;
+  // Verify notional using equity AT CREATION TIME (not current equity)
+  const equityFraction = trader.equityFraction || 0.50;
+  const creationEquity = trader.equityAtCreation || 0;
+  const expectedBaseNotional = equityFraction * creationEquity;
   const expectedNotional = expectedBaseNotional * trader.leverage;
 
   return (
@@ -228,25 +228,26 @@ function TraderCard({ trader, onDestroy, equity }) {
 
       {/* Notional Verification */}
       <div style={{ marginBottom: "20px", padding: "15px", backgroundColor: "#1a1a1a", borderRadius: "4px" }}>
-        <h4 style={{ margin: "0 0 10px 0", color: "#ffff00" }}>Notional Calculation Verification</h4>
+        <h4 style={{ margin: "0 0 10px 0", color: "#ffff00" }}>Notional Calculation (at creation)</h4>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "20px", fontSize: "14px" }}>
           <div>
             <div>Expected Base: ${fmt(expectedBaseNotional, 2)}</div>
             <div>Actual Base: ${fmt(trader.baseNotional, 2)}</div>
             <div style={{ color: Math.abs(expectedBaseNotional - trader.baseNotional) < 0.01 ? "#00ff00" : "#ff4444" }}>
-              {Math.abs(expectedBaseNotional - trader.baseNotional) < 0.01 ? "✓ CORRECT" : "✗ INCORRECT"}
+              {Math.abs(expectedBaseNotional - trader.baseNotional) < 0.01 ? "✓ CORRECT" : "✗ MISMATCH"}
             </div>
           </div>
           <div>
             <div>Expected Notional: ${fmt(expectedNotional, 2)}</div>
             <div>Actual Notional: ${fmt(trader.notional, 2)}</div>
             <div style={{ color: Math.abs(expectedNotional - trader.notional) < 0.01 ? "#00ff00" : "#ff4444" }}>
-              {Math.abs(expectedNotional - trader.notional) < 0.01 ? "✓ CORRECT" : "✗ INCORRECT"}
+              {Math.abs(expectedNotional - trader.notional) < 0.01 ? "✓ CORRECT" : "✗ MISMATCH"}
             </div>
           </div>
           <div>
-            <div>Formula: {equityFraction} × ${fmt(currentEquity, 2)} × {trader.leverage}x</div>
-            <div>Result: ${fmt(expectedNotional, 2)}</div>
+            <div>Equity at creation: ${fmt(creationEquity, 2)}</div>
+            <div>Formula: {equityFraction} × ${fmt(creationEquity, 2)} × {trader.leverage}x</div>
+            <div>= ${fmt(expectedNotional, 2)}</div>
           </div>
         </div>
       </div>

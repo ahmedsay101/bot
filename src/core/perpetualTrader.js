@@ -41,6 +41,8 @@ class PerpetualTrader {
     // Notional based on equity fraction
     const equityFraction = Number(config.equityFraction) || 0.01;
     const currentEquity = store.getStatus().equity || Number(config.startingBalanceUSDT) || 100;
+    this.equityAtCreation = currentEquity;
+    this.equityFraction = equityFraction;
     this.baseNotional = equityFraction * currentEquity;
     this.notional = this.baseNotional * this.leverage;
 
@@ -407,6 +409,8 @@ class PerpetualTrader {
       longestWinStreak: this.longestWinStreak,
       longestLossStreak: this.longestLossStreak,
       consecutiveSameDir: this.consecutiveSameDir,
+      equityAtCreation: this.equityAtCreation,
+      equityFraction: this.equityFraction,
       baseNotional: this.baseNotional,
       notional: this.notional,
       position: this.position ? {
