@@ -11,6 +11,7 @@ class Controller {
     this.leverageSet = new Map(); // symbol -> leverage value
     this.failedSymbols = new Map(); // symbol -> { count, until }
     this._scanning = false;
+    this._lastRotation = 0;
   }
 
   async start() {
@@ -60,6 +61,15 @@ class Controller {
         log("CONTROLLER", `Scan error: ${err.message}`);
       }
     }, config.scannerIntervalMs);
+
+    // Separate rotation loop — only rotates out stale traders on a longer interval
+    setInterval(async () => {
+      try {
+        await this._rotateTraders();
+      } catch (err) {
+        log("CONTROLLER", `Rotation error: ${err.message}`);
+      }
+    }, config.rotationIntervalMs);
   }
 
   async _scanAndLaunch() {
@@ -74,31 +84,9 @@ class Controller {
 
   async _doScanAndLaunch() {
     const candidates = await this.scanner.scan();
-    const topN = new Set(candidates);
 
-    // ── Phase 1: Rotate out traders whose symbols dropped out of top N ──
-    const toDestroy = [];
-    for (const [symbol] of this.traders) {
-      if (!topN.has(symbol)) {
-        toDestroy.push(symbol);
-      }
-    }
+    // ── Only fill empty slots (rotation is handled separately on a longer timer) ──
 
-    for (const symbol of toDestroy) {
-      log("CONTROLLER", `${symbol} dropped out of top ${config.maxTraders} gainers — rotating out`);
-      const trader = this.traders.get(symbol);
-      if (trader) {
-        try {
-          await trader.destroy("rotation", { closePositions: true });
-        } catch (err) {
-          log("CONTROLLER", `Error destroying ${symbol} during rotation: ${err.message}`);
-          // Force remove so the slot frees up
-          this.traders.delete(symbol);
-        }
-      }
-    }
-
-    // ── Phase 2: Launch new traders for symbols that entered top N ──
     const currentEquity = store.getStatus().equity;
     if (currentEquity <= 0) {
       log("CONTROLLER", `Equity is $${currentEquity.toFixed(2)} — skipping new launches`);
@@ -176,6 +164,52 @@ class Controller {
     }
 
     await this._refreshMarketStreams();
+  }
+
+  /**
+   * Rotate out traders whose symbols are no longer in the top N gainers.
+   * Runs on a separate, longer interval (rotationIntervalMs, default 1 hour)
+   * to avoid constant churn from fast-moving leaderboards.
+   */
+  async _rotateTraders() {
+    if (this._scanning) return;
+    this._scanning = true;
+    try {
+      const candidates = await this.scanner.scan();
+      const topN = new Set(candidates);
+
+      const toDestroy = [];
+      for (const [symbol] of this.traders) {
+        if (!topN.has(symbol)) {
+          toDestroy.push(symbol);
+        }
+      }
+
+      if (toDestroy.length === 0) {
+        log("CONTROLLER", `Rotation check: all ${this.traders.size} traders still in top ${config.maxTraders}`);
+      }
+
+      for (const symbol of toDestroy) {
+        log("CONTROLLER", `${symbol} dropped out of top ${config.maxTraders} gainers — rotating out`);
+        const trader = this.traders.get(symbol);
+        if (trader) {
+          try {
+            await trader.destroy("rotation", { closePositions: true });
+          } catch (err) {
+            log("CONTROLLER", `Error destroying ${symbol} during rotation: ${err.message}`);
+            this.traders.delete(symbol);
+          }
+        }
+      }
+
+      if (toDestroy.length > 0) {
+        await this._refreshMarketStreams();
+      }
+
+      this._lastRotation = Date.now();
+    } finally {
+      this._scanning = false;
+    }
   }
 
   async _syncAccount() {

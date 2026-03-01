@@ -16,6 +16,7 @@ const config = {
   stopLossPercent: 2,
   startingBalanceUSDT: 100,
   scannerIntervalMs: 1 * 60 * 1000,
+  rotationIntervalMs: 60 * 60 * 1000,
   minChange: 1,
   maxChange: 8,
   volumeRatio: 0.15,
