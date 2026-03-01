@@ -78,12 +78,13 @@ function App() {
           <span>Mode: <strong style={{ color: status.mode === "LIVE" ? "#00ff00" : "#ff9900" }}>{status.mode}</strong></span>
           <span>Balance: <strong>${fmt(status.balance)}</strong></span>
           <span>Equity: <strong>${fmt(status.equity)}</strong></span>
+          <span>Traders: <strong>{status.activeTraders || traders.length}/{status.maxTraders || 5}</strong> slots</span>
           <span>Connection: <strong style={{ color: connected ? "#00ff00" : "#ff0000" }}>{connected ? "CONNECTED" : "DISCONNECTED"}</strong></span>
         </div>
       </div>
 
       {/* Top Gainers */}
-      <TopGainersTable gainers={topGainers} />
+      <TopGainersTable gainers={topGainers} activeSymbols={new Set(traders.map(t => t.symbol))} maxTraders={status.maxTraders || 5} />
 
       {/* Traders */}
       {traders.length === 0 ? (
@@ -92,9 +93,18 @@ function App() {
           <p>Waiting for traders to be launched...</p>
         </div>
       ) : (
-        traders.map(trader => (
-          <TraderCard key={trader.id} trader={trader} equity={status.equity} onDestroy={() => destroyTrader(trader.symbol)} />
-        ))
+        traders.map(trader => {
+          const rank = topGainers.findIndex(g => g.symbol === trader.symbol);
+          return (
+            <TraderCard
+              key={trader.id}
+              trader={trader}
+              equity={status.equity}
+              onDestroy={() => destroyTrader(trader.symbol)}
+              rank={rank >= 0 ? rank + 1 : null}
+            />
+          );
+        })
       )}
     </div>
   );
@@ -102,7 +112,7 @@ function App() {
 
 /* ── Top Gainers Table ───────────────────────────────────────── */
 
-function TopGainersTable({ gainers }) {
+function TopGainersTable({ gainers, activeSymbols, maxTraders }) {
   if (!gainers || gainers.length === 0) return null;
 
   return (
@@ -113,8 +123,10 @@ function TopGainersTable({ gainers }) {
       padding: "15px",
       backgroundColor: "#111"
     }}>
-      <h3 style={{ margin: "0 0 12px 0", color: "#00aaff", fontSize: "16px" }}>Top Gainers (24h) — Live via WebSocket</h3>
-      <div style={{ maxHeight: "260px", overflowY: "auto" }}>
+      <h3 style={{ margin: "0 0 12px 0", color: "#00aaff", fontSize: "16px" }}>
+        Top Gainers (24h) — Top {maxTraders} get traded
+      </h3>
+      <div style={{ maxHeight: "320px", overflowY: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "13px" }}>
           <thead>
             <tr>
@@ -123,25 +135,43 @@ function TopGainersTable({ gainers }) {
               <th style={{ ...tableHeaderStyle, textAlign: "right" }}>Price</th>
               <th style={{ ...tableHeaderStyle, textAlign: "right" }}>24h Change</th>
               <th style={{ ...tableHeaderStyle, textAlign: "right" }}>Volume</th>
+              <th style={{ ...tableHeaderStyle, textAlign: "center" }}>Status</th>
             </tr>
           </thead>
           <tbody>
-            {gainers.map((g, i) => (
-              <tr key={g.symbol} style={{ borderBottom: "1px solid #222" }}>
-                <td style={tableCellStyle}>{i + 1}</td>
-                <td style={{ ...tableCellStyle, fontWeight: "bold" }}>{g.symbol.replace("USDT", "")}</td>
-                <td style={{ ...tableCellStyle, textAlign: "right" }}>{fmtPrice(g.price)}</td>
-                <td style={{
-                  ...tableCellStyle,
-                  textAlign: "right",
-                  fontWeight: "bold",
-                  color: g.percent >= 0 ? "#00ff00" : "#ff4444"
+            {gainers.map((g, i) => {
+              const isTopN = i < maxTraders;
+              const isActive = activeSymbols.has(g.symbol);
+              const rowBg = isTopN
+                ? (isActive ? "rgba(0, 255, 0, 0.06)" : "rgba(255, 255, 0, 0.06)")
+                : "transparent";
+              return (
+                <tr key={g.symbol} style={{
+                  borderBottom: isTopN && i === maxTraders - 1 ? "2px solid #555" : "1px solid #222",
+                  backgroundColor: rowBg
                 }}>
-                  {g.percent >= 0 ? "+" : ""}{fmt(g.percent, 2)}%
-                </td>
-                <td style={{ ...tableCellStyle, textAlign: "right", color: "#aaa" }}>{fmtVol(g.volume)}</td>
-              </tr>
-            ))}
+                  <td style={tableCellStyle}>{i + 1}</td>
+                  <td style={{ ...tableCellStyle, fontWeight: "bold" }}>{g.symbol.replace("USDT", "")}</td>
+                  <td style={{ ...tableCellStyle, textAlign: "right" }}>{fmtPrice(g.price)}</td>
+                  <td style={{
+                    ...tableCellStyle,
+                    textAlign: "right",
+                    fontWeight: "bold",
+                    color: g.percent >= 0 ? "#00ff00" : "#ff4444"
+                  }}>
+                    {g.percent >= 0 ? "+" : ""}{fmt(g.percent, 2)}%
+                  </td>
+                  <td style={{ ...tableCellStyle, textAlign: "right", color: "#aaa" }}>{fmtVol(g.volume)}</td>
+                  <td style={{ ...tableCellStyle, textAlign: "center" }}>
+                    {isActive ? (
+                      <span style={{ color: "#00ff00", fontWeight: "bold" }}>● ACTIVE</span>
+                    ) : isTopN ? (
+                      <span style={{ color: "#ffff00" }}>○ PENDING</span>
+                    ) : null}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -149,15 +179,9 @@ function TopGainersTable({ gainers }) {
   );
 }
 
-function TraderCard({ trader, onDestroy }) {
+function TraderCard({ trader, onDestroy, rank }) {
   const pos = trader.position;
   const history = trader.tradeHistory || [];
-  
-  // Verify notional using equity AT CREATION TIME (not current equity)
-  const equityFraction = trader.equityFraction || 0.50;
-  const creationEquity = trader.equityAtCreation || 0;
-  const expectedBaseNotional = equityFraction * creationEquity;
-  const expectedNotional = expectedBaseNotional * trader.leverage;
 
   return (
     <div style={{ 
@@ -171,6 +195,19 @@ function TraderCard({ trader, onDestroy }) {
       {/* Trader Header */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px" }}>
         <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+          {rank != null && (
+            <div style={{
+              width: "36px", height: "36px",
+              borderRadius: "50%",
+              backgroundColor: rank <= 3 ? "#003300" : "#222",
+              border: `2px solid ${rank <= 3 ? "#00ff00" : "#555"}`,
+              display: "flex", alignItems: "center", justifyContent: "center",
+              fontSize: "16px", fontWeight: "bold",
+              color: rank <= 3 ? "#00ff00" : "#aaa"
+            }}>
+              #{rank}
+            </div>
+          )}
           <div>
             <h2 style={{ margin: "0", color: "#00aaff" }}>{trader.symbol}</h2>
             <div style={{ fontSize: "12px", color: "#888", marginTop: "5px" }}>
@@ -224,32 +261,6 @@ function TraderCard({ trader, onDestroy }) {
         <StatBox label="Leverage" value={`${trader.leverage}x`} />
         <StatBox label="Realized PnL" value={`$${fmt(trader.realizedPnl, 4)}`} color={trader.realizedPnl >= 0 ? "#00ff00" : "#ff4444"} />
         <StatBox label="Fees Paid" value={`$${fmt(trader.feesPaid, 4)}`} color="#ff9900" />
-      </div>
-
-      {/* Notional Verification */}
-      <div style={{ marginBottom: "20px", padding: "15px", backgroundColor: "#1a1a1a", borderRadius: "4px" }}>
-        <h4 style={{ margin: "0 0 10px 0", color: "#ffff00" }}>Notional Calculation (at creation)</h4>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "20px", fontSize: "14px" }}>
-          <div>
-            <div>Expected Base: ${fmt(expectedBaseNotional, 2)}</div>
-            <div>Actual Base: ${fmt(trader.baseNotional, 2)}</div>
-            <div style={{ color: Math.abs(expectedBaseNotional - trader.baseNotional) < 0.01 ? "#00ff00" : "#ff4444" }}>
-              {Math.abs(expectedBaseNotional - trader.baseNotional) < 0.01 ? "✓ CORRECT" : "✗ MISMATCH"}
-            </div>
-          </div>
-          <div>
-            <div>Expected Notional: ${fmt(expectedNotional, 2)}</div>
-            <div>Actual Notional: ${fmt(trader.notional, 2)}</div>
-            <div style={{ color: Math.abs(expectedNotional - trader.notional) < 0.01 ? "#00ff00" : "#ff4444" }}>
-              {Math.abs(expectedNotional - trader.notional) < 0.01 ? "✓ CORRECT" : "✗ MISMATCH"}
-            </div>
-          </div>
-          <div>
-            <div>Equity at creation: ${fmt(creationEquity, 2)}</div>
-            <div>Formula: {equityFraction} × ${fmt(creationEquity, 2)} × {trader.leverage}x</div>
-            <div>= ${fmt(expectedNotional, 2)}</div>
-          </div>
-        </div>
       </div>
 
       {/* Current Position */}

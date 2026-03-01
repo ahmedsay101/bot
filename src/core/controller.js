@@ -73,13 +73,49 @@ class Controller {
   }
 
   async _doScanAndLaunch() {
-    if (this.traders.size >= config.maxTraders) return;
-
     const candidates = await this.scanner.scan();
+    const topN = new Set(candidates);
+
+    // ── Phase 1: Rotate out traders whose symbols dropped out of top N ──
+    const toDestroy = [];
+    for (const [symbol] of this.traders) {
+      if (!topN.has(symbol)) {
+        toDestroy.push(symbol);
+      }
+    }
+
+    for (const symbol of toDestroy) {
+      log("CONTROLLER", `${symbol} dropped out of top ${config.maxTraders} gainers — rotating out`);
+      const trader = this.traders.get(symbol);
+      if (trader) {
+        try {
+          await trader.destroy("rotation", { closePositions: true });
+        } catch (err) {
+          log("CONTROLLER", `Error destroying ${symbol} during rotation: ${err.message}`);
+          // Force remove so the slot frees up
+          this.traders.delete(symbol);
+        }
+      }
+    }
+
+    // ── Phase 2: Launch new traders for symbols that entered top N ──
+    const currentEquity = store.getStatus().equity;
+    if (currentEquity <= 0) {
+      log("CONTROLLER", `Equity is $${currentEquity.toFixed(2)} — skipping new launches`);
+      await this._refreshMarketStreams();
+      return;
+    }
 
     for (const symbol of candidates) {
       if (this.traders.size >= config.maxTraders) break;
       if (this.traders.has(symbol)) continue;
+
+      // Prevent duplicate: check if any existing trader already trades this symbol
+      const alreadyTrading = [...this.traders.values()].some(t => t.symbol === symbol);
+      if (alreadyTrading) {
+        log("CONTROLLER", `Skipping ${symbol} — duplicate trader detected`);
+        continue;
+      }
 
       // Skip symbols that recently failed
       const failure = this.failedSymbols.get(symbol);
@@ -90,8 +126,8 @@ class Controller {
       let leverage = Number(config.leverage) || 20;
       try {
         const equityFraction = Number(config.equityFraction) || 0.01;
-        const currentEquity = store.getStatus().equity || Number(config.startingBalanceUSDT) || 100;
-        const baseNotional = equityFraction * currentEquity;
+        const equityForNotional = store.getStatus().equity || Number(config.startingBalanceUSDT) || 100;
+        const baseNotional = equityFraction * equityForNotional;
         const notional = baseNotional * leverage;
 
         const maxLev = await this.api.getMaxLeverage(symbol, notional);
