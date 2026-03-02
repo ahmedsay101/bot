@@ -150,7 +150,7 @@ class Controller {
       this.traders.set(symbol, trader);
       try {
         await trader.start();
-        log("CONTROLLER", `Launched ${traderType} trader for ${symbol}`);
+        log("CONTROLLER", `Launched ${this.traderType} trader for ${symbol}`);
       } catch (err) {
         log("CONTROLLER", `Trader ${symbol} failed to start: ${err.message}`);
         this.traders.delete(symbol);
