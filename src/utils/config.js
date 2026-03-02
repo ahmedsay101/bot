@@ -1,5 +1,5 @@
 const config = {
-  mode: process.argv.includes("--test") ? "test" : "live",
+  mode: process.argv.includes("--live") ? "live" : "test",
   apiKey: process.env.BINANCE_API_KEY || "",
   apiSecret: process.env.BINANCE_API_SECRET || "",
   baseRestUrl: "https://fapi.binance.com",
