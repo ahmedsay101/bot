@@ -1,10 +1,7 @@
-const VolatilityTrader = require("./trader");
-const ExpansionTrader = require("./expansionTrader");
+const PerpetualTrader = require("./perpetualTrader");
 const { log } = require("../utils/logger");
 const config = require("../utils/config");
 const store = require("../state/store");
-
-const ROTATION_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 hours
 
 class Controller {
   constructor({ api, scanner }) {
@@ -15,9 +12,7 @@ class Controller {
     this.failedSymbols = new Map(); // symbol -> { count, until }
     this._scanning = false;
 
-    // Trader type rotation: swap every 6 hours
-    this.traderType = "EXPANSION";
-    this._lastRotation = Date.now();
+    this.traderType = "PERPETUAL";
 
     // Consecutive-loss cooldown
     this.consecutiveLosses = 0;
@@ -105,9 +100,6 @@ class Controller {
   }
 
   async _doScanAndLaunch() {
-    // ── Rotate trader type every 6 hours ──
-    this._maybeRotateType();
-
     // ── Consecutive-loss cooldown ──
     if (Date.now() < this._cooldownUntil) {
       const remaining = Math.ceil((this._cooldownUntil - Date.now()) / 60000);
@@ -147,14 +139,13 @@ class Controller {
         }
       }
 
-      const traderType = this.traderType;
-      store.setTraderType(traderType);
+      store.setTraderType(this.traderType);
 
-      const TraderClass = traderType === "EXPANSION" ? ExpansionTrader : ExpansionTrader;
-      const trader = new TraderClass({
+      const trader = new PerpetualTrader({
         symbol,
         api: this.api,
-        onDestroy: (sym, pnl) => this._destroy(sym, pnl)
+        onDestroy: (sym, pnl) => this._destroy(sym, pnl),
+        leverage: Number(config.leverage) || 10
       });
       this.traders.set(symbol, trader);
       try {
@@ -214,19 +205,6 @@ class Controller {
 
     log("CONTROLLER", `Trader ${symbol} destroyed`);
     await this._refreshMarketStreams();
-  }
-
-  // ── Trader-type rotation ──────────────────────────────────────
-
-  _maybeRotateType() {
-    const now = Date.now();
-    if (now - this._lastRotation >= ROTATION_INTERVAL_MS) {
-      const prev = this.traderType;
-      this.traderType = prev === "VOLATILITY" ? "EXPANSION" : "VOLATILITY";
-      this._lastRotation = now;
-      log("CONTROLLER", `Rotated trader type: ${prev} → ${this.traderType}`);
-      store.setTraderType(this.traderType);
-    }
   }
 
   // ── Consecutive-loss cooldown ─────────────────────────────────

@@ -11,15 +11,16 @@ router.get("/traders", (req, res) => {
     id: trader.id,
     symbol: trader.symbol,
     lastPrice: trader.lastPrice,
-    sideExposure: trader.sideExposure,
-    openPositions: trader.openPositions,
-    pendingOrders: trader.pendingOrders,
+    position: trader.position || null,
+    leverage: trader.leverage,
+    notional: trader.notional,
     realizedPnl: trader.realizedPnl,
     unrealizedPnl: trader.unrealizedPnl,
-    basePrice: trader.gridLevels?.basePrice || null,
-    gridLevels: trader.gridLevels || null,
+    wins: trader.wins,
+    losses: trader.losses,
+    totalTrades: trader.totalTrades,
+    tradeHistory: trader.tradeHistory || [],
     createdAt: trader.createdAt,
-    openPositionsDetail: trader.openPositionsDetail || [],
     status: trader.status
   }));
   res.json(traders);
@@ -31,8 +32,11 @@ router.get("/traders/:id", (req, res) => {
 
   res.json({
     symbol: trader.symbol,
-    gridLevels: trader.gridLevels,
-    openPositions: trader.openPositionsDetail || [],
+    position: trader.position || null,
+    leverage: trader.leverage,
+    notional: trader.notional,
+    wins: trader.wins,
+    losses: trader.losses,
     tradeHistory: trader.tradeHistory || []
   });
 });
