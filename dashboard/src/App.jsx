@@ -385,7 +385,9 @@ function App() {
         </div>
 
         {/* ── Main Stats Row ── */}
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-7">
+          <StatCard label="Balance" value={`$${fmt(status.balance)}`} />
+          <StatCard label="Equity" value={`$${fmt(status.equity)}`} />
           <StatCard label="Wins" value={performance.wins ?? 0} color="text-emerald-400" />
           <StatCard label="Losses" value={performance.losses ?? 0} color="text-rose-400" />
           <StatCard label="Active Traders" value={traders.length} sub={`of ${status.maxTraders} max`} />
