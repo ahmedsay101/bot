@@ -178,6 +178,20 @@ function TopGainersTable({ gainers, activeSymbols, maxTraders }) {
 
 function PositionBlock({ pos, label, labelColor, lastPrice }) {
   if (!pos) return null;
+
+  // Progress: 0% = entry, 100% = TP, negative = moving toward SL
+  const entry = Number(pos.entryPrice);
+  const tp = Number(pos.tpPrice);
+  const sl = Number(pos.slPrice);
+  const price = Number(lastPrice);
+  const totalRange = Math.abs(tp - entry);
+  const priceMove = pos.direction === "LONG"
+    ? price - entry
+    : entry - price;
+  const progress = totalRange > 0 ? (priceMove / totalRange) * 100 : 0;
+  const clampedBar = Math.max(0, Math.min(100, progress));
+  const barColor = progress >= 75 ? "#00ff00" : progress >= 25 ? "#00aaff" : progress >= 0 ? "#ff9900" : "#ff4444";
+
   return (
     <div style={{ marginBottom: "10px", padding: "12px", backgroundColor: "#1a1a1a", borderRadius: "4px", border: `1px solid ${labelColor}33` }}>
       <h4 style={{ margin: "0 0 8px 0", color: labelColor, fontSize: "14px" }}>
@@ -208,6 +222,35 @@ function PositionBlock({ pos, label, labelColor, lastPrice }) {
         <div>
           <div style={{ fontSize: "11px", color: "#888" }}>Stop Loss</div>
           <div style={{ fontSize: "14px", color: "#ff4444" }}>{fmtPrice(pos.slPrice)}</div>
+        </div>
+      </div>
+
+      {/* TP Progress Bar */}
+      <div style={{ marginTop: "10px" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "4px", fontSize: "11px" }}>
+          <span style={{ color: "#888" }}>TP Progress</span>
+          <span style={{ color: barColor, fontWeight: "bold" }}>{fmt(progress, 1)}%</span>
+        </div>
+        <div style={{
+          width: "100%",
+          height: "6px",
+          backgroundColor: "#333",
+          borderRadius: "3px",
+          overflow: "hidden",
+          position: "relative"
+        }}>
+          <div style={{
+            width: `${clampedBar}%`,
+            height: "100%",
+            backgroundColor: barColor,
+            borderRadius: "3px",
+            transition: "width 0.3s ease, background-color 0.3s ease"
+          }} />
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between", marginTop: "2px", fontSize: "10px", color: "#555" }}>
+          <span>SL</span>
+          <span>Entry</span>
+          <span>TP</span>
         </div>
       </div>
     </div>
