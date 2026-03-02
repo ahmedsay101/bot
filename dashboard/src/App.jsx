@@ -176,10 +176,50 @@ function TopGainersTable({ gainers, activeSymbols, maxTraders }) {
   );
 }
 
+function PositionBlock({ pos, label, labelColor, lastPrice }) {
+  if (!pos) return null;
+  return (
+    <div style={{ marginBottom: "10px", padding: "12px", backgroundColor: "#1a1a1a", borderRadius: "4px", border: `1px solid ${labelColor}33` }}>
+      <h4 style={{ margin: "0 0 8px 0", color: labelColor, fontSize: "14px" }}>
+        {label}
+        {pos.openReason && (
+          <span style={{ fontSize: "11px", color: "#888", marginLeft: "8px", fontWeight: "normal" }}>
+            ({pos.openReason})
+          </span>
+        )}
+      </h4>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(110px, 1fr))", gap: "12px" }}>
+        <div>
+          <div style={{ fontSize: "11px", color: "#888" }}>Trade #</div>
+          <div style={{ fontSize: "14px", fontWeight: "bold" }}>{pos.tradeNumber}</div>
+        </div>
+        <div>
+          <div style={{ fontSize: "11px", color: "#888" }}>Entry</div>
+          <div style={{ fontSize: "14px" }}>{fmtPrice(pos.entryPrice)}</div>
+        </div>
+        <div>
+          <div style={{ fontSize: "11px", color: "#888" }}>Current</div>
+          <div style={{ fontSize: "14px" }}>{fmtPrice(lastPrice)}</div>
+        </div>
+        <div>
+          <div style={{ fontSize: "11px", color: "#888" }}>Take Profit</div>
+          <div style={{ fontSize: "14px", color: "#00ff00" }}>{fmtPrice(pos.tpPrice)}</div>
+        </div>
+        <div>
+          <div style={{ fontSize: "11px", color: "#888" }}>Stop Loss</div>
+          <div style={{ fontSize: "14px", color: "#ff4444" }}>{fmtPrice(pos.slPrice)}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function TraderCard({ trader, onDestroy, rank, maxTraders }) {
-  const pos = trader.position;
+  const long = trader.longPosition;
+  const short = trader.shortPosition;
   const history = trader.tradeHistory || [];
   const inTopN = rank != null && rank <= maxTraders;
+  const posCount = (long ? 1 : 0) + (short ? 1 : 0);
 
   return (
     <div style={{ 
@@ -224,6 +264,18 @@ function TraderCard({ trader, onDestroy, rank, maxTraders }) {
               Created: {new Date(trader.createdAt).toLocaleString()}
             </div>
           </div>
+          {/* Position count badge */}
+          <div style={{
+            padding: "4px 10px",
+            borderRadius: "4px",
+            fontSize: "12px",
+            fontWeight: "bold",
+            backgroundColor: posCount === 2 ? "#332200" : "#002233",
+            color: posCount === 2 ? "#ff9900" : "#00aaff",
+            border: `1px solid ${posCount === 2 ? "#ff9900" : "#00aaff"}`
+          }}>
+            {posCount === 2 ? "HEDGED" : posCount === 1 ? "SOLO" : "IDLE"}
+          </div>
           {trader.change24h != null && (
             <div style={{
               padding: "4px 10px",
@@ -261,8 +313,8 @@ function TraderCard({ trader, onDestroy, rank, maxTraders }) {
         marginBottom: "20px" 
       }}>
         <StatBox label="Total Trades" value={trader.totalTrades || 0} />
-        <StatBox label="Wins" value={trader.wins || 0} color="#00ff00" />
-        <StatBox label="Losses" value={trader.losses || 0} color="#ff4444" />
+        <StatBox label="Wins (TP)" value={trader.wins || 0} color="#00ff00" />
+        <StatBox label="Losses (SL)" value={trader.losses || 0} color="#ff4444" />
         <StatBox 
           label="Win Rate" 
           value={`${fmt(trader.winRate || 0, 1)}%`} 
@@ -271,54 +323,14 @@ function TraderCard({ trader, onDestroy, rank, maxTraders }) {
         <StatBox label="Leverage" value={`${trader.leverage}x`} />
         <StatBox label="Realized PnL" value={`$${fmt(trader.realizedPnl, 4)}`} color={trader.realizedPnl >= 0 ? "#00ff00" : "#ff4444"} />
         <StatBox label="Fees Paid" value={`$${fmt(trader.feesPaid, 4)}`} color="#ff9900" />
+        <StatBox label="Unrealized PnL" value={`$${fmt(trader.unrealizedPnl, 4)}`} color={trader.unrealizedPnl >= 0 ? "#00ff00" : "#ff4444"} />
       </div>
 
-      {/* Current Position */}
-      {pos && (
-        <div style={{ marginBottom: "20px", padding: "15px", backgroundColor: "#1a1a1a", borderRadius: "4px" }}>
-          <h4 style={{ margin: "0 0 10px 0", color: "#00ff99" }}>Current Position</h4>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: "15px" }}>
-            <div>
-              <div style={{ fontSize: "12px", color: "#888" }}>Direction</div>
-              <div style={{ 
-                fontSize: "18px", 
-                fontWeight: "bold", 
-                color: pos.direction === "LONG" ? "#00ff00" : "#ff4444" 
-              }}>
-                {pos.direction}
-              </div>
-            </div>
-            <div>
-              <div style={{ fontSize: "12px", color: "#888" }}>Trade #</div>
-              <div style={{ fontSize: "16px", fontWeight: "bold" }}>{pos.tradeNumber}</div>
-            </div>
-            <div>
-              <div style={{ fontSize: "12px", color: "#888" }}>Entry</div>
-              <div style={{ fontSize: "16px" }}>{fmtPrice(pos.entryPrice)}</div>
-            </div>
-            <div>
-              <div style={{ fontSize: "12px", color: "#888" }}>Current Price</div>
-              <div style={{ fontSize: "16px" }}>{fmtPrice(trader.lastPrice)}</div>
-            </div>
-            <div>
-              <div style={{ fontSize: "12px", color: "#888" }}>Take Profit</div>
-              <div style={{ fontSize: "16px", color: "#00ff00" }}>{fmtPrice(pos.tpPrice)}</div>
-            </div>
-            <div>
-              <div style={{ fontSize: "12px", color: "#888" }}>Stop Loss</div>
-              <div style={{ fontSize: "16px", color: "#ff4444" }}>{fmtPrice(pos.slPrice)}</div>
-            </div>
-            <div>
-              <div style={{ fontSize: "12px", color: "#888" }}>Unrealized PnL</div>
-              <div style={{ 
-                fontSize: "16px", 
-                fontWeight: "bold", 
-                color: trader.unrealizedPnl >= 0 ? "#00ff00" : "#ff4444" 
-              }}>
-                ${fmt(trader.unrealizedPnl, 4)}
-              </div>
-            </div>
-          </div>
+      {/* Positions */}
+      {(long || short) && (
+        <div style={{ marginBottom: "20px" }}>
+          <PositionBlock pos={long} label="Long Position" labelColor="#00ff00" lastPrice={trader.lastPrice} />
+          <PositionBlock pos={short} label="Short Position" labelColor="#ff4444" lastPrice={trader.lastPrice} />
         </div>
       )}
 
@@ -335,7 +347,8 @@ function TraderCard({ trader, onDestroy, rank, maxTraders }) {
                 <tr>
                   <th style={tableHeaderStyle}>#</th>
                   <th style={tableHeaderStyle}>Direction</th>
-                  <th style={tableHeaderStyle}>Reason</th>
+                  <th style={tableHeaderStyle}>Opened</th>
+                  <th style={tableHeaderStyle}>Closed</th>
                   <th style={tableHeaderStyle}>Entry</th>
                   <th style={tableHeaderStyle}>Exit</th>
                   <th style={tableHeaderStyle}>Amount</th>
@@ -358,10 +371,19 @@ function TraderCard({ trader, onDestroy, rank, maxTraders }) {
                     </td>
                     <td style={{
                       ...tableCellStyle,
+                      fontSize: "11px",
+                      color: trade.openReason === "hedge" ? "#ff9900" : "#00aaff"
+                    }}>
+                      {(trade.openReason || "initial").toUpperCase()}
+                    </td>
+                    <td style={{
+                      ...tableCellStyle,
                       color: trade.reason === "take-profit" ? "#00ff00" : 
                             trade.reason === "stop-loss" ? "#ff4444" : "#888"
                     }}>
-                      {trade.reason}
+                      {trade.reason === "take-profit" ? "TP" : 
+                       trade.reason === "stop-loss" ? "SL" : 
+                       trade.reason}
                     </td>
                     <td style={tableCellStyle}>{fmtPrice(trade.entry)}</td>
                     <td style={tableCellStyle}>{fmtPrice(trade.exit)}</td>
@@ -391,30 +413,31 @@ function TraderCard({ trader, onDestroy, rank, maxTraders }) {
         )}
       </div>
 
-      {/* Direction Change Pattern */}
+      {/* Trade Flow */}
       {history.length > 1 && (
         <div style={{ padding: "15px", backgroundColor: "#1a1a1a", borderRadius: "4px" }}>
-          <h4 style={{ margin: "0 0 10px 0", color: "#ff9900" }}>Direction Changes (Last 10 trades)</h4>
-          <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+          <h4 style={{ margin: "0 0 10px 0", color: "#ff9900" }}>Trade Flow (Last 10)</h4>
+          <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
             {history.slice(-10).map((trade, idx) => (
               <div key={idx} style={{
-                padding: "8px 12px",
+                padding: "6px 10px",
                 borderRadius: "4px",
                 backgroundColor: trade.direction === "LONG" ? "#003300" : "#330000",
                 border: `2px solid ${trade.direction === "LONG" ? "#00ff00" : "#ff4444"}`,
                 textAlign: "center",
-                minWidth: "80px"
+                minWidth: "70px"
               }}>
-                <div style={{ fontSize: "12px", color: "#888" }}>#{trade.tradeNumber}</div>
+                <div style={{ fontSize: "10px", color: "#888" }}>#{trade.tradeNumber}</div>
                 <div style={{ 
                   fontWeight: "bold", 
+                  fontSize: "12px",
                   color: trade.direction === "LONG" ? "#00ff00" : "#ff4444" 
                 }}>
                   {trade.direction}
                 </div>
                 <div style={{ 
                   fontSize: "10px", 
-                  color: trade.reason === "take-profit" ? "#00ff00" : "#ff4444" 
+                  color: trade.reason === "take-profit" ? "#00ff00" : "#ff4444"
                 }}>
                   {trade.reason === "take-profit" ? "TP" : "SL"}
                 </div>
