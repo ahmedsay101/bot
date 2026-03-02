@@ -20,7 +20,7 @@ const config = {
   ladderInitialLevels: 10,
   ladderRefillThreshold: 1,
   maxDoubles: 5,
-  startingBalanceUSDT: 1000,
+  startingBalanceUSDT: 100,
   scannerIntervalMs: 1 * 60 * 1000,
   minChange: 1,
   maxChange: 8,
