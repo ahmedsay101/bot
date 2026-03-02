@@ -182,7 +182,6 @@ function PositionBlock({ pos, label, labelColor, lastPrice }) {
   // Progress: 0% = entry, 100% = TP, negative = moving toward SL
   const entry = Number(pos.entryPrice);
   const tp = Number(pos.tpPrice);
-  const sl = Number(pos.slPrice);
   const price = Number(lastPrice);
   const totalRange = Math.abs(tp - entry);
   const priceMove = pos.direction === "LONG"

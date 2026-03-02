@@ -198,7 +198,20 @@ class PerpetualTrader {
     });
 
     const fillPrice = Number(result.price) || price;
-    const { tpPrice, slPrice } = this._calcTpSlPrices(fillPrice, direction);
+
+    // Hedge TP/SL alignment: hedge TP = counter's SL, hedge SL = counter's TP
+    let tpPrice, slPrice;
+    if (openReason === "hedge") {
+      const counter = direction === "LONG" ? this.shortPosition : this.longPosition;
+      if (counter) {
+        tpPrice = counter.slPrice;
+        slPrice = counter.tpPrice;
+      } else {
+        ({ tpPrice, slPrice } = this._calcTpSlPrices(fillPrice, direction));
+      }
+    } else {
+      ({ tpPrice, slPrice } = this._calcTpSlPrices(fillPrice, direction));
+    }
 
     const entryFee = fillPrice * qty * this._getFeeRate();
     this.feesPaid += entryFee;
@@ -406,6 +419,14 @@ class PerpetualTrader {
       await this._openPosition(direction, "take-profit");
     } else {
       this._recordLoss();
+      // If no positions remain after SL, reopen an initial position
+      if (!this.longPosition && !this.shortPosition && this.active) {
+        log(
+          `TRADER ${this.symbol}`,
+          `All positions closed — reopening initial ${this.startDirection}`
+        );
+        await this._openPosition(this.startDirection, "initial");
+      }
     }
     this._updateStore();
   }

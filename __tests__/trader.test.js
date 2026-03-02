@@ -192,17 +192,18 @@ describe("PerpetualTrader (Independent Dual-Position)", () => {
     expect(spy).toHaveBeenCalledTimes(2);
   });
 
-  test("hedge LONG has correct TP and SL", async () => {
+  test("hedge LONG has correct TP and SL (aligned with counter)", async () => {
     const { trader, api } = makeTrader({ price: 100 });
     await trader.start();
 
+    // SHORT@100: TP=99, SL=102
     api.setPrice(101);
     await trader._checkPosition(101);
 
     const long = trader.longPosition;
-    // LONG at 101: TP = 102.01, SL = 98.98
-    expect(long.tpPrice).toBeCloseTo(102.01, 4);
-    expect(long.slPrice).toBeCloseTo(98.98, 4);
+    // Hedge LONG TP = SHORT SL = 102, LONG SL = SHORT TP = 99
+    expect(long.tpPrice).toBeCloseTo(102, 4);
+    expect(long.slPrice).toBeCloseTo(99, 4);
   });
 
   test("hedge does not trigger before TP% threshold", async () => {
@@ -246,16 +247,16 @@ describe("PerpetualTrader (Independent Dual-Position)", () => {
     expect(trader.longPosition).not.toBeNull();
     const shortEntry = trader.shortPosition.entryPrice;
 
-    // LONG TP at 102.01 → price 103
-    api.setPrice(103);
-    await trader._checkPosition(103);
+    // Hedge LONG TP = SHORT SL = 102. Price hits 102 → LONG TP fires first.
+    api.setPrice(102);
+    await trader._checkPosition(102);
 
     // SHORT untouched
     expect(trader.shortPosition).not.toBeNull();
     expect(trader.shortPosition.entryPrice).toBe(shortEntry);
-    // LONG reopened (new entry at 103)
+    // LONG reopened (new entry at 102)
     expect(trader.longPosition).not.toBeNull();
-    expect(trader.longPosition.entryPrice).toBe(103);
+    expect(trader.longPosition.entryPrice).toBe(102);
     expect(trader.longPosition.openReason).toBe("take-profit");
 
     expect(trader.wins).toBe(1);
@@ -299,20 +300,24 @@ describe("PerpetualTrader (Independent Dual-Position)", () => {
     await trader._checkPosition(101);
     const longEntry = trader.longPosition.entryPrice;
 
-    // SHORT SL at 102
+    // At 102: aligned → LONG TP fires first, then SHORT SL on next tick
+    api.setPrice(102);
+    await trader._checkPosition(102);
+    // LONG TP fired (reopened)
+    expect(trader.wins).toBe(1);
+
+    // SHORT SL at 102 fires
     api.setPrice(102);
     await trader._checkPosition(102);
 
     expect(trader.shortPosition).toBeNull();
     expect(trader.longPosition).not.toBeNull();
-    expect(trader.longPosition.entryPrice).toBe(longEntry);
 
     expect(trader.losses).toBe(1);
-    expect(trader.wins).toBe(0);
-    expect(trader.totalTrades).toBe(1);
+    expect(trader.totalTrades).toBe(2);
   });
 
-  test("LONG SL after being left alone → close LONG (loss)", async () => {
+  test("LONG SL after being left alone → close LONG (loss), reopen initial", async () => {
     const { trader, api } = makeTrader({ price: 100 });
     await trader.start();
 
@@ -322,25 +327,35 @@ describe("PerpetualTrader (Independent Dual-Position)", () => {
     expect(trader.longPosition).not.toBeNull();
 
     // SHORT SL at 102 → close SHORT, only LONG remains
+    // But LONG TP is also at 102 (aligned), TP fires first
+    api.setPrice(102);
+    await trader._checkPosition(102);
+    // LONG TP fired (reopened LONG), SHORT still there
+    expect(trader.longPosition).not.toBeNull();
+    expect(trader.wins).toBe(1);
+
+    // Now SHORT SL at 102
     api.setPrice(102);
     await trader._checkPosition(102);
     expect(trader.shortPosition).toBeNull();
-    expect(trader.longPosition).not.toBeNull();
     expect(trader.losses).toBe(1);
 
-    // LONG at 101 loses by 1% at ~99.99 → hedge trigger opens SHORT
-    api.setPrice(99.98);
-    await trader._checkPosition(99.98);
+    // LONG at 102 loses by 1% → hedge trigger opens SHORT
+    // (use 100.97 to avoid floating-point edge at exact 1% boundary)
+    api.setPrice(100.97);
+    await trader._checkPosition(100.97);
     expect(trader.shortPosition).not.toBeNull();
 
-    // LONG SL at 98.98
-    api.setPrice(98.98);
-    await trader._checkPosition(98.98);
+    // LONG SL = SHORT TP = hedge aligned
+    const longSL = trader.longPosition.slPrice;
+    api.setPrice(longSL);
+    await trader._checkPosition(longSL);
+    // SHORT TP fires first (at same price as LONG SL)
+    expect(trader.wins).toBe(2);
 
-    // SHORT TP (at ~98.98) fires before LONG SL (at 98.98)
-    // so TP fires first as a win, then LONG SL on next tick
-    await trader._checkPosition(98.98);
-
+    // Then LONG SL fires
+    api.setPrice(longSL);
+    await trader._checkPosition(longSL);
     expect(trader.longPosition).toBeNull();
     expect(trader.losses).toBe(2);
   });
@@ -353,14 +368,17 @@ describe("PerpetualTrader (Independent Dual-Position)", () => {
     api.setPrice(101);
     await trader._checkPosition(101);
 
+    // At 102: LONG TP fires first (aligned)
+    api.setPrice(102);
+    await trader._checkPosition(102);
+
     // SHORT SL at 102
     api.setPrice(102);
     await trader._checkPosition(102);
 
-    const trade = trader.tradeHistory[0];
-    expect(trade.reason).toBe("stop-loss");
-    expect(trade.grossPnl).toBeLessThan(0);
-    expect(trader.realizedPnl).toBeLessThan(0);
+    const slTrade = trader.tradeHistory.find(t => t.reason === "stop-loss");
+    expect(slTrade).toBeDefined();
+    expect(slTrade.grossPnl).toBeLessThan(0);
   });
 
   // ── Full Cycle ────────────────────────────────────────────────
@@ -382,9 +400,16 @@ describe("PerpetualTrader (Independent Dual-Position)", () => {
     await trader._checkPosition(hedgeTrigger + 0.01);
     expect(trader.longPosition).not.toBeNull();
 
-    // 3. SHORT SL hits
-    api.setPrice(trader.shortPosition.slPrice);
-    await trader._checkPosition(trader.shortPosition.slPrice);
+    // 3. SHORT SL hits (LONG TP = SHORT SL, so both aligned → TP fires first)
+    const sl = trader.shortPosition.slPrice;
+    api.setPrice(sl);
+    await trader._checkPosition(sl);
+    // LONG TP fires first (aligned)
+    expect(trader.wins).toBe(2);
+
+    // SHORT SL fires on next tick
+    api.setPrice(sl);
+    await trader._checkPosition(sl);
     expect(trader.shortPosition).toBeNull();
     expect(trader.longPosition).not.toBeNull();
     expect(trader.losses).toBe(1);
@@ -392,7 +417,7 @@ describe("PerpetualTrader (Independent Dual-Position)", () => {
     // 4. LONG continues — can TP
     api.setPrice(trader.longPosition.tpPrice + 0.01);
     await trader._checkPosition(trader.longPosition.tpPrice + 0.01);
-    expect(trader.wins).toBe(2);
+    expect(trader.wins).toBe(3);
     expect(trader.longPosition).not.toBeNull();
     expect(trader.longPosition.openReason).toBe("take-profit");
   });
@@ -404,21 +429,21 @@ describe("PerpetualTrader (Independent Dual-Position)", () => {
     // Hedge trigger
     api.setPrice(101);
     await trader._checkPosition(101);
-    // SHORT(100, TP=99, SL=102) + LONG(101, TP=102.01, SL=98.98)
+    // SHORT(100, TP=99, SL=102) + LONG(101, TP=102, SL=99) ← aligned
 
-    // SHORT SL at 102 fires first (before LONG TP at 102.01)
+    // At 102: LONG TP (102) fires before SHORT SL (102) — TPs first
     api.setPrice(102);
     await trader._checkPosition(102);
-    expect(trader.shortPosition).toBeNull();
-    expect(trader.longPosition).not.toBeNull();
-    expect(trader.losses).toBe(1);
-
-    // Then LONG TP at 102.01
-    api.setPrice(102.01);
-    await trader._checkPosition(102.01);
     expect(trader.longPosition).not.toBeNull();
     expect(trader.longPosition.openReason).toBe("take-profit");
     expect(trader.wins).toBe(1);
+    expect(trader.shortPosition).not.toBeNull();
+
+    // Next tick at 102: SHORT SL fires
+    api.setPrice(102);
+    await trader._checkPosition(102);
+    expect(trader.shortPosition).toBeNull();
+    expect(trader.losses).toBe(1);
   });
 
   // ── After SL Solo, Hedge Trigger Still Works ──────────────────
@@ -431,15 +456,20 @@ describe("PerpetualTrader (Independent Dual-Position)", () => {
     api.setPrice(101);
     await trader._checkPosition(101);
 
-    // SHORT SL at 102
+    // At 102: LONG TP fires (aligned), then SHORT SL on next tick
+    api.setPrice(102);
+    await trader._checkPosition(102);
+    expect(trader.wins).toBe(1);
+
     api.setPrice(102);
     await trader._checkPosition(102);
     expect(trader.shortPosition).toBeNull();
     expect(trader.longPosition).not.toBeNull();
 
-    // LONG at 101, losing by 1% at 99.99 → hedge trigger → SHORT opens
-    api.setPrice(99.99);
-    await trader._checkPosition(99.99);
+    // LONG at 102, losing by 1% → hedge trigger → SHORT opens
+    // (use 100.97 to avoid floating-point edge at exact 1% boundary)
+    api.setPrice(100.97);
+    await trader._checkPosition(100.97);
     expect(trader.shortPosition).not.toBeNull();
     expect(trader.shortPosition.openReason).toBe("hedge");
   });
@@ -639,10 +669,17 @@ describe("PerpetualTrader (Independent Dual-Position)", () => {
     const { trader, api } = makeTrader({ price: 100 });
     await trader.start();
 
-    // Trigger hedge, then SL
+    // Trigger hedge
     api.setPrice(101);
     await trader._checkPosition(101);
-    api.setPrice(102); // SHORT SL
+
+    // At 102: LONG TP fires first (aligned TP=SL=102)
+    api.setPrice(102);
+    await trader._checkPosition(102);
+    expect(trader.currentStreak).toBe(1); // win from LONG TP
+
+    // Next tick: SHORT SL fires
+    api.setPrice(102);
     await trader._checkPosition(102);
     expect(trader.currentStreak).toBe(-1);
     expect(trader.longestLossStreak).toBe(1);
@@ -652,14 +689,21 @@ describe("PerpetualTrader (Independent Dual-Position)", () => {
     const { trader, api } = makeTrader({ price: 100 });
     await trader.start();
 
-    // Loss: trigger hedge, then SL
+    // Trigger hedge
     api.setPrice(101);
     await trader._checkPosition(101);
-    api.setPrice(102); // SHORT SL
-    await trader._checkPosition(102);
-    expect(trader.currentStreak).toBe(-1);
 
-    // Win: LONG TP
+    // LONG TP fires first (aligned)
+    api.setPrice(102);
+    await trader._checkPosition(102);
+    expect(trader.currentStreak).toBe(1); // win
+
+    // SHORT SL fires
+    api.setPrice(102);
+    await trader._checkPosition(102);
+    expect(trader.currentStreak).toBe(-1); // loss
+
+    // Win: reopened LONG TP
     api.setPrice(trader.longPosition.tpPrice + 0.01);
     await trader._checkPosition(trader.longPosition.tpPrice + 0.01);
     expect(trader.currentStreak).toBe(1);
@@ -682,14 +726,16 @@ describe("PerpetualTrader (Independent Dual-Position)", () => {
     await trader._checkPosition(trigger);
     expect(store.recordTrade).toHaveBeenCalledTimes(1); // unchanged
 
-    // SHORT SL — at SL price, hedge fires first (hedge check is before SL)
-    // so we need two calls: first opens hedge, second fires SL
-    api.setPrice(trader.shortPosition.slPrice);
-    await trader._checkPosition(trader.shortPosition.slPrice);
-    // This tick might be the SHORT SL or another hedge trigger
-    // Call again to ensure SL fires
-    await trader._checkPosition(trader.shortPosition ? trader.shortPosition.slPrice : api.price);
-    expect(store.recordTrade).toHaveBeenCalledTimes(2);
+    // At SHORT SL = LONG TP (aligned): LONG TP fires first
+    const slPrice = trader.shortPosition.slPrice;
+    api.setPrice(slPrice);
+    await trader._checkPosition(slPrice);
+    expect(store.recordTrade).toHaveBeenCalledTimes(2); // LONG TP
+
+    // Next tick: SHORT SL fires
+    api.setPrice(slPrice);
+    await trader._checkPosition(slPrice);
+    expect(store.recordTrade).toHaveBeenCalledTimes(3); // SHORT SL
   });
 
   test("store.upsertTrader includes longPosition/shortPosition", async () => {
@@ -758,14 +804,21 @@ describe("PerpetualTrader (Independent Dual-Position)", () => {
     await trader._checkPosition(101);
     expect(trader.longPosition.tradeNumber).toBe(2);
 
-    // SHORT SL → trade #1 closed
+    // At 102: LONG TP fires (aligned), reopens LONG #3
     api.setPrice(102);
     await trader._checkPosition(102);
-
-    // LONG TP → trade #2 closed, new LONG #3
-    api.setPrice(trader.longPosition.tpPrice + 0.01);
-    await trader._checkPosition(trader.longPosition.tpPrice + 0.01);
     expect(trader.longPosition.tradeNumber).toBe(3);
+
+    // SHORT SL fires, then SL-reopen SHORT #4
+    api.setPrice(102);
+    await trader._checkPosition(102);
+    // SHORT SL closed, no positions remain → reopen initial SHORT
+    expect(trader.shortPosition).toBeNull();
+
+    // Reopen happens: initial SHORT
+    // Actually both positions gone → auto-reopen fires in _handleExitFill
+    // Let's check the long is still there from TP reopen
+    expect(trader.longPosition).not.toBeNull();
   });
 
   // ── Max 1 per direction constraint ────────────────────────────
@@ -801,14 +854,19 @@ describe("PerpetualTrader (Independent Dual-Position)", () => {
     await trader._checkPosition(101);
     expect(trader.longPosition).not.toBeNull();
 
-    // At 102: SHORT SL fires (before LONG TP at 102.01)
+    // At 102: LONG TP fires first (aligned with SHORT SL)
+    api.setPrice(102);
+    await trader._checkPosition(102);
+    expect(trader.wins).toBe(1);
+
+    // Next tick at 102: SHORT SL fires
     api.setPrice(102);
     await trader._checkPosition(102);
 
-    const trade = trader.tradeHistory[0];
-    expect(trade.reason).toBe("stop-loss");
-    expect(trade.exit).toBeCloseTo(102, 4); // SL price, not market
-    expect(trade.direction).toBe("SHORT");
+    const slTrade = trader.tradeHistory.find(t => t.reason === "stop-loss");
+    expect(slTrade).toBeDefined();
+    expect(slTrade.exit).toBeCloseTo(102, 4); // SL price, not market
+    expect(slTrade.direction).toBe("SHORT");
   });
 
   // ── No hedge-close reason exists ──────────────────────────────
@@ -860,14 +918,13 @@ describe("PerpetualTrader (Independent Dual-Position)", () => {
      *
      * Step 1: Price → 99 (1% down). No TP hit (needs 98). SHORT stays.
      * Step 2: Price → 102 (2% above entry). LONG hedge opens at 102.
-     *         LONG@102  TP=104.04
-     * Step 3: Price → 104. SHORT SL hit (104 ≥ 104). SHORT closed (loss).
-     * Step 4: Price → 104.05. LONG TP hit (104.05 ≥ 104.04). LONG closed
-     *         (win), new LONG opens at 104.05.
+     *         LONG TP = SHORT SL = 104, LONG SL = SHORT TP = 98 (aligned)
+     * Step 3: Price → 104. LONG TP fires (104 ≥ 104). LONG closes (win),
+     *         new LONG opens. Then SHORT SL fires on next tick.
      *
      * End state: 1 LONG position.  Trades: 1 win + 1 loss.
      */
-    test("scenario 1: short → 1% dip → 5% rally → hedge → SL + TP", async () => {
+    test("scenario 1: short → 1% dip → 5% rally → hedge → TP + SL", async () => {
       const { trader, api } = makeTrader({ price: 100 });
       await trader.start();
 
@@ -890,24 +947,23 @@ describe("PerpetualTrader (Independent Dual-Position)", () => {
       expect(trader.longPosition.direction).toBe("LONG");
       expect(trader.longPosition.openReason).toBe("hedge");
       expect(trader.longPosition.entryPrice).toBe(102);
-      expect(trader.longPosition.tpPrice).toBeCloseTo(104.04, 4); // 2% above 102
+      // Aligned: LONG TP = SHORT SL = 104, LONG SL = SHORT TP = 98
+      expect(trader.longPosition.tpPrice).toBeCloseTo(104, 4);
+      expect(trader.longPosition.slPrice).toBeCloseTo(98, 4);
       expect(trader.shortPosition).not.toBeNull(); // SHORT still open
 
-      // 3. Price rises to 104 → SHORT SL fires (104 ≥ 104)
+      // 3. Price rises to 104 → LONG TP fires (104 ≥ 104)
+      api.setPrice(104);
+      await trader._checkPosition(104);
+      expect(trader.longPosition).not.toBeNull();
+      expect(trader.longPosition.openReason).toBe("take-profit"); // reopened
+      expect(trader.wins).toBe(1);
+
+      // 4. SHORT SL fires at 104 on next tick
       api.setPrice(104);
       await trader._checkPosition(104);
       expect(trader.shortPosition).toBeNull(); // SHORT closed (SL)
-      expect(trader.longPosition).not.toBeNull();
       expect(trader.losses).toBe(1);
-
-      // 4. Price rises to 104.05 → LONG TP fires (104.05 ≥ 104.04)
-      api.setPrice(104.05);
-      await trader._checkPosition(104.05);
-      expect(trader.longPosition).not.toBeNull();
-      expect(trader.longPosition.openReason).toBe("take-profit"); // reopened
-      expect(trader.longPosition.entryPrice).toBe(104.05);
-      expect(trader.shortPosition).toBeNull();
-      expect(trader.wins).toBe(1);
 
       // Verify trade history
       expect(trader.totalTrades).toBe(2);
@@ -920,34 +976,35 @@ describe("PerpetualTrader (Independent Dual-Position)", () => {
     });
 
     /*
-     * Scenario 2: Continuing from scenario 1's end state (LONG@104.05),
+     * Scenario 2: LONG at 104 (end state of scenario 1's LONG reopen),
      *             price drops 5% straight.
      *
-     * LONG@104.05  TP≈106.13  SL≈99.888
+     * LONG@104  TP≈106.08  SL≈99.84
      *
-     * Step 1: Price → ~101.97 (2% below 104.05). SHORT hedge opens.
-     *         SHORT@101.97  TP≈99.93  SL≈106.05
-     * Step 2: Price → 99.93. SHORT TP fires → close, reopen SHORT.
-     *         (LONG SL at 99.888 not yet hit)
-     * Step 3: Price → 99.88. LONG SL fires → close LONG (loss).
+     * Step 1: Price → ~101.92 (2% below 104). SHORT hedge opens.
+     *         SHORT TP = LONG SL = 99.84 (aligned)
+     *         SHORT SL = LONG TP = 106.08 (aligned)
+     * Step 2: Price → 99.84. SHORT TP fires (price ≤ 99.84) → close, reopen.
+     *         Same tick: LONG SL = 99.84 → fires on next tick.
+     * Step 3: LONG SL fires → close LONG (loss).
      *
      * End state: 1 SHORT position.  Trades: 1 win + 1 loss.
      */
     test("scenario 2: long → 5% drop → hedge → SHORT TP + LONG SL", async () => {
-      // Start with LONG at 104.05 (end state of scenario 1)
-      const { trader, api } = makeTrader({ price: 104.05 });
+      const { trader, api } = makeTrader({ price: 104 });
       trader.startDirection = "LONG";
       await trader.start();
 
       const long = trader.longPosition;
-      expect(long.entryPrice).toBe(104.05);
-      // TP = 104.05 * 1.02 = 106.131
-      expect(long.tpPrice).toBeCloseTo(106.131, 2);
-      // SL = 104.05 * 0.96 = 99.888
-      expect(long.slPrice).toBeCloseTo(99.888, 2);
+      expect(long.entryPrice).toBe(104);
+      // TP = 104 * 1.02 = 106.08
+      expect(long.tpPrice).toBeCloseTo(106.08, 2);
+      // SL = 104 * 0.96 = 99.84
+      expect(long.slPrice).toBeCloseTo(99.84, 2);
 
       // 1. Price drops 2% → SHORT hedge opens
-      const hedgePrice = 104.05 * 0.98; // = 101.969
+      // (subtract 0.01 to avoid floating-point edge at exact 2% boundary)
+      const hedgePrice = 104 * 0.98 - 0.01; // ≈ 101.91
       api.setPrice(hedgePrice);
       await trader._checkPosition(hedgePrice);
       expect(trader.shortPosition).not.toBeNull();
@@ -955,21 +1012,24 @@ describe("PerpetualTrader (Independent Dual-Position)", () => {
       expect(trader.shortPosition.openReason).toBe("hedge");
       expect(trader.longPosition).not.toBeNull(); // LONG still open
 
+      // Aligned: SHORT TP = LONG SL, SHORT SL = LONG TP
+      expect(trader.shortPosition.tpPrice).toBeCloseTo(long.slPrice, 6);
+      expect(trader.shortPosition.slPrice).toBeCloseTo(long.tpPrice, 6);
+
       const shortTP = trader.shortPosition.tpPrice;
       const longSL = trader.longPosition.slPrice;
-
-      // SHORT TP should fire before LONG SL (short TP > long SL)
-      expect(shortTP).toBeGreaterThan(longSL);
+      // They are exactly equal (aligned)
+      expect(shortTP).toBeCloseTo(longSL, 6);
 
       // 2. Price drops to SHORT TP → SHORT closes (TP), reopens SHORT
-      api.setPrice(shortTP - 0.01);
-      await trader._checkPosition(shortTP - 0.01);
+      api.setPrice(shortTP);
+      await trader._checkPosition(shortTP);
       expect(trader.shortPosition).not.toBeNull();
       expect(trader.shortPosition.openReason).toBe("take-profit"); // reopened
       expect(trader.wins).toBe(1);
       expect(trader.longPosition).not.toBeNull(); // LONG still open
 
-      // 3. Price drops to LONG SL → LONG closes (SL)
+      // 3. LONG SL fires on next tick (same price)
       api.setPrice(longSL);
       await trader._checkPosition(longSL);
       expect(trader.longPosition).toBeNull(); // LONG gone
