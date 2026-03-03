@@ -108,7 +108,7 @@ describe("PerpetualTrader", () => {
 
   // ── Take Profit → same direction ─────────────────────────────
 
-  test("TP re-opens same direction (SHORT → SHORT)", async () => {
+  test("TP opens opposite direction (SHORT → LONG)", async () => {
     const { trader, api } = makeTrader({ price: 100 });
     await trader.start();
 
@@ -119,11 +119,11 @@ describe("PerpetualTrader", () => {
     expect(trader.wins).toBe(1);
     expect(trader.totalTrades).toBe(1);
     expect(trader.position).not.toBeNull();
-    expect(trader.position.direction).toBe("SHORT");
+    expect(trader.position.direction).toBe("LONG");
     expect(trader.position.openReason).toBe("take-profit");
   });
 
-  test("TP on LONG re-opens LONG", async () => {
+  test("TP on LONG opens SHORT", async () => {
     const { trader, api } = makeTrader({ price: 100 });
     trader.startDirection = "LONG";
     await trader.start();
@@ -133,7 +133,7 @@ describe("PerpetualTrader", () => {
     await trader._checkPosition(101.5);
 
     expect(trader.wins).toBe(1);
-    expect(trader.position.direction).toBe("LONG");
+    expect(trader.position.direction).toBe("SHORT");
     expect(trader.position.openReason).toBe("take-profit");
   });
 
@@ -149,26 +149,27 @@ describe("PerpetualTrader", () => {
     expect(trade.reason).toBe("take-profit");
   });
 
-  test("multiple TPs continue same direction", async () => {
+  test("multiple TPs alternate directions", async () => {
     const { trader, api } = makeTrader({ price: 100 });
     await trader.start();
-
-    // First TP
-    api.setPrice(98.5);
-    await trader._checkPosition(98.5);
     expect(trader.position.direction).toBe("SHORT");
 
-    // Second TP
+    // First TP: SHORT → LONG
+    api.setPrice(98.5);
+    await trader._checkPosition(98.5);
+    expect(trader.position.direction).toBe("LONG");
+
+    // Second TP: LONG → SHORT
     const tp2 = trader.position.tpPrice;
-    api.setPrice(tp2 - 0.01);
-    await trader._checkPosition(tp2 - 0.01);
+    api.setPrice(tp2 + 0.01);
+    await trader._checkPosition(tp2 + 0.01);
     expect(trader.position.direction).toBe("SHORT");
     expect(trader.wins).toBe(2);
   });
 
   // ── Stop Loss → opposite direction ────────────────────────────
 
-  test("SL opens opposite direction (SHORT → LONG)", async () => {
+  test("SL re-opens same direction (SHORT → SHORT)", async () => {
     const { trader, api } = makeTrader({ price: 100 });
     await trader.start();
 
@@ -179,11 +180,11 @@ describe("PerpetualTrader", () => {
     expect(trader.losses).toBe(1);
     expect(trader.totalTrades).toBe(1);
     expect(trader.position).not.toBeNull();
-    expect(trader.position.direction).toBe("LONG");
+    expect(trader.position.direction).toBe("SHORT");
     expect(trader.position.openReason).toBe("stop-loss");
   });
 
-  test("SL on LONG opens SHORT", async () => {
+  test("SL on LONG re-opens LONG", async () => {
     const { trader, api } = makeTrader({ price: 100 });
     trader.startDirection = "LONG";
     await trader.start();
@@ -193,7 +194,7 @@ describe("PerpetualTrader", () => {
     await trader._checkPosition(97.5);
 
     expect(trader.losses).toBe(1);
-    expect(trader.position.direction).toBe("SHORT");
+    expect(trader.position.direction).toBe("LONG");
     expect(trader.position.openReason).toBe("stop-loss");
   });
 
@@ -211,29 +212,29 @@ describe("PerpetualTrader", () => {
 
   // ── Full cycle: TP then SL then TP ───────────────────────────
 
-  test("full cycle: SHORT TP → SHORT → SL → LONG → TP → LONG", async () => {
+  test("full cycle: SHORT TP → LONG → SL → LONG → TP → SHORT", async () => {
     const { trader, api } = makeTrader({ price: 100 });
     await trader.start();
     expect(trader.position.direction).toBe("SHORT");
 
-    // 1. SHORT TP (price drops)
+    // 1. SHORT TP (price drops) → flips to LONG
     api.setPrice(98.5);
     await trader._checkPosition(98.5);
-    expect(trader.position.direction).toBe("SHORT"); // re-opens same
+    expect(trader.position.direction).toBe("LONG"); // flips to opposite
     expect(trader.wins).toBe(1);
 
-    // 2. SHORT SL (price rises)
+    // 2. LONG SL (price drops) → re-opens LONG
     const sl = trader.position.slPrice;
-    api.setPrice(sl + 0.01);
-    await trader._checkPosition(sl + 0.01);
-    expect(trader.position.direction).toBe("LONG"); // flips to opposite
+    api.setPrice(sl - 0.01);
+    await trader._checkPosition(sl - 0.01);
+    expect(trader.position.direction).toBe("LONG"); // re-opens same
     expect(trader.losses).toBe(1);
 
-    // 3. LONG TP (price rises more)
+    // 3. LONG TP (price rises) → flips to SHORT
     const longTp = trader.position.tpPrice;
     api.setPrice(longTp + 0.01);
     await trader._checkPosition(longTp + 0.01);
-    expect(trader.position.direction).toBe("LONG"); // re-opens same
+    expect(trader.position.direction).toBe("SHORT"); // flips to opposite
     expect(trader.wins).toBe(2);
     expect(trader.totalTrades).toBe(3);
   });
@@ -366,14 +367,18 @@ describe("PerpetualTrader", () => {
   test("win streak tracks consecutive TPs", async () => {
     const { trader, api } = makeTrader({ price: 100 });
     await trader.start();
+    // SHORT@100, TP=99
 
+    // TP 1: SHORT → LONG
     api.setPrice(98.5);
     await trader._checkPosition(98.5);
     expect(trader.currentStreak).toBe(1);
+    expect(trader.position.direction).toBe("LONG");
 
+    // TP 2: LONG → SHORT (LONG TP is above entry)
     const tp2 = trader.position.tpPrice;
-    api.setPrice(tp2 - 0.01);
-    await trader._checkPosition(tp2 - 0.01);
+    api.setPrice(tp2 + 0.01);
+    await trader._checkPosition(tp2 + 0.01);
     expect(trader.currentStreak).toBe(2);
     expect(trader.longestWinStreak).toBe(2);
   });
@@ -382,15 +387,16 @@ describe("PerpetualTrader", () => {
     const { trader, api } = makeTrader({ price: 100 });
     await trader.start();
 
-    // SL 1: SHORT → LONG
+    // SL 1: SHORT stays SHORT (SL is above entry)
     api.setPrice(102.5);
     await trader._checkPosition(102.5);
     expect(trader.currentStreak).toBe(-1);
+    expect(trader.position.direction).toBe("SHORT");
 
-    // SL 2: LONG → SHORT
+    // SL 2: SHORT stays SHORT again
     const sl2 = trader.position.slPrice;
-    api.setPrice(sl2 - 0.01);
-    await trader._checkPosition(sl2 - 0.01);
+    api.setPrice(sl2 + 0.01);
+    await trader._checkPosition(sl2 + 0.01);
     expect(trader.currentStreak).toBe(-2);
     expect(trader.longestLossStreak).toBe(2);
   });
@@ -398,16 +404,18 @@ describe("PerpetualTrader", () => {
   test("streak resets on direction change (win after loss)", async () => {
     const { trader, api } = makeTrader({ price: 100 });
     await trader.start();
+    // SHORT@100
 
-    // SL
+    // SL: SHORT stays SHORT
     api.setPrice(102.5);
     await trader._checkPosition(102.5);
     expect(trader.currentStreak).toBe(-1);
+    expect(trader.position.direction).toBe("SHORT");
 
-    // TP
+    // TP: SHORT → LONG (SHORT TP is below entry)
     const tp = trader.position.tpPrice;
-    api.setPrice(tp + 0.01);
-    await trader._checkPosition(tp + 0.01);
+    api.setPrice(tp - 0.01);
+    await trader._checkPosition(tp - 0.01);
     expect(trader.currentStreak).toBe(1);
   });
 
@@ -417,13 +425,15 @@ describe("PerpetualTrader", () => {
     const { trader, api } = makeTrader({ price: 100 });
     await trader.start();
 
+    // TP: SHORT → LONG
     api.setPrice(98.5);
     await trader._checkPosition(98.5);
     expect(store.recordTrade).toHaveBeenCalledTimes(1);
 
+    // SL on LONG (SL is below entry for LONG)
     const sl = trader.position.slPrice;
-    api.setPrice(sl + 0.01);
-    await trader._checkPosition(sl + 0.01);
+    api.setPrice(sl - 0.01);
+    await trader._checkPosition(sl - 0.01);
     expect(store.recordTrade).toHaveBeenCalledTimes(2);
   });
 
@@ -506,31 +516,31 @@ describe("PerpetualTrader", () => {
       config.stopLossPercent = 4;
     });
 
-    test("SHORT at 100 → TP at 98 → re-open SHORT → SL at ~102 → open LONG", async () => {
+    test("SHORT at 100 → TP at 98 → LONG → SL → LONG → TP → SHORT", async () => {
       const { trader, api } = makeTrader({ price: 100 });
       await trader.start();
 
       expect(trader.position.tpPrice).toBeCloseTo(98, 4);
       expect(trader.position.slPrice).toBeCloseTo(104, 4);
 
-      // TP
+      // TP: SHORT → LONG
       api.setPrice(97.5);
       await trader._checkPosition(97.5);
-      expect(trader.position.direction).toBe("SHORT");
+      expect(trader.position.direction).toBe("LONG");
       expect(trader.wins).toBe(1);
 
-      // SL on re-opened SHORT
-      const sl = trader.position.slPrice; // 4% above 98
-      api.setPrice(sl + 0.01);
-      await trader._checkPosition(sl + 0.01);
+      // SL on LONG → re-open LONG
+      const sl = trader.position.slPrice;
+      api.setPrice(sl - 0.01);
+      await trader._checkPosition(sl - 0.01);
       expect(trader.position.direction).toBe("LONG");
       expect(trader.losses).toBe(1);
 
-      // LONG TP
+      // LONG TP → SHORT
       const longTp = trader.position.tpPrice;
       api.setPrice(longTp + 0.01);
       await trader._checkPosition(longTp + 0.01);
-      expect(trader.position.direction).toBe("LONG");
+      expect(trader.position.direction).toBe("SHORT");
       expect(trader.wins).toBe(2);
       expect(trader.totalTrades).toBe(3);
     });

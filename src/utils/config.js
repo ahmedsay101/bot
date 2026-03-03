@@ -16,7 +16,7 @@ const config = {
   levelCount: 2,
   levelSpacingPercent: 0.2,
   takeProfitPercent: 1,
-  stopLossPercent: 3,
+  stopLossPercent: 1,
   ladderInitialLevels: 10,
   ladderRefillThreshold: 1,
   maxDoubles: 5,

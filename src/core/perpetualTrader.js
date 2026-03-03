@@ -4,8 +4,8 @@
  * Behavior:
  * 1. Opens a SHORT market order on start.
  * 2. TP/SL are placed as exchange orders (limit for TP, stop-market for SL).
- * 3. On take-profit → open new position in the SAME direction.
- * 4. On stop-loss   → open new position in the OPPOSITE direction.
+ * 3. On take-profit → open new position in the OPPOSITE direction.
+ * 4. On stop-loss   → open new position in the SAME direction.
  * 5. Notional = (equityFraction * equity) * leverage.
  * 6. In test mode, TP/SL fills are simulated via _checkPosition().
  * 7. Destruction cancels all pending orders and closes open position.
@@ -389,13 +389,13 @@ class PerpetualTrader {
 
     if (reason === "take-profit") {
       this._recordWin();
-      // TP → reopen same direction
-      await this._openPosition(closedDirection, "take-profit");
+      // TP → open opposite direction
+      const nextDirection = closedDirection === "LONG" ? "SHORT" : "LONG";
+      await this._openPosition(nextDirection, "take-profit");
     } else {
       this._recordLoss();
-      // SL → open opposite direction
-      const nextDirection = closedDirection === "LONG" ? "SHORT" : "LONG";
-      await this._openPosition(nextDirection, "stop-loss");
+      // SL → reopen same direction
+      await this._openPosition(closedDirection, "stop-loss");
     }
     this._updateStore();
   }
