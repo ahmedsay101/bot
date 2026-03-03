@@ -33,6 +33,7 @@ const io = new Server(server, {
 });
 
 let topGainers = [];
+const tickerCache = new Map();   // symbol → { symbol, percent }
 let topGainersWs = null;
 let priceFeedAttached = false;
 
@@ -61,17 +62,14 @@ function fetchJson(url) {
 
 function updateTopGainersFromTickers(tickers) {
   const list = Array.isArray(tickers) ? tickers : [];
-  topGainers = list
-    .map((t) => {
-      const symbol = t?.symbol || t?.s;
-      const percent = t?.priceChangePercent ?? t?.P;
-      return {
-        symbol,
-        percent: Number(percent)
-      };
-    })
-    .filter((t) => typeof t.symbol === "string" && t.symbol.endsWith("USDT"))
-    .filter((t) => Number.isFinite(t.percent))
+  for (const t of list) {
+    const symbol = t?.symbol || t?.s;
+    const percent = Number(t?.priceChangePercent ?? t?.P);
+    if (typeof symbol !== "string" || !symbol.endsWith("USDT")) continue;
+    if (!Number.isFinite(percent)) continue;
+    tickerCache.set(symbol, { symbol, percent });
+  }
+  topGainers = Array.from(tickerCache.values())
     .sort((a, b) => b.percent - a.percent)
     .slice(0, 5);
 }

@@ -282,6 +282,7 @@ describe("PerpetualTrader", () => {
   });
 
   test("destroy cancels pending orders", async () => {
+    config.mode = "live";
     const { trader, api } = makeTrader({ price: 100 });
     const cancelSpy = jest.spyOn(api, "cancelOrder");
     await trader.start();
@@ -537,7 +538,8 @@ describe("PerpetualTrader", () => {
 
   // ── Exit order placement ──────────────────────────────────────
 
-  test("places TP limit order and SL stop order on position open", async () => {
+  test("places TP limit order and SL stop order on position open (live mode)", async () => {
+    config.mode = "live";
     const { trader, api } = makeTrader({ price: 100 });
     const limitSpy = jest.spyOn(api, "placeLimitOrder");
     const stopSpy = jest.spyOn(api, "placeStopLimitOrder");
@@ -560,17 +562,26 @@ describe("PerpetualTrader", () => {
     expect(trader.pendingExitsById.size).toBe(2);
   });
 
-  test("exit orders cleaned up after TP fill", async () => {
+  test("exit orders cleaned up after TP fill (live mode)", async () => {
+    config.mode = "live";
     const { trader, api } = makeTrader({ price: 100 });
     await trader.start();
     const cancelSpy = jest.spyOn(api, "cancelOrder");
+    expect(trader.pendingExitsById.size).toBe(2);
 
-    api.setPrice(98.5);
-    await trader._checkPosition(98.5);
+    // Simulate exchange filling the TP order
+    const tpOrderId = trader.position.tpOrderId;
+    await trader._onOrderFilled({
+      symbol: "TESTUSDT",
+      orderId: tpOrderId,
+      price: trader.position.tpPrice,
+      side: "BUY"
+    });
 
     // SL order should have been cancelled
     expect(cancelSpy).toHaveBeenCalled();
     // New exit orders placed for the re-opened position
     expect(trader.pendingExitsById.size).toBe(2);
+    expect(trader.wins).toBe(1);
   });
 });

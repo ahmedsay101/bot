@@ -266,6 +266,10 @@ class PerpetualTrader {
     const pos = this.position;
     if (!pos) return;
 
+    // In test mode, _checkPosition handles TP/SL simulation.
+    // Placing real orders would cause the API's _simulateFills to race.
+    if (config.mode === "test") return;
+
     const closeSide = pos.direction === "LONG" ? "SELL" : "BUY";
 
     // TP: limit order
