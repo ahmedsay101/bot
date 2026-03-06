@@ -23,13 +23,6 @@ const state = {
     api: "unknown",
     ws: "unknown",
     updatedAt: null
-  },
-  traderType: "VOLATILITY",
-  regime: {
-    regime: "UNKNOWN",
-    confidence: 0,
-    expansionScore: 0,
-    compressionScore: 0
   }
 };
 
@@ -91,20 +84,16 @@ function recordTrade({ pnl, fees }) {
   state.pnlToday += gross - fee;
 }
 
-function setTraderType(traderType) {
-  state.traderType = traderType;
+function setTraderType() {
+  // No-op — kept for backward compat
 }
 
-function setConsecutiveLosses(count) {
-  // Kept for backward compat – no-op now that regime is market-driven
-  // state.consecutiveLosses = count;
+function setConsecutiveLosses() {
+  // No-op — kept for backward compat
 }
 
-function setRegime(regime) {
-  state.regime = {
-    ...state.regime,
-    ...regime
-  };
+function setRegime() {
+  // No-op — kept for backward compat
 }
 
 function getStatus() {
@@ -115,9 +104,7 @@ function getStatus() {
     pnlToday: state.pnlToday,
     activeTraders: state.activeTraders.size,
     maxTraders: config.maxTraders,
-    marketStatus: state.marketStatus,
-    traderType: state.traderType,
-    regime: state.regime
+    marketStatus: state.marketStatus
   };
 }
 

@@ -32,105 +32,95 @@ function StatCard({ label, value, sub, color }) {
   );
 }
 
-/* ── TP Progress Bar ───────────────────────────────────────── */
-function TpProgress({ position, lastPrice }) {
-  if (!position) return null;
-  const entry = Number(position.entryPrice);
-  const tp = Number(position.tpPrice);
-  const price = Number(lastPrice);
-  if (!Number.isFinite(entry) || !Number.isFinite(tp) || !Number.isFinite(price)) return null;
+/* ── Destroy Progress Bar ──────────────────────────────────── */
+function DestroyProgress({ priceChangePercent, destroyPercent, destroyProgress }) {
+  const pct = Number(priceChangePercent) || 0;
+  const target = Number(destroyPercent) || 20;
+  const progress = Math.min(100, Math.max(0, Number(destroyProgress) || 0));
 
-  const isLong = position.direction === "LONG";
-  const totalRange = Math.abs(tp - entry);
-  const priceMove = isLong ? price - entry : entry - price;
-  const ratio = totalRange > 0 ? priceMove / totalRange : 0;
-  const pct = Math.max(-100, Math.min(200, Math.round(ratio * 100)));
-  const barPct = Math.max(0, Math.min(100, pct));
-
-  const barColor =
-    pct >= 75 ? "bg-emerald-400" : pct >= 25 ? "bg-sky-400" : pct >= 0 ? "bg-amber-400" : "bg-rose-500";
+  // Price dropping = good for shorts (green), rising = bad (red)
+  const barColor = pct <= 0 ? "bg-emerald-400" : "bg-rose-500";
+  const textColor = pct <= 0 ? "text-emerald-400" : "text-rose-400";
 
   return (
     <div>
       <div className="mb-1 flex items-center justify-between text-xs text-slate-400">
-        <span>{position.direction} → TP</span>
-        <span className={pct >= 0 ? "text-emerald-400" : "text-rose-400"}>{pct}%</span>
+        <span>Destroy Target ({fmt(target)}% drop)</span>
+        <span className={textColor}>{fmt(pct)}% change</span>
       </div>
-      <div className="relative h-2 w-full overflow-hidden rounded-full bg-slate-800">
-        <div className={`h-full rounded-full transition-all ${barColor}`} style={{ width: `${barPct}%` }} />
+      <div className="relative h-2.5 w-full overflow-hidden rounded-full bg-slate-800">
+        <div className={`h-full rounded-full transition-all ${barColor}`} style={{ width: `${progress}%` }} />
       </div>
       <div className="mt-1 flex justify-between text-[10px] text-slate-600">
-        <span>Entry {fmtPrice(entry)}</span>
-        <span>TP {fmtPrice(tp)}</span>
+        <span>Start</span>
+        <span>{fmt(progress)}% toward target</span>
       </div>
     </div>
   );
 }
 
-/* ── Position Info ─────────────────────────────────────────── */
-function PositionInfo({ position, lastPrice, leverage, notional }) {
-  if (!position) return (
-    <div className="rounded-xl bg-slate-800/50 p-4 text-center text-sm text-slate-500">
-      No open position
-    </div>
+/* ── Grid Levels Table ─────────────────────────────────────── */
+function GridLevels({ levels, lastPrice }) {
+  if (!levels || levels.length === 0) return (
+    <p className="py-3 text-center text-xs text-slate-600">No levels</p>
   );
 
-  const entry = Number(position.entryPrice);
-  const price = Number(lastPrice);
-  const qty = Number(position.quantity);
-  const dir = position.direction === "LONG" ? 1 : -1;
-  const unrealizedPnl = Number.isFinite(entry) && Number.isFinite(price) && Number.isFinite(qty)
-    ? (price - entry) * qty * dir : 0;
+  // Sort by price descending (highest first)
+  const sorted = [...levels].sort((a, b) => b.price - a.price);
 
   return (
-    <div className="space-y-3">
-      <div className="flex items-center gap-2">
-        <span className={`rounded-md px-2 py-0.5 text-xs font-bold uppercase ${
-          position.direction === "LONG"
-            ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30"
-            : "bg-rose-500/20 text-rose-400 border border-rose-500/30"
-        }`}>
-          {position.direction}
-        </span>
-        <span className="text-xs text-slate-500">#{position.tradeNumber}</span>
-        <span className="text-xs text-slate-500">·</span>
-        <span className="text-xs text-slate-500">{position.openReason}</span>
-      </div>
+    <div className="overflow-x-auto max-h-80 overflow-y-auto">
+      <table className="w-full text-xs">
+        <thead className="sticky top-0 bg-slate-900/95">
+          <tr className="border-b border-white/5 text-left text-[10px] uppercase tracking-wider text-slate-500">
+            <th className="py-2 pr-3">Level</th>
+            <th className="py-2 pr-3">Price</th>
+            <th className="py-2 pr-3">Status</th>
+            <th className="py-2 pr-3 text-right">Entry</th>
+            <th className="py-2 pr-3 text-right">SL</th>
+            <th className="py-2 pr-3 text-right">Qty</th>
+            <th className="py-2 text-right">Unrealized</th>
+          </tr>
+        </thead>
+        <tbody>
+          {sorted.map((level) => {
+            const isNearPrice = lastPrice && Math.abs(level.price - lastPrice) / lastPrice < 0.005;
+            const statusColors = {
+              filled: "bg-rose-500/20 text-rose-400 border-rose-500/30",
+              pending: "bg-amber-500/20 text-amber-400 border-amber-500/30",
+              closed: "bg-slate-500/20 text-slate-500 border-slate-500/30",
+              empty: "bg-slate-800/50 text-slate-600 border-slate-700/30"
+            };
+            const statusColor = statusColors[level.status] || statusColors.empty;
 
-      <div className="grid grid-cols-2 gap-3 text-sm">
-        <div>
-          <p className="text-[10px] uppercase text-slate-500">Entry</p>
-          <p className="font-mono text-slate-200">{fmtPrice(entry)}</p>
-        </div>
-        <div>
-          <p className="text-[10px] uppercase text-slate-500">Current</p>
-          <p className="font-mono text-slate-200">{fmtPrice(price)}</p>
-        </div>
-        <div>
-          <p className="text-[10px] uppercase text-slate-500">Take Profit</p>
-          <p className="font-mono text-emerald-400">{fmtPrice(position.tpPrice)}</p>
-        </div>
-        <div>
-          <p className="text-[10px] uppercase text-slate-500">Stop Loss</p>
-          <p className="font-mono text-rose-400">{fmtPrice(position.slPrice)}</p>
-        </div>
-        <div>
-          <p className="text-[10px] uppercase text-slate-500">Qty</p>
-          <p className="font-mono text-slate-200">{fmt(qty, 4)}</p>
-        </div>
-        <div>
-          <p className="text-[10px] uppercase text-slate-500">Unrealized PnL</p>
-          <p className={`font-mono font-bold ${pnlColor(unrealizedPnl)}`}>${fmt(unrealizedPnl, 4)}</p>
-        </div>
-      </div>
-
-      <div className="flex items-center gap-3 text-xs text-slate-500">
-        <span>Leverage {leverage}x</span>
-        <span>·</span>
-        <span>Notional ${fmt(notional)}</span>
-      </div>
-
-      <TpProgress position={position} lastPrice={lastPrice} />
+            return (
+              <tr key={level.index}
+                className={`border-b border-white/[0.03] hover:bg-white/[0.02] ${isNearPrice ? "bg-sky-500/5" : ""}`}
+              >
+                <td className="py-1.5 pr-3 font-mono text-slate-400">L{level.index}</td>
+                <td className="py-1.5 pr-3 font-mono text-slate-300">{fmtPrice(level.price)}</td>
+                <td className="py-1.5 pr-3">
+                  <span className={`rounded-md border px-1.5 py-0.5 text-[10px] font-bold uppercase ${statusColor}`}>
+                    {level.status}
+                  </span>
+                </td>
+                <td className="py-1.5 pr-3 text-right font-mono text-slate-300">
+                  {level.entryPrice ? fmtPrice(level.entryPrice) : "-"}
+                </td>
+                <td className="py-1.5 pr-3 text-right font-mono text-rose-400">
+                  {level.stopLossPrice ? fmtPrice(level.stopLossPrice) : "-"}
+                </td>
+                <td className="py-1.5 pr-3 text-right font-mono text-slate-400">
+                  {level.quantity ? fmt(level.quantity, 4) : "-"}
+                </td>
+                <td className={`py-1.5 text-right font-mono font-bold ${level.unrealizedPnl != null ? pnlColor(level.unrealizedPnl) : "text-slate-600"}`}>
+                  {level.unrealizedPnl != null ? `$${fmt(level.unrealizedPnl, 4)}` : "-"}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -142,36 +132,28 @@ function TradeTable({ trades }) {
   );
 
   return (
-    <div className="overflow-x-auto">
+    <div className="overflow-x-auto max-h-60 overflow-y-auto">
       <table className="w-full text-xs">
-        <thead>
+        <thead className="sticky top-0 bg-slate-900/95">
           <tr className="border-b border-white/5 text-left text-[10px] uppercase tracking-wider text-slate-500">
-            <th className="py-2 pr-3">#</th>
-            <th className="py-2 pr-3">Dir</th>
+            <th className="py-2 pr-3">Level</th>
             <th className="py-2 pr-3">Reason</th>
             <th className="py-2 pr-3 text-right">Entry</th>
             <th className="py-2 pr-3 text-right">Exit</th>
             <th className="py-2 pr-3 text-right">Qty</th>
-            <th className="py-2 pr-3 text-right">Notional</th>
-            <th className="py-2 pr-3 text-right">Gross PnL</th>
+            <th className="py-2 pr-3 text-right">Gross</th>
             <th className="py-2 pr-3 text-right">Fees</th>
-            <th className="py-2 text-right">Net PnL</th>
+            <th className="py-2 text-right">Net</th>
           </tr>
         </thead>
         <tbody>
           {trades.slice().reverse().map((t, i) => (
             <tr key={i} className="border-b border-white/[0.03] hover:bg-white/[0.02]">
-              <td className="py-1.5 pr-3 text-slate-500">{t.tradeNumber ?? "-"}</td>
-              <td className="py-1.5 pr-3">
-                <span className={t.direction === "LONG" ? "text-emerald-400" : "text-rose-400"}>
-                  {t.direction}
-                </span>
-              </td>
-              <td className="py-1.5 pr-3 text-slate-400">{t.reason || t.openReason}</td>
+              <td className="py-1.5 pr-3 font-mono text-slate-400">L{t.levelIndex}</td>
+              <td className="py-1.5 pr-3 text-slate-400">{t.reason}</td>
               <td className="py-1.5 pr-3 text-right font-mono text-slate-300">{fmtPrice(t.entry)}</td>
               <td className="py-1.5 pr-3 text-right font-mono text-slate-300">{fmtPrice(t.exit)}</td>
               <td className="py-1.5 pr-3 text-right font-mono text-slate-400">{fmt(t.quantity, 4)}</td>
-              <td className="py-1.5 pr-3 text-right font-mono text-slate-400">${fmt(t.notional)}</td>
               <td className={`py-1.5 pr-3 text-right font-mono font-bold ${pnlColor(t.grossPnl)}`}>
                 {fmt(t.grossPnl, 4)}
               </td>
@@ -190,7 +172,8 @@ function TradeTable({ trades }) {
 /* ── Trader Card ───────────────────────────────────────────── */
 function TraderCard({ trader, onDestroy }) {
   const [expanded, setExpanded] = useState(false);
-  const pos = trader.position;
+  const filledCount = (trader.levels || []).filter((l) => l.status === "filled").length;
+  const pendingCount = (trader.levels || []).filter((l) => l.status === "pending").length;
 
   return (
     <div className="glass rounded-2xl overflow-hidden">
@@ -202,29 +185,26 @@ function TraderCard({ trader, onDestroy }) {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <h3 className="text-lg font-bold text-slate-100">{trader.symbol}</h3>
-            <span className="rounded-full bg-sky-500/15 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-sky-400 border border-sky-500/20">
-              PERPETUAL
+            <span className="rounded-full bg-violet-500/15 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-violet-400 border border-violet-500/20">
+              GRID SHORT
             </span>
-            {pos && (
-              <span className={`rounded-md px-2 py-0.5 text-[10px] font-bold uppercase ${
-                pos.direction === "LONG"
-                  ? "bg-emerald-500/15 text-emerald-400"
-                  : "bg-rose-500/15 text-rose-400"
-              }`}>
-                {pos.direction}
-              </span>
-            )}
+            <span className="text-xs text-slate-500">
+              {trader.leverage}x
+            </span>
           </div>
           <div className="flex items-center gap-2">
             <div className="flex flex-wrap gap-2 text-xs">
-              <span className="rounded-full bg-white/5 border border-white/10 px-2.5 py-1 text-slate-300">
-                {trader.wins ?? 0}W / {trader.losses ?? 0}L
+              <span className="rounded-full bg-white/5 border border-white/10 px-2.5 py-1 text-rose-400">
+                {filledCount} open
+              </span>
+              <span className="rounded-full bg-white/5 border border-white/10 px-2.5 py-1 text-amber-400">
+                {pendingCount} pending
               </span>
               <span className={`rounded-full bg-white/5 border border-white/10 px-2.5 py-1 ${pnlColor(trader.realizedPnl)}`}>
-                PnL ${fmt(trader.realizedPnl)}
+                Realized ${fmt(trader.realizedPnl)}
               </span>
-              <span className="rounded-full bg-white/5 border border-white/10 px-2.5 py-1 text-slate-400">
-                {trader.leverage}x · ${fmt(trader.notional)}
+              <span className={`rounded-full bg-white/5 border border-white/10 px-2.5 py-1 ${pnlColor(trader.unrealizedPnl)}`}>
+                Unrealized ${fmt(trader.unrealizedPnl)}
               </span>
             </div>
             <button
@@ -241,28 +221,61 @@ function TraderCard({ trader, onDestroy }) {
           </div>
         </div>
 
-        {/* Current position mini-view */}
-        {pos && (
-          <div className="mt-3">
-            <TpProgress position={pos} lastPrice={trader.lastPrice} />
+        {/* Price info & destroy progress */}
+        <div className="mt-3 space-y-2">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+            <div>
+              <span className="text-slate-500">Start Price</span>
+              <p className="font-mono text-slate-200">{fmtPrice(trader.startPrice)}</p>
+            </div>
+            <div>
+              <span className="text-slate-500">Current Price</span>
+              <p className="font-mono text-slate-200">{fmtPrice(trader.lastPrice)}</p>
+            </div>
+            <div>
+              <span className="text-slate-500">Highest</span>
+              <p className="font-mono text-slate-200">{fmtPrice(trader.highestPrice)}</p>
+            </div>
+            <div>
+              <span className="text-slate-500">Lowest</span>
+              <p className="font-mono text-slate-200">{fmtPrice(trader.lowestPrice)}</p>
+            </div>
           </div>
-        )}
+          <DestroyProgress
+            priceChangePercent={trader.priceChangePercent}
+            destroyPercent={trader.destroyPercent}
+            destroyProgress={trader.destroyProgress}
+          />
+        </div>
       </button>
 
       {expanded && (
         <div className="border-t border-white/5 p-5 space-y-5">
-          <div>
-            <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-3">Current Position</h4>
-            <PositionInfo
-              position={pos}
-              lastPrice={trader.lastPrice}
-              leverage={trader.leverage}
-              notional={trader.notional}
-            />
+          {/* Config summary */}
+          <div className="flex flex-wrap gap-3 text-xs text-slate-400">
+            <span>Spacing: {fmt(trader.spacingPercent)}%</span>
+            <span>·</span>
+            <span>Max Levels: {trader.maxFilledLevels}</span>
+            <span>·</span>
+            <span>SL: {fmt(trader.stopLossPercent)}%</span>
+            <span>·</span>
+            <span>Fees: ${fmt(trader.feesPaid, 4)}</span>
+            <span>·</span>
+            <span>Closed Trades: {trader.tradeHistory?.length || 0}</span>
           </div>
+
+          {/* Grid Levels */}
           <div>
             <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-3">
-              Trade History ({trader.totalTrades ?? trader.tradeHistory?.length ?? 0})
+              Grid Levels ({(trader.levels || []).length})
+            </h4>
+            <GridLevels levels={trader.levels} lastPrice={trader.lastPrice} />
+          </div>
+
+          {/* Trade History */}
+          <div>
+            <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-3">
+              Trade History ({trader.tradeHistory?.length || 0})
             </h4>
             <TradeTable trades={trader.tradeHistory} />
           </div>
@@ -287,7 +300,7 @@ function TopGainersTable({ gainers, activeSymbols }) {
             <div className="flex items-center gap-2">
               <span className="text-sm font-medium text-slate-200">{g.symbol}</span>
               {hasTrader && (
-                <span className="rounded-full bg-sky-500/15 px-2 py-0.5 text-[9px] font-bold uppercase text-sky-400">
+                <span className="rounded-full bg-violet-500/15 px-2 py-0.5 text-[9px] font-bold uppercase text-violet-400">
                   ACTIVE
                 </span>
               )}
@@ -361,6 +374,9 @@ function App() {
     axios.delete(`${API_URL}/api/traders/${symbol}`).catch(() => {});
   }
 
+  const totalOpen = traders.reduce((s, t) => s + (t.openPositions || 0), 0);
+  const totalPending = traders.reduce((s, t) => s + (t.pendingOrders || 0), 0);
+
   return (
     <div className="min-h-screen grid-bg text-slate-100">
       <div className="mx-auto max-w-6xl px-4 py-8 space-y-6">
@@ -368,7 +384,7 @@ function App() {
         {/* ── Header ── */}
         <div className="glass rounded-2xl px-6 py-5 flex flex-wrap items-center justify-between gap-4">
           <div>
-            <h1 className="text-2xl font-bold">Perpetual Trader</h1>
+            <h1 className="text-2xl font-bold">Grid Short Trader</h1>
             <p className="text-xs text-slate-500 mt-1">
               Binance Futures · {status.mode}
               <span className="ml-3">{socketStatus === "connected" ? "● Connected" : "○ Disconnected"}</span>
@@ -388,18 +404,18 @@ function App() {
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-7">
           <StatCard label="Balance" value={`$${fmt(status.balance)}`} />
           <StatCard label="Equity" value={`$${fmt(status.equity)}`} />
-          <StatCard label="Wins" value={performance.wins ?? 0} color="text-emerald-400" />
-          <StatCard label="Losses" value={performance.losses ?? 0} color="text-rose-400" />
-          <StatCard label="Active Traders" value={traders.length} sub={`of ${status.maxTraders} max`} />
+          <StatCard label="Open Pos." value={totalOpen} color="text-rose-400" />
+          <StatCard label="Pending" value={totalPending} color="text-amber-400" />
+          <StatCard label="Trades" value={performance.totalTrades} />
           <StatCard
             label="Net Profit"
             value={`$${fmt(performance.netProfit)}`}
             color={pnlColor(performance.netProfit)}
           />
           <StatCard
-            label="Win Rate"
-            value={`${fmt(performance.winRate)}%`}
-            sub={`${performance.totalTrades} total trades`}
+            label="Max DD"
+            value={`${fmt(performance.maxDrawdown)}%`}
+            color="text-rose-400"
           />
         </div>
 
