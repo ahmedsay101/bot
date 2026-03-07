@@ -32,21 +32,19 @@ function StatCard({ label, value, sub, color }) {
   );
 }
 
-/* ── Destroy Progress Bar ──────────────────────────────────── */
-function DestroyProgress({ priceChangePercent, destroyPercent, destroyProgress }) {
-  const pct = Number(priceChangePercent) || 0;
-  const target = Number(destroyPercent) || 20;
-  const progress = Math.min(100, Math.max(0, Number(destroyProgress) || 0));
-
-  // Price dropping = good for shorts (green), rising = bad (red)
-  const barColor = pct <= 0 ? "bg-emerald-400" : "bg-rose-500";
-  const textColor = pct <= 0 ? "text-emerald-400" : "text-rose-400";
+/* ── Take Profit Progress Bar ──────────────────────────────── */
+function TakeProfitProgress({ takeProfitTarget, takeProfitProgress, unrealizedPnl, realizedPnl }) {
+  const target = Number(takeProfitTarget) || 0;
+  const progress = Math.min(100, Math.max(0, Number(takeProfitProgress) || 0));
+  const netPnl = Number(realizedPnl || 0) + Number(unrealizedPnl || 0);
+  const barColor = netPnl >= 0 ? "bg-emerald-400" : "bg-rose-500";
+  const textColor = netPnl >= 0 ? "text-emerald-400" : "text-rose-400";
 
   return (
     <div>
       <div className="mb-1 flex items-center justify-between text-xs text-slate-400">
-        <span>Destroy Target ({fmt(target)}% drop)</span>
-        <span className={textColor}>{fmt(pct)}% change</span>
+        <span>Take Profit Target (${fmt(target)})</span>
+        <span className={textColor}>Net P&L ${fmt(netPnl)}</span>
       </div>
       <div className="relative h-2.5 w-full overflow-hidden rounded-full bg-slate-800">
         <div className={`h-full rounded-full transition-all ${barColor}`} style={{ width: `${progress}%` }} />
@@ -241,10 +239,11 @@ function TraderCard({ trader, onDestroy }) {
               <p className="font-mono text-slate-200">{fmtPrice(trader.lowestPrice)}</p>
             </div>
           </div>
-          <DestroyProgress
-            priceChangePercent={trader.priceChangePercent}
-            destroyPercent={trader.destroyPercent}
-            destroyProgress={trader.destroyProgress}
+          <TakeProfitProgress
+            takeProfitTarget={trader.takeProfitTarget}
+            takeProfitProgress={trader.takeProfitProgress}
+            unrealizedPnl={trader.unrealizedPnl}
+            realizedPnl={trader.realizedPnl}
           />
         </div>
       </button>

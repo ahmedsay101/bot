@@ -19,7 +19,7 @@ function formatNumber(value, digits = 2) {
  * - Maximum open positions = maxOpenTransactions. When reached, all pending
  *   entry orders are cancelled (no new entries until a position closes).
  * - Notional per level = (equity / maxOpenTransactions) * leverage.
- * - Trader is destroyed when |priceChange%| >= destroyPercent (configurable).
+ * - Trader is destroyed when net profit reaches takeProfitPercent of starting equity.
  * - On destroy the controller creates a new trader automatically.
  */
 class GridTrader {
@@ -77,8 +77,8 @@ class GridTrader {
     return Number(config.levelWindow) || 5;
   }
 
-  _getDestroyPercent() {
-    return Number(config.destroyPercent) || 20;
+  _getTakeProfitPercent() {
+    return Number(config.takeProfitPercent) || 5;
   }
 
   _getStopLossPercent() {
@@ -131,7 +131,7 @@ class GridTrader {
     this.api.on("orderFilled", this._onOrderFilled);
     this.api.on("orderCancelled", this._onOrderCancelled);
 
-    log(`TRADER ${this.symbol}`, `Grid initialized @ ${formatNumber(this.startPrice, 6)} | spacing=${this._getSpacingPercent()}% | window=${this._getLevelWindow()} | maxOpen=${this._getMaxOpenTransactions()} | SL=${formatNumber(this._getStopLossPercent())}% | destroy=${this._getDestroyPercent()}%`);
+    log(`TRADER ${this.symbol}`, `Grid initialized @ ${formatNumber(this.startPrice, 6)} | spacing=${this._getSpacingPercent()}% | window=${this._getLevelWindow()} | maxOpen=${this._getMaxOpenTransactions()} | SL=${formatNumber(this._getStopLossPercent())}% | TP=${this._getTakeProfitPercent()}% ($${formatNumber((this._equity * this._getTakeProfitPercent()) / 100)})`);
     this._updateStore();
   }
 
@@ -222,8 +222,8 @@ class GridTrader {
       const pctFromStart = ((this.startPrice - price) / this.startPrice) * 100;
       const currentLevelFloat = pctFromStart / spacing;
 
-      // First level below current price
-      const firstLevelBelow = Math.ceil(currentLevelFloat + 0.0001);
+      // First level at least 1 full spacing below current price
+      const firstLevelBelow = Math.ceil(currentLevelFloat + 1 - 0.0001);
 
       const targetIndices = new Set();
       for (let i = 0; i < levelWindow; i++) {
@@ -527,15 +527,17 @@ class GridTrader {
     }
   }
 
-  // ── Destroy check ───────────────────────────────────────────
+  // ── Take profit check ──────────────────────────────────────
 
   async _checkDestroy(price) {
-    const changePercent = this._getPriceChangePercent();
-    const destroyPercent = this._getDestroyPercent();
-    // Destroy when price drops by destroyPercent (WIN for shorts)
-    if (changePercent <= -destroyPercent) {
-      log(`TRADER ${this.symbol}`, `Price dropped ${formatNumber(changePercent)}% — destroying (WIN)`);
-      await this.destroy("target-reached");
+    const takeProfitPercent = this._getTakeProfitPercent();
+    const targetProfit = (this._equity * takeProfitPercent) / 100;
+    const unrealized = this._calcUnrealizedPnl(price);
+    const netPnl = this.realizedPnl + unrealized;
+
+    if (netPnl >= targetProfit) {
+      log(`TRADER ${this.symbol}`, `Take profit reached: $${formatNumber(netPnl)} >= $${formatNumber(targetProfit)} — destroying`);
+      await this.destroy("take-profit");
     }
   }
 
@@ -628,7 +630,10 @@ class GridTrader {
     if (!this.active) return;
     const price = this.lastPrice || this.startPrice || 0;
     const changePercent = this._getPriceChangePercent();
-    const destroyPercent = this._getDestroyPercent();
+    const takeProfitPercent = this._getTakeProfitPercent();
+    const targetProfit = (this._equity * takeProfitPercent) / 100;
+    const unrealized = this._calcUnrealizedPnl(price);
+    const netPnl = this.realizedPnl + unrealized;
 
     // Build level summary for frontend
     const allLevelIndices = new Set();
@@ -669,8 +674,9 @@ class GridTrader {
       highestPrice: this.highestPrice,
       lowestPrice: this.lowestPrice,
       priceChangePercent: changePercent,
-      destroyPercent,
-      destroyProgress: Math.min(100, (Math.abs(changePercent) / destroyPercent) * 100),
+      takeProfitPercent,
+      takeProfitTarget: targetProfit,
+      takeProfitProgress: targetProfit > 0 ? Math.min(100, Math.max(0, (netPnl / targetProfit) * 100)) : 0,
       openPositions: this.positions.size,
       pendingOrders: this.pendingEntriesById.size,
       totalLevels: this.levels.size,

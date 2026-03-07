@@ -12,7 +12,7 @@ const config = {
   levelSpacingPercent: 1,
   maxOpenTransactions: 20,
   levelWindow: 5,
-  destroyPercent: 20,
+  takeProfitPercent: 5,
   startingBalanceUSDT: 200,
   scannerIntervalMs: 1 * 60 * 1000,
   recvWindow: 5000

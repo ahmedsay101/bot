@@ -68,7 +68,7 @@ describe("GridTrader behavior", () => {
       levelSpacingPercent: 1,
       maxOpenTransactions: 20,
       levelWindow: 5,
-      destroyPercent: 20,
+      takeProfitPercent: 5,
       leverage: 10,
       feeRate: 0,
       startingBalanceUSDT: 100
@@ -115,16 +115,30 @@ describe("GridTrader behavior", () => {
     expect(pos.stopLossPrice).toBeGreaterThan(pos.entryPrice);
   });
 
-  test("destroys trader when price drops by destroyPercent", async () => {
+  test("destroys trader when net profit reaches take profit target", async () => {
     const api = new FakeApi({ price: 100 });
     const onDestroy = jest.fn();
     const trader = new GridTrader({ symbol: "TESTUSDT", api, onDestroy });
 
     await trader.start();
 
-    // Price drops 20% → should trigger destroy
-    api.price = 80;
-    await trader._onMarkPrice({ symbol: "TESTUSDT", price: 80 });
+    // Fill a position at 99 (L1)
+    const firstPending = Array.from(trader.pendingEntriesById.values())[0];
+    api.emit("orderFilled", {
+      symbol: "TESTUSDT",
+      orderId: firstPending.orderId,
+      side: "SELL",
+      price: firstPending.price,
+      quantity: firstPending.quantity
+    });
+
+    // Price drops significantly so unrealized profit exceeds 5% of equity (5)
+    // SHORT profit = (entry - current) * qty, needs to be >= 5
+    const pos = Array.from(trader.positions.values())[0];
+    const targetDrop = 10 / pos.quantity + pos.entryPrice; // ensure > $5 profit
+    const lowPrice = pos.entryPrice - targetDrop;
+    api.price = Math.max(lowPrice, 1);
+    await trader._onMarkPrice({ symbol: "TESTUSDT", price: api.price });
 
     expect(trader.active).toBe(false);
     expect(onDestroy).toHaveBeenCalledWith("TESTUSDT", expect.any(Number));
@@ -203,6 +217,7 @@ describe("GridTrader behavior", () => {
   test("cancels all pending entries when maxOpenTransactions reached", async () => {
     config.maxOpenTransactions = 2;
     config.levelWindow = 5;
+    config.takeProfitPercent = 99;
     const api = new FakeApi({ price: 100 });
     const trader = new GridTrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn() });
 
