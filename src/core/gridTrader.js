@@ -222,15 +222,20 @@ class GridTrader {
       const pctFromStart = ((this.startPrice - price) / this.startPrice) * 100;
       const currentLevelFloat = pctFromStart / spacing;
 
-      // First level at least 1 full spacing below current price
-      const firstLevelBelow = Math.ceil(currentLevelFloat + 1 - 0.0001);
+      // First level below current price
+      const firstLevelBelow = Math.ceil(currentLevelFloat + 0.0001);
 
       const targetIndices = new Set();
-      for (let i = 0; i < levelWindow; i++) {
-        const idx = firstLevelBelow + i;
+      let idx = firstLevelBelow;
+      let pendingSlots = 0;
+      while (pendingSlots < levelWindow) {
         const levelPrice = this._getLevelPrice(idx);
-        if (levelPrice <= 0) continue;
+        if (levelPrice <= 0) break;
+        const level = this.levels.get(idx);
+        const isFilled = level && level.status === "filled";
         targetIndices.add(idx);
+        if (!isFilled) pendingSlots++;
+        idx++;
       }
 
       // Cancel orders for levels no longer in the window
