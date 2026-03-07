@@ -255,7 +255,9 @@ function TraderCard({ trader, onDestroy }) {
           <div className="flex flex-wrap gap-3 text-xs text-slate-400">
             <span>Spacing: {fmt(trader.spacingPercent)}%</span>
             <span>·</span>
-            <span>Max Levels: {trader.maxFilledLevels}</span>
+            <span>Max Open: {trader.maxOpenTransactions}</span>
+            <span>·</span>
+            <span>Window: {trader.levelWindow}</span>
             <span>·</span>
             <span>SL: {fmt(trader.stopLossPercent)}%</span>
             <span>·</span>

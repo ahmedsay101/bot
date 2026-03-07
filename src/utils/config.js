@@ -8,11 +8,12 @@ const config = {
   feeRate: 0.0004,
   slippageRate: 0.0002,
   equityFraction: 0.10,
-  leverage: 10,
+  leverage: 2,
   levelSpacingPercent: 1,
-  maxFilledLevels: 5,
+  maxOpenTransactions: 20,
+  levelWindow: 5,
   destroyPercent: 20,
-  startingBalanceUSDT: 100,
+  startingBalanceUSDT: 200,
   scannerIntervalMs: 1 * 60 * 1000,
   recvWindow: 5000
 };

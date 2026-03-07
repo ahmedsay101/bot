@@ -66,9 +66,9 @@ describe("GridTrader behavior", () => {
     Object.assign(config, baseConfig, {
       mode: "test",
       levelSpacingPercent: 1,
-      maxFilledLevels: 5,
+      maxOpenTransactions: 20,
+      levelWindow: 5,
       destroyPercent: 20,
-      equityFraction: 0.25,
       leverage: 10,
       feeRate: 0,
       startingBalanceUSDT: 100
@@ -198,5 +198,43 @@ describe("GridTrader behavior", () => {
     const pos = Array.from(trader.positions.values())[0];
     const expectedSL = firstPending.price * (1 + 5 / 100);
     expect(pos.stopLossPrice).toBeCloseTo(expectedSL, 4);
+  });
+
+  test("cancels all pending entries when maxOpenTransactions reached", async () => {
+    config.maxOpenTransactions = 2;
+    config.levelWindow = 5;
+    const api = new FakeApi({ price: 100 });
+    const trader = new GridTrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn() });
+
+    await trader.start();
+    expect(trader.pendingEntriesById.size).toBe(5);
+
+    // Fill 2 positions to reach maxOpenTransactions
+    const entries = Array.from(trader.pendingEntriesById.values())
+      .sort((a, b) => b.price - a.price);
+
+    api.emit("orderFilled", {
+      symbol: "TESTUSDT",
+      orderId: entries[0].orderId,
+      side: "SELL",
+      price: entries[0].price,
+      quantity: entries[0].quantity
+    });
+    api.emit("orderFilled", {
+      symbol: "TESTUSDT",
+      orderId: entries[1].orderId,
+      side: "SELL",
+      price: entries[1].price,
+      quantity: entries[1].quantity
+    });
+
+    expect(trader.positions.size).toBe(2);
+
+    // Trigger _syncLevels via price update
+    api.price = 97;
+    await trader._onMarkPrice({ symbol: "TESTUSDT", price: 97 });
+
+    // All pending entries should be cancelled
+    expect(trader.pendingEntriesById.size).toBe(0);
   });
 });

@@ -11,12 +11,14 @@ function formatNumber(value, digits = 2) {
  * GridTrader – short-only grid strategy.
  *
  * Creates levels below the current price spaced by levelSpacingPercent.
- * The closest `maxFilledLevels` levels below the current price are filled
- * with stop-limit SHORT orders.  As price moves, new levels are filled and
- * the window of active orders follows the price.
+ * The closest `levelWindow` (default 5) levels below the current price have
+ * pending stop-limit SHORT orders. As price drops, new levels are placed.
  *
  * - No take profit.  Positions stay open until the trader is destroyed.
  * - Stop loss per position = 100 / leverage  percent.
+ * - Maximum open positions = maxOpenTransactions. When reached, all pending
+ *   entry orders are cancelled (no new entries until a position closes).
+ * - Notional per level = (equity / maxOpenTransactions) * leverage.
  * - Trader is destroyed when |priceChange%| >= destroyPercent (configurable).
  * - On destroy the controller creates a new trader automatically.
  */
@@ -67,8 +69,12 @@ class GridTrader {
     return Number(config.levelSpacingPercent) || 1;
   }
 
-  _getMaxFilledLevels() {
-    return Number(config.maxFilledLevels) || 5;
+  _getMaxOpenTransactions() {
+    return Number(config.maxOpenTransactions) || 20;
+  }
+
+  _getLevelWindow() {
+    return Number(config.levelWindow) || 5;
   }
 
   _getDestroyPercent() {
@@ -86,9 +92,9 @@ class GridTrader {
 
   _calcQuantity(price) {
     const equity = this._equity || Number(config.startingBalanceUSDT) || 200;
-    const fraction = Number(config.equityFraction) || 0.25;
+    const maxOpen = this._getMaxOpenTransactions();
     const leverage = Number(config.leverage) || 10;
-    const notional = equity * fraction * leverage;
+    const notional = (equity / maxOpen) * leverage;
     if (notional <= 0) return 0;
     const qty = notional / price;
     return Number(qty.toFixed(4));
@@ -125,7 +131,7 @@ class GridTrader {
     this.api.on("orderFilled", this._onOrderFilled);
     this.api.on("orderCancelled", this._onOrderCancelled);
 
-    log(`TRADER ${this.symbol}`, `Grid initialized @ ${formatNumber(this.startPrice, 6)} | spacing=${this._getSpacingPercent()}% | maxLevels=${this._getMaxFilledLevels()} | SL=${formatNumber(this._getStopLossPercent())}% | destroy=${this._getDestroyPercent()}%`);
+    log(`TRADER ${this.symbol}`, `Grid initialized @ ${formatNumber(this.startPrice, 6)} | spacing=${this._getSpacingPercent()}% | window=${this._getLevelWindow()} | maxOpen=${this._getMaxOpenTransactions()} | SL=${formatNumber(this._getStopLossPercent())}% | destroy=${this._getDestroyPercent()}%`);
     this._updateStore();
   }
 
@@ -185,12 +191,11 @@ class GridTrader {
   // ── Level management ────────────────────────────────────────
 
   /**
-   * Ensures the closest `maxFilledLevels` levels below the current price
+   * Ensures the closest `levelWindow` levels below the current price
    * have pending stop-limit SHORT orders.
    *
-   * Levels above current price that already have positions are kept.
-   * Levels that are too far below (beyond the window) have their
-   * pending orders cancelled.
+   * If maxOpenTransactions is reached, all pending entry orders are
+   * cancelled instead (no new entries until positions close).
    */
   async _syncLevels() {
     if (this._processing || !this.active) return;
@@ -198,32 +203,39 @@ class GridTrader {
 
     try {
       const spacing = this._getSpacingPercent();
-      const maxLevels = this._getMaxFilledLevels();
+      const maxOpen = this._getMaxOpenTransactions();
+      const levelWindow = this._getLevelWindow();
       const price = this.lastPrice;
 
-      // Determine which level indices should have pending orders
-      // Level index = floor of how many spacings the price is below startPrice + 1 .. +maxLevels
-      // But we need levels BELOW current price, so we find the first level below price
+      // If we've hit the max open transactions, cancel all pending entries
+      if (this.positions.size >= maxOpen) {
+        for (const [orderId, entry] of this.pendingEntriesById.entries()) {
+          try {
+            await this.api.cancelOrder({ symbol: this.symbol, orderId: entry.orderId });
+          } catch (_) {}
+          this.levels.delete(entry.levelIndex);
+        }
+        this.pendingEntriesById.clear();
+        return;
+      }
+
       const pctFromStart = ((this.startPrice - price) / this.startPrice) * 100;
       const currentLevelFloat = pctFromStart / spacing;
 
       // First level below current price
       const firstLevelBelow = Math.ceil(currentLevelFloat + 0.0001);
-      // But if price moved above start, firstLevelBelow could be 0 or negative
-      // We still want levels below current price
 
       const targetIndices = new Set();
-      for (let i = 0; i < maxLevels; i++) {
+      for (let i = 0; i < levelWindow; i++) {
         const idx = firstLevelBelow + i;
         const levelPrice = this._getLevelPrice(idx);
         if (levelPrice <= 0) continue;
         targetIndices.add(idx);
       }
 
-      // Check existing levels — cancel orders for levels no longer in target
+      // Cancel orders for levels no longer in the window
       for (const [orderId, entry] of this.pendingEntriesById.entries()) {
         if (!targetIndices.has(entry.levelIndex)) {
-          // Cancel this order — it's out of the window
           try {
             await this.api.cancelOrder({ symbol: this.symbol, orderId: entry.orderId });
           } catch (_) {}
@@ -232,13 +244,13 @@ class GridTrader {
         }
       }
 
-      // Place orders for levels in target that don't already have an order or position
+      // Place orders for levels in window that don't already have an order or position
       for (const idx of targetIndices) {
         const level = this.levels.get(idx);
         if (level && (level.status === "pending" || level.status === "filled")) continue;
 
         const levelPrice = this._getLevelPrice(idx);
-        if (levelPrice <= 0 || levelPrice >= price) continue; // Must be below current price
+        if (levelPrice <= 0 || levelPrice >= price) continue;
 
         await this._placeEntryOrder(idx, levelPrice);
       }
@@ -668,7 +680,8 @@ class GridTrader {
       createdAt: this.createdAt,
       leverage: Number(config.leverage) || 10,
       spacingPercent: this._getSpacingPercent(),
-      maxFilledLevels: this._getMaxFilledLevels(),
+      maxOpenTransactions: this._getMaxOpenTransactions(),
+      levelWindow: this._getLevelWindow(),
       stopLossPercent: this._getStopLossPercent(),
       levels: levelsList,
       tradeHistory: this.tradeHistory,
