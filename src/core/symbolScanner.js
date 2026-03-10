@@ -42,7 +42,8 @@ class SymbolScanner {
       }))
       .filter((t) => typeof t.symbol === "string" && t.symbol.endsWith("USDT"))
       .filter((t) => tradableSymbols.has(t.symbol))
-      .filter((t) => Number.isFinite(t.change));
+      .filter((t) => Number.isFinite(t.change))
+      .filter((t) => t.change >= (Number(config.minPctRequired) || 0));
 
     // Return top gainer(s) sorted by 24h change
     return candidates

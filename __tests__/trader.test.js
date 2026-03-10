@@ -11,7 +11,7 @@ jest.mock("../src/state/store", () => ({
   getPerformance: jest.fn(() => ({ netProfit: 0 }))
 }));
 
-const GridTrader = require("../src/core/gridTrader");
+const StepTrader = require("../src/core/stepTrader");
 const config = require("../src/utils/config");
 
 class FakeApi extends EventEmitter {
@@ -59,17 +59,16 @@ class FakeApi extends EventEmitter {
   }
 }
 
-describe("GridTrader behavior", () => {
+describe("StepTrader behavior", () => {
   const baseConfig = { ...config };
 
   beforeEach(() => {
     Object.assign(config, baseConfig, {
       mode: "test",
-      levelSpacingPercent: 1,
-      maxOpenTransactions: 20,
-      levelWindow: 5,
-      takeProfitPercent: 5,
-      leverage: 10,
+      stepStopLossPercent: 10,
+      stepTakeProfitPercent: 10,
+      stepPercent: 10,
+      leverage: 2,
       feeRate: 0,
       startingBalanceUSDT: 100
     });
@@ -79,177 +78,100 @@ describe("GridTrader behavior", () => {
     Object.assign(config, baseConfig);
   });
 
-  test("places initial stop-limit entry orders below price", async () => {
+  test("opens a SHORT market order on start", async () => {
     const api = new FakeApi({ price: 100 });
-    const trader = new GridTrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn() });
+    const trader = new StepTrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn() });
 
     await trader.start();
 
-    // Should have 5 pending entries below price
-    expect(trader.pendingEntriesById.size).toBe(5);
-
-    // All entries should be below start price
-    for (const entry of trader.pendingEntriesById.values()) {
-      expect(entry.price).toBeLessThan(100);
-    }
+    expect(trader.position).not.toBeNull();
+    expect(trader.position.entryPrice).toBe(100);
+    expect(trader.position.stopLossPrice).toBeCloseTo(110); // 10% above
+    expect(trader.position.takeProfitPrice).toBeCloseTo(90); // 10% below start
+    expect(trader.stepCount).toBe(0);
   });
 
-  test("fills entry on orderFilled event", async () => {
-    const api = new FakeApi({ price: 100 });
-    const trader = new GridTrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn() });
-
-    await trader.start();
-
-    const firstPending = Array.from(trader.pendingEntriesById.values())[0];
-    api.emit("orderFilled", {
-      symbol: "TESTUSDT",
-      orderId: firstPending.orderId,
-      side: "SELL",
-      price: firstPending.price,
-      quantity: firstPending.quantity
-    });
-
-    expect(trader.positions.size).toBe(1);
-    const pos = Array.from(trader.positions.values())[0];
-    expect(pos.direction).toBe("SHORT");
-    expect(pos.stopLossPrice).toBeGreaterThan(pos.entryPrice);
-  });
-
-  test("destroys trader when net profit reaches take profit target", async () => {
+  test("destroys on take profit hit (price drops to TP)", async () => {
     const api = new FakeApi({ price: 100 });
     const onDestroy = jest.fn();
-    const trader = new GridTrader({ symbol: "TESTUSDT", api, onDestroy });
+    const trader = new StepTrader({ symbol: "TESTUSDT", api, onDestroy });
 
     await trader.start();
 
-    // Fill a position at 99 (L1)
-    const firstPending = Array.from(trader.pendingEntriesById.values())[0];
-    api.emit("orderFilled", {
-      symbol: "TESTUSDT",
-      orderId: firstPending.orderId,
-      side: "SELL",
-      price: firstPending.price,
-      quantity: firstPending.quantity
-    });
-
-    // Price drops significantly so unrealized profit exceeds 5% of equity (5)
-    // SHORT profit = (entry - current) * qty, needs to be >= 5
-    const pos = Array.from(trader.positions.values())[0];
-    const targetDrop = 10 / pos.quantity + pos.entryPrice; // ensure > $5 profit
-    const lowPrice = pos.entryPrice - targetDrop;
-    api.price = Math.max(lowPrice, 1);
-    await trader._onMarkPrice({ symbol: "TESTUSDT", price: api.price });
+    // Price drops to 90 → TP hit
+    api.price = 90;
+    await trader._onMarkPrice({ symbol: "TESTUSDT", price: 90 });
 
     expect(trader.active).toBe(false);
     expect(onDestroy).toHaveBeenCalledWith("TESTUSDT", expect.any(Number));
+    expect(trader.tradeHistory.length).toBe(1);
+    expect(trader.tradeHistory[0].reason).toBe("take-profit");
   });
 
-  test("stop loss closes position when price rises above SL", async () => {
+  test("steps up TP on stop loss, re-enters", async () => {
     const api = new FakeApi({ price: 100 });
-    const trader = new GridTrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn() });
+    const trader = new StepTrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn() });
 
     await trader.start();
 
-    // Fill a position
-    const firstPending = Array.from(trader.pendingEntriesById.values())[0];
-    api.emit("orderFilled", {
-      symbol: "TESTUSDT",
-      orderId: firstPending.orderId,
-      side: "SELL",
-      price: firstPending.price,
-      quantity: firstPending.quantity
-    });
+    // Price rises to 111 → SL hit (above 110)
+    api.price = 111;
+    await trader._onMarkPrice({ symbol: "TESTUSDT", price: 111 });
 
-    expect(trader.positions.size).toBe(1);
-    const pos = Array.from(trader.positions.values())[0];
-
-    // Price rises above SL
-    api.price = pos.stopLossPrice + 1;
-    await trader._maybeForceClose(api.price);
-
-    expect(trader.positions.size).toBe(0);
+    expect(trader.stepCount).toBe(1);
+    expect(trader.currentTakeProfitPercent).toBe(20); // 10 + 10
+    expect(trader.position).not.toBeNull();
+    expect(trader.position.entryPrice).toBe(111); // re-entered at 111
+    expect(trader.position.stopLossPrice).toBeCloseTo(122.1); // 10% above 111
+    expect(trader.position.takeProfitPrice).toBeCloseTo(80); // 20% below start (100)
     expect(trader.tradeHistory.length).toBe(1);
     expect(trader.tradeHistory[0].reason).toBe("stop-loss");
   });
 
-  test("level spacing is correct", async () => {
+  test("multiple steps then TP hit", async () => {
     const api = new FakeApi({ price: 100 });
-    const trader = new GridTrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn() });
+    const onDestroy = jest.fn();
+    const trader = new StepTrader({ symbol: "TESTUSDT", api, onDestroy });
 
     await trader.start();
 
-    const entries = Array.from(trader.pendingEntriesById.values())
-      .sort((a, b) => b.price - a.price);
+    // Step 1: SL at ~110, trigger above it
+    api.price = 111;
+    await trader._onMarkPrice({ symbol: "TESTUSDT", price: 111 });
+    expect(trader.stepCount).toBe(1);
+    expect(trader.currentTakeProfitPercent).toBe(20);
 
-    // With 1% spacing from price 100: 99, 98, 97, 96, 95
-    expect(entries).toHaveLength(5);
-    expect(entries[0].price).toBeCloseTo(99, 1);
-    expect(entries[1].price).toBeCloseTo(98, 1);
-    expect(entries[2].price).toBeCloseTo(97, 1);
-    expect(entries[3].price).toBeCloseTo(96, 1);
-    expect(entries[4].price).toBeCloseTo(95, 1);
+    // Step 2: SL at ~122.1, trigger above it
+    api.price = 123;
+    await trader._onMarkPrice({ symbol: "TESTUSDT", price: 123 });
+    expect(trader.stepCount).toBe(2);
+    expect(trader.currentTakeProfitPercent).toBe(30);
+    // TP should be 30% below start (100) = 70
+    expect(trader.position.takeProfitPrice).toBeCloseTo(70);
+
+    // Price drops to 70 → TP hit
+    api.price = 70;
+    await trader._onMarkPrice({ symbol: "TESTUSDT", price: 70 });
+
+    expect(trader.active).toBe(false);
+    expect(onDestroy).toHaveBeenCalled();
+    expect(trader.tradeHistory.length).toBe(3);
+    expect(trader.tradeHistory[2].reason).toBe("take-profit");
   });
 
-  test("SL percent equals 100/leverage", async () => {
-    config.leverage = 20; // SL should be 5%
-    const api = new FakeApi({ price: 100 });
-    const trader = new GridTrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn() });
+  test("SL always stays at stepStopLossPercent from entry", async () => {
+    config.stepStopLossPercent = 5;
+    const api = new FakeApi({ price: 200 });
+    const trader = new StepTrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn() });
 
     await trader.start();
 
-    // Fill a position at price 99
-    const firstPending = Array.from(trader.pendingEntriesById.values())
-      .sort((a, b) => b.price - a.price)[0];
+    expect(trader.position.stopLossPrice).toBe(210); // 5% of 200
 
-    api.emit("orderFilled", {
-      symbol: "TESTUSDT",
-      orderId: firstPending.orderId,
-      side: "SELL",
-      price: firstPending.price,
-      quantity: firstPending.quantity
-    });
+    // Hit SL
+    api.price = 210;
+    await trader._onMarkPrice({ symbol: "TESTUSDT", price: 210 });
 
-    const pos = Array.from(trader.positions.values())[0];
-    const expectedSL = firstPending.price * (1 + 5 / 100);
-    expect(pos.stopLossPrice).toBeCloseTo(expectedSL, 4);
-  });
-
-  test("cancels all pending entries when maxOpenTransactions reached", async () => {
-    config.maxOpenTransactions = 2;
-    config.levelWindow = 5;
-    config.takeProfitPercent = 99;
-    const api = new FakeApi({ price: 100 });
-    const trader = new GridTrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn() });
-
-    await trader.start();
-    expect(trader.pendingEntriesById.size).toBe(5);
-
-    // Fill 2 positions to reach maxOpenTransactions
-    const entries = Array.from(trader.pendingEntriesById.values())
-      .sort((a, b) => b.price - a.price);
-
-    api.emit("orderFilled", {
-      symbol: "TESTUSDT",
-      orderId: entries[0].orderId,
-      side: "SELL",
-      price: entries[0].price,
-      quantity: entries[0].quantity
-    });
-    api.emit("orderFilled", {
-      symbol: "TESTUSDT",
-      orderId: entries[1].orderId,
-      side: "SELL",
-      price: entries[1].price,
-      quantity: entries[1].quantity
-    });
-
-    expect(trader.positions.size).toBe(2);
-
-    // Trigger _syncLevels via price update
-    api.price = 97;
-    await trader._onMarkPrice({ symbol: "TESTUSDT", price: 97 });
-
-    // All pending entries should be cancelled
-    expect(trader.pendingEntriesById.size).toBe(0);
+    expect(trader.position.stopLossPrice).toBeCloseTo(220.5); // 5% of 210
   });
 });
