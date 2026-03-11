@@ -9,6 +9,7 @@ const config = {
   slippageRate: 0.0002,
   leverage: 2,
   stepStopLossPercent: 10,
+  doubleStopLoss: false,
   stepTakeProfitPercent: 10,
   stepPercent: 10,
   minPctRequired: 50,

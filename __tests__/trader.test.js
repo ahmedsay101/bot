@@ -123,7 +123,7 @@ describe("StepTrader behavior", () => {
     expect(trader.position).not.toBeNull();
     expect(trader.position.entryPrice).toBe(111); // re-entered at 111
     expect(trader.position.stopLossPrice).toBeCloseTo(122.1); // 10% above 111
-    expect(trader.position.takeProfitPrice).toBeCloseTo(80); // 20% below start (100)
+    expect(trader.position.takeProfitPrice).toBeCloseTo(88.8); // 20% below entry (111)
     expect(trader.tradeHistory.length).toBe(1);
     expect(trader.tradeHistory[0].reason).toBe("stop-loss");
   });
@@ -146,12 +146,12 @@ describe("StepTrader behavior", () => {
     await trader._onMarkPrice({ symbol: "TESTUSDT", price: 123 });
     expect(trader.stepCount).toBe(2);
     expect(trader.currentTakeProfitPercent).toBe(30);
-    // TP should be 30% below start (100) = 70
-    expect(trader.position.takeProfitPrice).toBeCloseTo(70);
+    // TP should be 30% below entry (123) = 86.1
+    expect(trader.position.takeProfitPrice).toBeCloseTo(86.1);
 
-    // Price drops to 70 → TP hit
-    api.price = 70;
-    await trader._onMarkPrice({ symbol: "TESTUSDT", price: 70 });
+    // Price drops to 86.1 → TP hit
+    api.price = 86;
+    await trader._onMarkPrice({ symbol: "TESTUSDT", price: 86 });
 
     expect(trader.active).toBe(false);
     expect(onDestroy).toHaveBeenCalled();

@@ -56,7 +56,11 @@ class StepTrader {
   // ── Config helpers ──────────────────────────────────────────
 
   _getStopLossPercent() {
-    return Number(config.stepStopLossPercent) || 10;
+    const base = Number(config.stepStopLossPercent) || 10;
+    if (config.doubleStopLoss && this.stepCount > 0) {
+      return base + this._getStepPercent() * this.stepCount;
+    }
+    return base;
   }
 
   _getStepPercent() {
@@ -152,9 +156,9 @@ class StepTrader {
 
     const entryPrice = Number(result.price) || price;
     const slPercent = this._getStopLossPercent();
-    // SHORT: SL is above entry, TP is below first entry
+    // SHORT: SL is above entry, TP is below entry
     const stopLossPrice = entryPrice * (1 + slPercent / 100);
-    const takeProfitPrice = this.startPrice * (1 - this.currentTakeProfitPercent / 100);
+    const takeProfitPrice = entryPrice * (1 - this.currentTakeProfitPercent / 100);
 
     const entryFee = entryPrice * qty * this._getFeeRate();
     this.feesPaid += entryFee;
@@ -169,7 +173,7 @@ class StepTrader {
 
     log(
       `STEP ${this.symbol}`,
-      `Opened SHORT @ ${formatNumber(entryPrice, 6)} | qty=${qty} | SL=${formatNumber(stopLossPrice, 6)} | TP=${formatNumber(takeProfitPrice, 6)} (${this.currentTakeProfitPercent}% from start) | step #${this.stepCount}`
+      `Opened SHORT @ ${formatNumber(entryPrice, 6)} | qty=${qty} | SL=${formatNumber(stopLossPrice, 6)} | TP=${formatNumber(takeProfitPrice, 6)} (${this.currentTakeProfitPercent}% from entry) | step #${this.stepCount}`
     );
     this._updateStore();
   }
@@ -277,7 +281,7 @@ class StepTrader {
         this.currentTakeProfitPercent += this._getStepPercent();
         log(
           `STEP ${this.symbol}`,
-          `SL hit — step #${this.stepCount} | new TP=${this.currentTakeProfitPercent}% from start`
+          `SL hit — step #${this.stepCount} | new TP=${this.currentTakeProfitPercent}% from entry`
         );
         await this._openPosition(price);
       }
@@ -305,10 +309,11 @@ class StepTrader {
       : 0;
     const unrealized = this._calcUnrealizedPnl(price);
 
-    // TP progress: how far price has moved toward the TP target
-    const tpPrice = this.position ? this.position.takeProfitPrice : this.startPrice * (1 - this.currentTakeProfitPercent / 100);
-    const totalDistance = this.startPrice - tpPrice;
-    const currentDistance = this.startPrice - price;
+    // TP progress: how far price has moved from entry toward the TP target
+    const entryRef = this.position ? this.position.entryPrice : this.startPrice;
+    const tpPrice = this.position ? this.position.takeProfitPrice : entryRef * (1 - this.currentTakeProfitPercent / 100);
+    const totalDistance = entryRef - tpPrice;
+    const currentDistance = entryRef - price;
     const tpProgress = totalDistance > 0 ? Math.min(100, Math.max(0, (currentDistance / totalDistance) * 100)) : 0;
 
     store.upsertTrader({

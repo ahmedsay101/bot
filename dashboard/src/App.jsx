@@ -40,7 +40,7 @@ function StepProgress({ takeProfitProgress, currentTakeProfitPercent, stepCount 
   return (
     <div>
       <div className="mb-1 flex items-center justify-between text-xs text-slate-400">
-        <span>TP Target ({fmt(currentTakeProfitPercent)}% drop from start)</span>
+        <span>TP Target ({fmt(currentTakeProfitPercent)}% drop from entry)</span>
         <span className="text-slate-300">Step #{stepCount || 0}</span>
       </div>
       <div className="relative h-2.5 w-full overflow-hidden rounded-full bg-slate-800">
