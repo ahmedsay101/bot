@@ -32,30 +32,74 @@ function StatCard({ label, value, sub, color }) {
   );
 }
 
-/* ── Step TP Progress Bar ──────────────────────────────────── */
-function StepProgress({ takeProfitProgress, currentTakeProfitPercent, stepCount }) {
+/* ── TP Progress Bar ────────────────────────────────────────── */
+function TpProgress({ takeProfitProgress, takeProfitPercent, filledLevels, numLevels }) {
   const progress = Math.min(100, Math.max(0, Number(takeProfitProgress) || 0));
   const barColor = progress >= 50 ? "bg-emerald-400" : "bg-amber-400";
 
   return (
     <div>
       <div className="mb-1 flex items-center justify-between text-xs text-slate-400">
-        <span>TP Target ({fmt(currentTakeProfitPercent)}% drop from entry)</span>
-        <span className="text-slate-300">Step #{stepCount || 0}</span>
+        <span>TP ({fmt(takeProfitPercent)}% below avg entry)</span>
+        <span className="text-slate-300">{filledLevels || 0}/{numLevels || 0} levels filled</span>
       </div>
       <div className="relative h-2.5 w-full overflow-hidden rounded-full bg-slate-800">
         <div className={`h-full rounded-full transition-all ${barColor}`} style={{ width: `${progress}%` }} />
       </div>
       <div className="mt-1 flex justify-between text-[10px] text-slate-600">
-        <span>Entry</span>
+        <span>Avg Entry</span>
         <span>{fmt(progress)}% toward TP</span>
       </div>
     </div>
   );
 }
 
-/* ── Step Trade History Table ──────────────────────────────── */
-function StepTradeTable({ trades }) {
+/* ── Levels Table ──────────────────────────────────────────── */
+function LevelsTable({ levels }) {
+  if (!levels || levels.length === 0) return (
+    <p className="py-3 text-center text-xs text-slate-600">No levels</p>
+  );
+
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-xs">
+        <thead>
+          <tr className="border-b border-white/5 text-left text-[10px] uppercase tracking-wider text-slate-500">
+            <th className="py-2 pr-3">Level</th>
+            <th className="py-2 pr-3">Target Price</th>
+            <th className="py-2 pr-3">Status</th>
+            <th className="py-2 pr-3 text-right">Fill Price</th>
+            <th className="py-2 text-right">Qty</th>
+          </tr>
+        </thead>
+        <tbody>
+          {levels.map((l) => {
+            const statusColors = {
+              filled: "bg-rose-500/20 text-rose-400 border-rose-500/30",
+              pending: "bg-amber-500/20 text-amber-400 border-amber-500/30",
+              closed: "bg-slate-500/20 text-slate-500 border-slate-500/30"
+            };
+            const sc = statusColors[l.status] || statusColors.pending;
+            return (
+              <tr key={l.index} className="border-b border-white/[0.03] hover:bg-white/[0.02]">
+                <td className="py-1.5 pr-3 font-mono text-slate-400">L{l.index}</td>
+                <td className="py-1.5 pr-3 font-mono text-slate-300">{fmtPrice(l.price)}</td>
+                <td className="py-1.5 pr-3">
+                  <span className={`rounded-md border px-1.5 py-0.5 text-[10px] font-bold uppercase ${sc}`}>{l.status}</span>
+                </td>
+                <td className="py-1.5 pr-3 text-right font-mono text-slate-300">{l.entryPrice ? fmtPrice(l.entryPrice) : "-"}</td>
+                <td className="py-1.5 text-right font-mono text-slate-400">{l.quantity ? fmt(l.quantity, 4) : "-"}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/* ── Trade History Table ───────────────────────────────────── */
+function TradeTable({ trades }) {
   if (!trades || trades.length === 0) return (
     <p className="py-3 text-center text-xs text-slate-600">No trades yet</p>
   );
@@ -65,9 +109,8 @@ function StepTradeTable({ trades }) {
       <table className="w-full text-xs">
         <thead className="sticky top-0 bg-slate-900/95">
           <tr className="border-b border-white/5 text-left text-[10px] uppercase tracking-wider text-slate-500">
-            <th className="py-2 pr-3">Step</th>
+            <th className="py-2 pr-3">Level</th>
             <th className="py-2 pr-3">Reason</th>
-            <th className="py-2 pr-3">TP%</th>
             <th className="py-2 pr-3 text-right">Entry</th>
             <th className="py-2 pr-3 text-right">Exit</th>
             <th className="py-2 pr-3 text-right">Qty</th>
@@ -79,23 +122,16 @@ function StepTradeTable({ trades }) {
         <tbody>
           {trades.slice().reverse().map((t, i) => (
             <tr key={i} className="border-b border-white/[0.03] hover:bg-white/[0.02]">
-              <td className="py-1.5 pr-3 font-mono text-slate-400">#{t.step}</td>
+              <td className="py-1.5 pr-3 font-mono text-slate-400">L{t.level}</td>
               <td className="py-1.5 pr-3">
-                <span className={t.reason === "take-profit" ? "text-emerald-400" : "text-rose-400"}>
-                  {t.reason}
-                </span>
+                <span className={t.reason === "take-profit" ? "text-emerald-400" : "text-rose-400"}>{t.reason}</span>
               </td>
-              <td className="py-1.5 pr-3 font-mono text-slate-400">{fmt(t.takeProfitPercent)}%</td>
               <td className="py-1.5 pr-3 text-right font-mono text-slate-300">{fmtPrice(t.entry)}</td>
               <td className="py-1.5 pr-3 text-right font-mono text-slate-300">{fmtPrice(t.exit)}</td>
               <td className="py-1.5 pr-3 text-right font-mono text-slate-400">{fmt(t.quantity, 4)}</td>
-              <td className={`py-1.5 pr-3 text-right font-mono font-bold ${pnlColor(t.grossPnl)}`}>
-                {fmt(t.grossPnl, 4)}
-              </td>
+              <td className={`py-1.5 pr-3 text-right font-mono font-bold ${pnlColor(t.grossPnl)}`}>{fmt(t.grossPnl, 4)}</td>
               <td className="py-1.5 pr-3 text-right font-mono text-slate-500">{fmt(t.fees, 4)}</td>
-              <td className={`py-1.5 text-right font-mono font-bold ${pnlColor(t.netPnl)}`}>
-                {fmt(t.netPnl, 4)}
-              </td>
+              <td className={`py-1.5 text-right font-mono font-bold ${pnlColor(t.netPnl)}`}>{fmt(t.netPnl, 4)}</td>
             </tr>
           ))}
         </tbody>
@@ -118,17 +154,18 @@ function TraderCard({ trader, onDestroy }) {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <h3 className="text-lg font-bold text-slate-100">{trader.symbol}</h3>
-            <span className="rounded-full px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider border bg-cyan-500/15 text-cyan-400 border-cyan-500/20">
-              STEP SHORT
+            <span className="rounded-full px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider border bg-violet-500/15 text-violet-400 border-violet-500/20">
+              LEVEL SHORT
             </span>
-            <span className="text-xs text-slate-500">
-              {trader.leverage}x
-            </span>
+            <span className="text-xs text-slate-500">{trader.leverage}x</span>
           </div>
           <div className="flex items-center gap-2">
             <div className="flex flex-wrap gap-2 text-xs">
-              <span className="rounded-full bg-white/5 border border-white/10 px-2.5 py-1 text-cyan-400">
-                Step #{trader.stepCount || 0}
+              <span className="rounded-full bg-white/5 border border-white/10 px-2.5 py-1 text-rose-400">
+                {trader.filledLevels || 0} filled
+              </span>
+              <span className="rounded-full bg-white/5 border border-white/10 px-2.5 py-1 text-amber-400">
+                {trader.pendingLevels || 0} pending
               </span>
               <span className={`rounded-full bg-white/5 border border-white/10 px-2.5 py-1 ${pnlColor(trader.realizedPnl)}`}>
                 Realized ${fmt(trader.realizedPnl)}
@@ -163,6 +200,49 @@ function TraderCard({ trader, onDestroy }) {
               <p className="font-mono text-slate-200">{fmtPrice(trader.lastPrice)}</p>
             </div>
             <div>
+              <span className="text-slate-500">Avg Entry</span>
+              <p className="font-mono text-slate-200">{fmtPrice(trader.averageEntry)}</p>
+            </div>
+            <div>
+              <span className="text-slate-500">Total Qty</span>
+              <p className="font-mono text-slate-200">{fmt(trader.totalQuantity, 4)}</p>
+            </div>
+          </div>
+          <TpProgress
+            takeProfitProgress={trader.takeProfitProgress}
+            takeProfitPercent={trader.takeProfitPercent}
+            filledLevels={trader.filledLevels}
+            numLevels={trader.numLevels}
+          />
+        </div>
+      </button>
+
+      {expanded && (
+        <div className="border-t border-white/5 p-5 space-y-5">
+          {/* Config summary */}
+          <div className="flex flex-wrap gap-3 text-xs text-slate-400">
+            <span>Levels: {trader.numLevels}</span>
+            <span>·</span>
+            <span>Gap: {fmt(trader.gapPercent)}%</span>
+            <span>·</span>
+            <span>SL: {fmt(trader.stopLossPercent)}%</span>
+            <span>·</span>
+            <span>TP: {fmt(trader.takeProfitPercent)}%</span>
+            <span>·</span>
+            <span>Fees: ${fmt(trader.feesPaid, 4)}</span>
+          </div>
+
+          {/* SL / TP prices */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+            <div>
+              <span className="text-slate-500">Stop Loss</span>
+              <p className="font-mono text-rose-400">{fmtPrice(trader.stopLossPrice)}</p>
+            </div>
+            <div>
+              <span className="text-slate-500">Take Profit</span>
+              <p className="font-mono text-emerald-400">{fmtPrice(trader.takeProfitPrice)}</p>
+            </div>
+            <div>
               <span className="text-slate-500">Highest</span>
               <p className="font-mono text-slate-200">{fmtPrice(trader.highestPrice)}</p>
             </div>
@@ -171,62 +251,21 @@ function TraderCard({ trader, onDestroy }) {
               <p className="font-mono text-slate-200">{fmtPrice(trader.lowestPrice)}</p>
             </div>
           </div>
-          <StepProgress
-            takeProfitProgress={trader.takeProfitProgress}
-            currentTakeProfitPercent={trader.currentTakeProfitPercent}
-            stepCount={trader.stepCount}
-          />
-        </div>
-      </button>
 
-      {expanded && (
-        <div className="border-t border-white/5 p-5 space-y-5">
-          {/* Step trader config */}
-          <div className="flex flex-wrap gap-3 text-xs text-slate-400">
-            <span>SL: {fmt(trader.stopLossPercent)}%</span>
-            <span>·</span>
-            <span>TP: {fmt(trader.currentTakeProfitPercent)}%</span>
-            <span>·</span>
-            <span>Step: {fmt(trader.stepPercent)}%</span>
-            <span>·</span>
-            <span>Steps taken: {trader.stepCount || 0}</span>
-            <span>·</span>
-            <span>Fees: ${fmt(trader.feesPaid, 4)}</span>
-          </div>
-
-          {/* Current position */}
-          {trader.entryPrice && (
-            <div>
-              <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-3">
-                Open Position
-              </h4>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-                <div>
-                  <span className="text-slate-500">Entry</span>
-                  <p className="font-mono text-slate-200">{fmtPrice(trader.entryPrice)}</p>
-                </div>
-                <div>
-                  <span className="text-slate-500">Stop Loss</span>
-                  <p className="font-mono text-rose-400">{fmtPrice(trader.stopLossPrice)}</p>
-                </div>
-                <div>
-                  <span className="text-slate-500">Take Profit</span>
-                  <p className="font-mono text-emerald-400">{fmtPrice(trader.takeProfitPrice)}</p>
-                </div>
-                <div>
-                  <span className="text-slate-500">Quantity</span>
-                  <p className="font-mono text-slate-200">{fmt(trader.quantity, 4)}</p>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Step trade history */}
+          {/* Levels */}
           <div>
             <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-3">
-              Step History ({trader.tradeHistory?.length || 0})
+              Levels ({trader.levels?.length || 0})
             </h4>
-            <StepTradeTable trades={trader.tradeHistory} />
+            <LevelsTable levels={trader.levels} />
+          </div>
+
+          {/* Trade History */}
+          <div>
+            <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-3">
+              Trade History ({trader.tradeHistory?.length || 0})
+            </h4>
+            <TradeTable trades={trader.tradeHistory} />
           </div>
         </div>
       )}
@@ -323,7 +362,8 @@ function App() {
     axios.delete(`${API_URL}/api/traders/${symbol}`).catch(() => {});
   }
 
-  const totalOpen = traders.reduce((s, t) => s + (t.openPositions || 0), 0);
+  const totalOpen = traders.reduce((s, t) => s + (t.filledLevels || 0), 0);
+  const totalPending = traders.reduce((s, t) => s + (t.pendingLevels || 0), 0);
 
   return (
     <div className="min-h-screen grid-bg text-slate-100">
@@ -332,7 +372,7 @@ function App() {
         {/* ── Header ── */}
         <div className="glass rounded-2xl px-6 py-5 flex flex-wrap items-center justify-between gap-4">
           <div>
-            <h1 className="text-2xl font-bold">Step Short Trader</h1>
+            <h1 className="text-2xl font-bold">Level Short Trader</h1>
             <p className="text-xs text-slate-500 mt-1">
               Binance Futures · {status.mode}
               <span className="ml-3">{socketStatus === "connected" ? "● Connected" : "○ Disconnected"}</span>
@@ -349,10 +389,11 @@ function App() {
         </div>
 
         {/* ── Main Stats Row ── */}
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-6">
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-7">
           <StatCard label="Balance" value={`$${fmt(status.balance)}`} />
           <StatCard label="Equity" value={`$${fmt(status.equity)}`} />
-          <StatCard label="Open Pos." value={totalOpen} color="text-rose-400" />
+          <StatCard label="Filled" value={totalOpen} color="text-rose-400" />
+          <StatCard label="Pending" value={totalPending} color="text-amber-400" />
           <StatCard label="Trades" value={performance.totalTrades} />
           <StatCard
             label="Net Profit"

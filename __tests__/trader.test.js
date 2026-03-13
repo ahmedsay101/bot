@@ -11,7 +11,7 @@ jest.mock("../src/state/store", () => ({
   getPerformance: jest.fn(() => ({ netProfit: 0 }))
 }));
 
-const StepTrader = require("../src/core/stepTrader");
+const LevelTrader = require("../src/core/levelTrader");
 const config = require("../src/utils/config");
 
 class FakeApi extends EventEmitter {
@@ -57,17 +57,22 @@ class FakeApi extends EventEmitter {
   async closePositionMarket() {
     return { status: "NONE" };
   }
+
+  async getPosition(symbol) {
+    return { qty: 0, entryPrice: 0 };
+  }
 }
 
-describe("StepTrader behavior", () => {
+describe("LevelTrader behavior", () => {
   const baseConfig = { ...config };
 
   beforeEach(() => {
     Object.assign(config, baseConfig, {
       mode: "test",
-      stepStopLossPercent: 10,
-      stepTakeProfitPercent: 10,
-      stepPercent: 10,
+      numLevels: 5,
+      levelGapPercent: 10,
+      levelStopLossPercent: 10,
+      levelTakeProfitPercent: 20,
       leverage: 2,
       feeRate: 0,
       startingBalanceUSDT: 100
@@ -78,100 +83,137 @@ describe("StepTrader behavior", () => {
     Object.assign(config, baseConfig);
   });
 
-  test("opens a SHORT market order on start", async () => {
+  test("fills level 0 immediately and places 4 pending limit orders", async () => {
     const api = new FakeApi({ price: 100 });
-    const trader = new StepTrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn() });
+    const trader = new LevelTrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn() });
 
     await trader.start();
 
-    expect(trader.position).not.toBeNull();
-    expect(trader.position.entryPrice).toBe(100);
-    expect(trader.position.stopLossPrice).toBeCloseTo(110); // 10% above
-    expect(trader.position.takeProfitPrice).toBeCloseTo(90); // 10% below start
-    expect(trader.stepCount).toBe(0);
+    expect(trader.levels).toHaveLength(5);
+    expect(trader.levels[0].status).toBe("filled");
+    expect(trader.levels[0].entryPrice).toBe(100);
+    for (let i = 1; i < 5; i++) {
+      expect(trader.levels[i].status).toBe("pending");
+    }
+    // 4 limit orders placed
+    expect(api.orders.size).toBe(4);
   });
 
-  test("destroys on take profit hit (price drops to TP)", async () => {
+  test("level prices are spaced by gapPercent", async () => {
     const api = new FakeApi({ price: 100 });
-    const onDestroy = jest.fn();
-    const trader = new StepTrader({ symbol: "TESTUSDT", api, onDestroy });
+    const trader = new LevelTrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn() });
 
     await trader.start();
 
-    // Price drops to 90 → TP hit
-    api.price = 90;
-    await trader._onMarkPrice({ symbol: "TESTUSDT", price: 90 });
+    expect(trader.levels[0].price).toBeCloseTo(100);
+    expect(trader.levels[1].price).toBeCloseTo(110);
+    expect(trader.levels[2].price).toBeCloseTo(120);
+    expect(trader.levels[3].price).toBeCloseTo(130);
+    expect(trader.levels[4].price).toBeCloseTo(140);
+  });
+
+  test("stop loss is above the highest level", async () => {
+    const api = new FakeApi({ price: 100 });
+    const trader = new LevelTrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn() });
+
+    await trader.start();
+
+    // Highest level = 140, SL = 140 * 1.10 = 154
+    expect(trader.stopLossPrice).toBeCloseTo(154);
+  });
+
+  test("take profit is below average entry of filled levels", async () => {
+    const api = new FakeApi({ price: 100 });
+    const trader = new LevelTrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn() });
+
+    await trader.start();
+
+    // Only L0 filled at 100, TP = 100 * (1 - 0.20) = 80
+    expect(trader.takeProfitPrice).toBeCloseTo(80);
+
+    // Fill L1 at 110
+    const l1Order = trader.levels[1].orderId;
+    const l1Qty = trader.levels[1].quantity;
+    api.emit("orderFilled", {
+      symbol: "TESTUSDT",
+      orderId: l1Order,
+      side: "SELL",
+      price: 110,
+      quantity: l1Qty
+    });
+
+    // Quantities differ per level (equity/levels/price), so average is weighted
+    const l0Qty = trader.levels[0].quantity;
+    const expectedAvg = (100 * l0Qty + 110 * l1Qty) / (l0Qty + l1Qty);
+    expect(trader.averageEntry).toBeCloseTo(expectedAvg, 4);
+    expect(trader.takeProfitPrice).toBeCloseTo(expectedAvg * 0.80, 4);
+  });
+
+  test("destroys on stop loss hit", async () => {
+    const api = new FakeApi({ price: 100 });
+    const onDestroy = jest.fn();
+    const trader = new LevelTrader({ symbol: "TESTUSDT", api, onDestroy });
+
+    await trader.start();
+
+    // SL at 154, price goes above it
+    api.price = 155;
+    await trader._onMarkPrice({ symbol: "TESTUSDT", price: 155 });
 
     expect(trader.active).toBe(false);
     expect(onDestroy).toHaveBeenCalledWith("TESTUSDT", expect.any(Number));
     expect(trader.tradeHistory.length).toBe(1);
-    expect(trader.tradeHistory[0].reason).toBe("take-profit");
-  });
-
-  test("steps up TP on stop loss, re-enters", async () => {
-    const api = new FakeApi({ price: 100 });
-    const trader = new StepTrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn() });
-
-    await trader.start();
-
-    // Price rises to 111 → SL hit (above 110)
-    api.price = 111;
-    await trader._onMarkPrice({ symbol: "TESTUSDT", price: 111 });
-
-    expect(trader.stepCount).toBe(1);
-    expect(trader.currentTakeProfitPercent).toBe(20); // 10 + 10
-    expect(trader.position).not.toBeNull();
-    expect(trader.position.entryPrice).toBe(111); // re-entered at 111
-    expect(trader.position.stopLossPrice).toBeCloseTo(122.1); // 10% above 111
-    expect(trader.position.takeProfitPrice).toBeCloseTo(88.8); // 20% below entry (111)
-    expect(trader.tradeHistory.length).toBe(1);
     expect(trader.tradeHistory[0].reason).toBe("stop-loss");
   });
 
-  test("multiple steps then TP hit", async () => {
+  test("destroys on take profit hit", async () => {
     const api = new FakeApi({ price: 100 });
     const onDestroy = jest.fn();
-    const trader = new StepTrader({ symbol: "TESTUSDT", api, onDestroy });
+    const trader = new LevelTrader({ symbol: "TESTUSDT", api, onDestroy });
 
     await trader.start();
 
-    // Step 1: SL at ~110, trigger above it
-    api.price = 111;
-    await trader._onMarkPrice({ symbol: "TESTUSDT", price: 111 });
-    expect(trader.stepCount).toBe(1);
-    expect(trader.currentTakeProfitPercent).toBe(20);
-
-    // Step 2: SL at ~122.1, trigger above it
-    api.price = 123;
-    await trader._onMarkPrice({ symbol: "TESTUSDT", price: 123 });
-    expect(trader.stepCount).toBe(2);
-    expect(trader.currentTakeProfitPercent).toBe(30);
-    // TP should be 30% below entry (123) = 86.1
-    expect(trader.position.takeProfitPrice).toBeCloseTo(86.1);
-
-    // Price drops to 86.1 → TP hit
-    api.price = 86;
-    await trader._onMarkPrice({ symbol: "TESTUSDT", price: 86 });
+    // Only L0 filled, TP at 80
+    api.price = 79;
+    await trader._onMarkPrice({ symbol: "TESTUSDT", price: 79 });
 
     expect(trader.active).toBe(false);
     expect(onDestroy).toHaveBeenCalled();
-    expect(trader.tradeHistory.length).toBe(3);
-    expect(trader.tradeHistory[2].reason).toBe("take-profit");
+    expect(trader.tradeHistory.length).toBe(1);
+    expect(trader.tradeHistory[0].reason).toBe("take-profit");
   });
 
-  test("SL always stays at stepStopLossPercent from entry", async () => {
-    config.stepStopLossPercent = 5;
-    const api = new FakeApi({ price: 200 });
-    const trader = new StepTrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn() });
+  test("filling additional levels recalculates average and TP", async () => {
+    config.numLevels = 3;
+    config.levelGapPercent = 10;
+    const api = new FakeApi({ price: 100 });
+    const trader = new LevelTrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn() });
 
     await trader.start();
+    const qty = trader.levels[0].quantity;
 
-    expect(trader.position.stopLossPrice).toBe(210); // 5% of 200
+    // Fill L1 at 110
+    api.emit("orderFilled", {
+      symbol: "TESTUSDT",
+      orderId: trader.levels[1].orderId,
+      side: "SELL",
+      price: 110,
+      quantity: qty
+    });
 
-    // Hit SL
-    api.price = 210;
-    await trader._onMarkPrice({ symbol: "TESTUSDT", price: 210 });
+    // Fill L2 at 120
+    api.emit("orderFilled", {
+      symbol: "TESTUSDT",
+      orderId: trader.levels[2].orderId,
+      side: "SELL",
+      price: 120,
+      quantity: qty
+    });
 
-    expect(trader.position.stopLossPrice).toBeCloseTo(220.5); // 5% of 210
+    // Average = (100 + 110 + 120) / 3 = 110
+    expect(trader.averageEntry).toBeCloseTo(110);
+    // TP = 110 * 0.80 = 88
+    expect(trader.takeProfitPrice).toBeCloseTo(88);
+    expect(trader.totalQuantity).toBeCloseTo(qty * 3);
   });
 });

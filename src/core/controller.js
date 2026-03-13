@@ -1,4 +1,4 @@
-const StepTrader = require("./stepTrader");
+const LevelTrader = require("./levelTrader");
 const { log } = require("../utils/logger");
 const config = require("../utils/config");
 const store = require("../state/store");
@@ -91,7 +91,7 @@ class Controller {
         }
       }
 
-      const trader = new StepTrader({
+      const trader = new LevelTrader({
         symbol,
         api: this.api,
         onDestroy: (sym) => this._onTraderDestroyed(sym)
@@ -99,7 +99,7 @@ class Controller {
       this.traders.set(symbol, trader);
       try {
         await trader.start();
-        log("CONTROLLER", `Launched STEP trader for ${symbol}`);
+        log("CONTROLLER", `Launched LEVEL trader for ${symbol}`);
       } catch (err) {
         log("CONTROLLER", `Trader ${symbol} failed to start: ${err.message}`);
         this.traders.delete(symbol);
