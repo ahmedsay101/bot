@@ -1,4 +1,4 @@
-const PerpetualTrader = require("./perpetualTrader");
+const TrapTrader = require("./trapTrader");
 const { log } = require("../utils/logger");
 const config = require("../utils/config");
 const store = require("../state/store");
@@ -91,18 +91,15 @@ class Controller {
         }
       }
 
-      store.setTraderType("PERPETUAL");
-
-      const trader = new PerpetualTrader({
+      const trader = new TrapTrader({
         symbol,
         api: this.api,
-        onDestroy: (sym) => this._onTraderDestroyed(sym),
-        leverage: Number(config.leverage) || 10
+        onDestroy: (sym) => this._onTraderDestroyed(sym)
       });
       this.traders.set(symbol, trader);
       try {
         await trader.start();
-        log("CONTROLLER", `Launched PERPETUAL trader for ${symbol}`);
+        log("CONTROLLER", `Launched TRAP trader for ${symbol}`);
       } catch (err) {
         log("CONTROLLER", `Trader ${symbol} failed to start: ${err.message}`);
         this.traders.delete(symbol);

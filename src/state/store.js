@@ -23,13 +23,6 @@ const state = {
     api: "unknown",
     ws: "unknown",
     updatedAt: null
-  },
-  traderType: "VOLATILITY",
-  regime: {
-    regime: "UNKNOWN",
-    confidence: 0,
-    expansionScore: 0,
-    compressionScore: 0
   }
 };
 
@@ -91,22 +84,6 @@ function recordTrade({ pnl, fees }) {
   state.pnlToday += gross - fee;
 }
 
-function setTraderType(traderType) {
-  state.traderType = traderType;
-}
-
-function setConsecutiveLosses(count) {
-  // Kept for backward compat – no-op now that regime is market-driven
-  // state.consecutiveLosses = count;
-}
-
-function setRegime(regime) {
-  state.regime = {
-    ...state.regime,
-    ...regime
-  };
-}
-
 function getStatus() {
   return {
     mode: state.mode,
@@ -115,9 +92,7 @@ function getStatus() {
     pnlToday: state.pnlToday,
     activeTraders: state.activeTraders.size,
     maxTraders: config.maxTraders,
-    marketStatus: state.marketStatus,
-    traderType: state.traderType,
-    regime: state.regime
+    marketStatus: state.marketStatus
   };
 }
 
@@ -177,10 +152,6 @@ module.exports = {
   setMarketStatus,
   setBalance,
   setEquity,
-  setCooldownStatus: setTraderType,
-  setTraderType,
-  setConsecutiveLosses,
-  setRegime,
   upsertTrader,
   removeTrader,
   recordTrade,

@@ -10,15 +10,21 @@ router.get("/traders", (req, res) => {
   const traders = store.getTraders().map((trader) => ({
     id: trader.id,
     symbol: trader.symbol,
+    traderType: trader.traderType,
     lastPrice: trader.lastPrice,
-    position: trader.position || null,
+    startPrice: trader.startPrice,
+    longEntryPrice: trader.longEntryPrice,
+    shortEntryPrice: trader.shortEntryPrice,
+    trapPercent: trader.trapPercent,
     leverage: trader.leverage,
-    notional: trader.notional,
+    openPositions: trader.openPositions || [],
+    pendingEntries: trader.pendingEntries || [],
     realizedPnl: trader.realizedPnl,
     unrealizedPnl: trader.unrealizedPnl,
-    wins: trader.wins,
-    losses: trader.losses,
+    feesPaid: trader.feesPaid,
+    highestNetProfit: trader.highestNetProfit,
     totalTrades: trader.totalTrades,
+    slCount: trader.slCount,
     tradeHistory: trader.tradeHistory || [],
     createdAt: trader.createdAt,
     status: trader.status
@@ -32,11 +38,14 @@ router.get("/traders/:id", (req, res) => {
 
   res.json({
     symbol: trader.symbol,
-    position: trader.position || null,
-    leverage: trader.leverage,
-    notional: trader.notional,
-    wins: trader.wins,
-    losses: trader.losses,
+    startPrice: trader.startPrice,
+    longEntryPrice: trader.longEntryPrice,
+    shortEntryPrice: trader.shortEntryPrice,
+    openPositions: trader.openPositions || [],
+    pendingEntries: trader.pendingEntries || [],
+    highestNetProfit: trader.highestNetProfit,
+    totalTrades: trader.totalTrades,
+    slCount: trader.slCount,
     tradeHistory: trader.tradeHistory || []
   });
 });
