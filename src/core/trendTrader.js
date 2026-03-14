@@ -272,6 +272,7 @@ class TrendTrader {
         if (price >= this.stopLossPrice) {
           log(`TREND ${this.symbol}`, `SL hit @ ${fmt(price, 6)} (entry=${fmt(this.entryPrice, 6)} SL=${fmt(this.stopLossPrice, 6)})`);
           await this._closePosition("stop-loss", price);
+          if (this.wins > this.losses) { await this.destroy("wins-exceed-losses"); return; }
           // Flip: open LONG
           await this._openPosition("LONG");
           this._updateStore();
@@ -281,6 +282,7 @@ class TrendTrader {
         if (price <= this.takeProfitPrice) {
           log(`TREND ${this.symbol}`, `TP hit @ ${fmt(price, 6)} (entry=${fmt(this.entryPrice, 6)} TP=${fmt(this.takeProfitPrice, 6)})`);
           await this._closePosition("take-profit", price);
+          if (this.wins > this.losses) { await this.destroy("wins-exceed-losses"); return; }
           // Same direction: open SHORT again
           await this._openPosition("SHORT");
           this._updateStore();
@@ -291,6 +293,7 @@ class TrendTrader {
         if (price <= this.stopLossPrice) {
           log(`TREND ${this.symbol}`, `SL hit @ ${fmt(price, 6)} (entry=${fmt(this.entryPrice, 6)} SL=${fmt(this.stopLossPrice, 6)})`);
           await this._closePosition("stop-loss", price);
+          if (this.wins > this.losses) { await this.destroy("wins-exceed-losses"); return; }
           // Flip: open SHORT
           await this._openPosition("SHORT");
           this._updateStore();
@@ -300,6 +303,7 @@ class TrendTrader {
         if (price >= this.takeProfitPrice) {
           log(`TREND ${this.symbol}`, `TP hit @ ${fmt(price, 6)} (entry=${fmt(this.entryPrice, 6)} TP=${fmt(this.takeProfitPrice, 6)})`);
           await this._closePosition("take-profit", price);
+          if (this.wins > this.losses) { await this.destroy("wins-exceed-losses"); return; }
           // Same direction: open LONG again
           await this._openPosition("LONG");
           this._updateStore();
