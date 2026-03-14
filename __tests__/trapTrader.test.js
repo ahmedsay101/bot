@@ -376,4 +376,44 @@ describe("TrapTrader", () => {
     expect(trader.tradeHistory[0].entry).toBeCloseTo(101, 6);
     expect(trader.tradeHistory[0].exit).toBe(100);
   });
+
+  test("trapPercent is derived from changePercent (24h change / 10, rounded)", async () => {
+    const api = new FakeApi({ price: 100 });
+    const trader = new TrapTrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn(), changePercent: 53 });
+    expect(trader.trapPercent).toBe(5); // Math.round(53/10) = 5
+
+    const trader2 = new TrapTrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn(), changePercent: 100 });
+    expect(trader2.trapPercent).toBe(10); // Math.round(100/10) = 10
+  });
+
+  test("destroys when net profit >= trapPercent% of equity", async () => {
+    config.feeRate = 0;
+    config.leverage = 10;
+    config.equityFraction = 1;
+    const api = new FakeApi({ price: 100 });
+    const onDestroy = jest.fn();
+    // changePercent=50 → trapPercent=5 → target = 1000 * 5/100 = $50
+    const trader = new TrapTrader({ symbol: "TESTUSDT", api, onDestroy, changePercent: 50 });
+    await trader.start();
+    expect(trader.trapPercent).toBe(5);
+
+    // SHORT entry price = 100 * (1 - 5/100) = 95
+    const entries = Array.from(trader.pendingEntriesById.values());
+    const shortEntry = entries.find(e => e.direction === "SHORT");
+    api.price = 95;
+    trader.lastPrice = 95;
+    emitFill(api, shortEntry.orderId);
+    const pos = Array.from(trader.positions.values())[0];
+    const qty = pos.quantity;
+
+    // Price drops so unrealized >= $50: PnL = (95 - price) * qty >= 50
+    const targetPrice = 95 - (50 / qty) - 0.01;
+    api.price = targetPrice;
+    trader.lastPrice = targetPrice;
+    await trader._checkTakeProfit(targetPrice);
+
+    // trader should have self-destroyed
+    expect(trader.active).toBe(false);
+    expect(onDestroy).toHaveBeenCalled();
+  });
 });

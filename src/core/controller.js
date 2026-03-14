@@ -76,7 +76,9 @@ class Controller {
 
     const candidates = await this.scanner.scan();
 
-    for (const symbol of candidates) {
+    for (const candidate of candidates) {
+      const symbol = candidate.symbol;
+      const changePercent = candidate.change;
       if (this.traders.size >= config.maxTraders) break;
       if (this.traders.has(symbol)) continue;
 
@@ -94,6 +96,7 @@ class Controller {
       const trader = new TrapTrader({
         symbol,
         api: this.api,
+        changePercent,
         onDestroy: (sym) => this._onTraderDestroyed(sym)
       });
       this.traders.set(symbol, trader);

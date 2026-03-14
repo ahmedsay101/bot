@@ -27,11 +27,13 @@ function fmt(value, digits = 2) {
  * SL logic (test vs live) follows the expansion trader pattern.
  */
 class TrapTrader {
-  constructor({ symbol, api, onDestroy }) {
+  constructor({ symbol, api, onDestroy, changePercent }) {
     this.id = `${symbol}-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
     this.symbol = symbol;
     this.api = api;
     this.onDestroy = onDestroy;
+    this.changePercent = Number(changePercent) || 0;
+    this.trapPercent = Math.round(this.changePercent / 10) || Number(config.trapPercent) || 1;
 
     this.active = true;
     this.createdAt = new Date().toISOString();
@@ -68,7 +70,7 @@ class TrapTrader {
 
   // ── Config helpers ──────────────────────────────────────────
 
-  get _trapPercent() { return Number(config.trapPercent) || 1; }
+  get _trapPercent() { return this.trapPercent || Number(config.trapPercent) || 1; }
   get _feeRate() { return config.feeRate != null ? Number(config.feeRate) : 0.0004; }
 
   _calcQuantity(price) {
@@ -452,6 +454,7 @@ class TrapTrader {
     if (!this.active || symbol !== this.symbol) return;
     this.lastPrice = price;
     await this._maybeForceClose(price);
+    await this._checkTakeProfit(price);
     this._trackHighestProfit();
     this._updateStore();
   }
@@ -471,8 +474,22 @@ class TrapTrader {
     if (!Number.isFinite(price)) return;
     this.lastPrice = price;
     await this._maybeForceClose(price);
+    await this._checkTakeProfit(price);
     this._trackHighestProfit();
     this._updateStore();
+  }
+
+  // ── Take-profit check: destroy if net profit >= trapPercent% of equity ──
+
+  async _checkTakeProfit(price) {
+    if (!this.active) return;
+    const unrealized = this._calcUnrealizedPnl(price);
+    const netProfit = this.realizedPnl + unrealized;
+    const tpTarget = this.equity * (this._trapPercent / 100);
+    if (netProfit >= tpTarget) {
+      log(`TRAP ${this.symbol}`, `Net profit $${fmt(netProfit)} >= ${this._trapPercent}% of equity ($${fmt(tpTarget)}) — destroying`);
+      await this.destroy("take-profit");
+    }
   }
 
   // ── Test mode SL simulation (expansion trader pattern) ─────
