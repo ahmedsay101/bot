@@ -69,7 +69,7 @@ class TrendTrader {
   _calcQuantity(price) {
     const equity = this._equity || Number(config.startingBalanceUSDT) || 200;
     const leverage = Number(config.leverage) || 2;
-    const notional = equity * leverage;
+    const notional = equity * 0.9 * leverage;
     if (notional <= 0 || price <= 0) return 0;
     return Number((notional / price).toFixed(4));
   }
