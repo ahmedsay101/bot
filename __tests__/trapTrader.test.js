@@ -66,10 +66,10 @@ describe("TrapTrader", () => {
     jest.clearAllMocks();
     Object.assign(config, baseConfig, {
       mode: "test",
-      trapPercent: 1,
       leverage: 10,
       equityFraction: 0.10,
       feeRate: 0,
+      destroyAfterSL: 0,
       startingBalanceUSDT: 1000
     });
   });
@@ -80,7 +80,7 @@ describe("TrapTrader", () => {
 
   test("places two stop-limit entry orders on start", async () => {
     const api = new FakeApi({ price: 100 });
-    const trader = new TrapTrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn() });
+    const trader = new TrapTrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn(), changePercent: 10 });
     await trader.start();
 
     expect(trader.startPrice).toBe(100);
@@ -99,7 +99,7 @@ describe("TrapTrader", () => {
 
   test("creates position with SL at startPrice when entry fills", async () => {
     const api = new FakeApi({ price: 100 });
-    const trader = new TrapTrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn() });
+    const trader = new TrapTrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn(), changePercent: 10 });
     await trader.start();
 
     // Fill the LONG entry — price must be at entry level so SL doesn't trigger immediately
@@ -123,7 +123,7 @@ describe("TrapTrader", () => {
 
   test("closes position on SL hit in test mode and re-places entry", async () => {
     const api = new FakeApi({ price: 100 });
-    const trader = new TrapTrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn() });
+    const trader = new TrapTrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn(), changePercent: 10 });
     await trader.start();
 
     // Fill the LONG entry at entry price
@@ -153,7 +153,7 @@ describe("TrapTrader", () => {
 
   test("SHORT entry fills and SL triggers correctly", async () => {
     const api = new FakeApi({ price: 100 });
-    const trader = new TrapTrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn() });
+    const trader = new TrapTrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn(), changePercent: 10 });
     await trader.start();
 
     // Fill the SHORT entry at entry price
@@ -185,7 +185,7 @@ describe("TrapTrader", () => {
   test("tracks PnL correctly after SL hit", async () => {
     config.feeRate = 0;
     const api = new FakeApi({ price: 100 });
-    const trader = new TrapTrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn() });
+    const trader = new TrapTrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn(), changePercent: 10 });
     await trader.start();
 
     // Fill LONG at 101
@@ -212,7 +212,7 @@ describe("TrapTrader", () => {
   test("tracks highestNetProfit", async () => {
     config.feeRate = 0;
     const api = new FakeApi({ price: 100 });
-    const trader = new TrapTrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn() });
+    const trader = new TrapTrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn(), changePercent: 10 });
     await trader.start();
 
     // Fill LONG at 101
@@ -243,7 +243,7 @@ describe("TrapTrader", () => {
 
   test("both entries can fill simultaneously", async () => {
     const api = new FakeApi({ price: 100 });
-    const trader = new TrapTrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn() });
+    const trader = new TrapTrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn(), changePercent: 10 });
     await trader.start();
 
     const entries = Array.from(trader.pendingEntriesById.values());
@@ -266,7 +266,7 @@ describe("TrapTrader", () => {
   test("destroy cancels all orders and closes positions", async () => {
     const api = new FakeApi({ price: 100 });
     const onDestroy = jest.fn();
-    const trader = new TrapTrader({ symbol: "TESTUSDT", api, onDestroy });
+    const trader = new TrapTrader({ symbol: "TESTUSDT", api, onDestroy, changePercent: 10 });
     await trader.start();
 
     // Fill LONG
@@ -288,7 +288,7 @@ describe("TrapTrader", () => {
   test("live mode: SL order fill triggers close and re-entry", async () => {
     config.mode = "live";
     const api = new FakeApi({ price: 100 });
-    const trader = new TrapTrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn() });
+    const trader = new TrapTrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn(), changePercent: 10 });
     await trader.start();
 
     // Fill the LONG entry
@@ -328,7 +328,7 @@ describe("TrapTrader", () => {
   test("SL rejected triggers market close", async () => {
     config.mode = "live";
     const api = new FakeApi({ price: 100 });
-    const trader = new TrapTrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn() });
+    const trader = new TrapTrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn(), changePercent: 10 });
     await trader.start();
 
     // Fill LONG entry
@@ -358,7 +358,7 @@ describe("TrapTrader", () => {
   test("trade history is recorded", async () => {
     config.feeRate = 0;
     const api = new FakeApi({ price: 100 });
-    const trader = new TrapTrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn() });
+    const trader = new TrapTrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn(), changePercent: 10 });
     await trader.start();
 
     // Fill and SL LONG
@@ -413,6 +413,42 @@ describe("TrapTrader", () => {
     await trader._checkTakeProfit(targetPrice);
 
     // trader should have self-destroyed
+    expect(trader.active).toBe(false);
+    expect(onDestroy).toHaveBeenCalled();
+  });
+
+  test("destroys after configured number of stop losses", async () => {
+    config.feeRate = 0;
+    config.destroyAfterSL = 2;
+    const api = new FakeApi({ price: 100 });
+    const onDestroy = jest.fn();
+    const trader = new TrapTrader({ symbol: "TESTUSDT", api, onDestroy, changePercent: 10 });
+    await trader.start();
+
+    // First SL: fill LONG at 101, SL at 100
+    const entries1 = Array.from(trader.pendingEntriesById.values());
+    const longEntry1 = entries1.find(e => e.direction === "LONG");
+    api.price = 101;
+    trader.lastPrice = 101;
+    emitFill(api, longEntry1.orderId);
+    api.price = 100;
+    await trader._maybeForceClose(100);
+
+    // After 1 SL, trader should still be active
+    expect(trader.slCount).toBe(1);
+    expect(trader.active).toBe(true);
+
+    // Second SL: fill the re-placed LONG at 101, SL at 100
+    const entries2 = Array.from(trader.pendingEntriesById.values());
+    const longEntry2 = entries2.find(e => e.direction === "LONG");
+    api.price = 101;
+    trader.lastPrice = 101;
+    emitFill(api, longEntry2.orderId);
+    api.price = 100;
+    await trader._maybeForceClose(100);
+
+    // After 2 SLs, trader should be destroyed
+    expect(trader.slCount).toBe(2);
     expect(trader.active).toBe(false);
     expect(onDestroy).toHaveBeenCalled();
   });

@@ -8,7 +8,7 @@ const config = {
   feeRate: 0.0004,
   equityFraction: 0.9,
   leverage: 2,
-  trapPercent: 1,
+  destroyAfterSL: 1,
   startingBalanceUSDT: 200,
   scannerIntervalMs: 1 * 60 * 1000,
   recvWindow: 5000

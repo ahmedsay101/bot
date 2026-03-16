@@ -33,7 +33,7 @@ class TrapTrader {
     this.api = api;
     this.onDestroy = onDestroy;
     this.changePercent = Number(changePercent) || 0;
-    this.trapPercent = Math.round(this.changePercent / 10) || Number(config.trapPercent) || 1;
+    this.trapPercent = Math.round(this.changePercent / 10) || 3;
 
     this.active = true;
     this.createdAt = new Date().toISOString();
@@ -70,7 +70,7 @@ class TrapTrader {
 
   // ── Config helpers ──────────────────────────────────────────
 
-  get _trapPercent() { return this.trapPercent || Number(config.trapPercent) || 1; }
+  get _trapPercent() { return this.trapPercent || 1; }
   get _feeRate() { return config.feeRate != null ? Number(config.feeRate) : 0.0004; }
 
   _calcQuantity(price) {
@@ -408,6 +408,14 @@ class TrapTrader {
     // Update highest net profit
     this._trackHighestProfit();
     this._updateStore();
+
+    // Destroy if SL count reached the configured limit
+    const maxSL = Number(config.destroyAfterSL) || 0;
+    if (this.active && maxSL > 0 && this.slCount >= maxSL) {
+      log(`TRAP ${this.symbol}`, `SL count ${this.slCount} reached limit ${maxSL} — destroying`);
+      await this.destroy("max-stop-losses");
+      return;
+    }
 
     // After SL hit, re-place the same entry order at the saved price
     if (this.active && (reason === "stop-loss" || reason === "sl-rejected")) {
