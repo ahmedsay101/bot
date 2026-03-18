@@ -10,6 +10,8 @@ class Controller {
     this.traders = new Map();
     this.leverageSet = new Set();
     this._scanning = false;
+    this.equityFraction = Number(config.equityFraction) || 0.9;
+    this.traderResults = []; // { symbol, result: "win"|"loss", pnl, time }
   }
 
   async start() {
@@ -97,7 +99,8 @@ class Controller {
         symbol,
         api: this.api,
         changePercent,
-        onDestroy: (sym) => this._onTraderDestroyed(sym)
+        equityFraction: this.equityFraction,
+        onDestroy: (sym, pnl, reason) => this._onTraderDestroyed(sym, pnl, reason)
       });
       this.traders.set(symbol, trader);
       try {
@@ -132,9 +135,20 @@ class Controller {
     await this.api.updateSymbols(symbols);
   }
 
-  async _onTraderDestroyed(symbol) {
+  async _onTraderDestroyed(symbol, pnl, reason) {
     if (!this.traders.has(symbol)) return;
     this.traders.delete(symbol);
+
+    const isWin = reason === "take-profit";
+    const isLoss = reason === "max-stop-losses";
+    if (isWin || isLoss) {
+      const result = isWin ? "win" : "loss";
+      this.traderResults.push({ symbol, result, pnl, time: new Date().toISOString() });
+      this.equityFraction = isWin ? 0.9 : 0.1;
+      store.setTraderResults(this.traderResults);
+      log("CONTROLLER", `Trader ${symbol} ${result} | equityFraction → ${this.equityFraction}`);
+    }
+
     log("CONTROLLER", `Trader ${symbol} destroyed`);
     await this._refreshMarketStreams();
   }

@@ -27,13 +27,14 @@ function fmt(value, digits = 2) {
  * SL logic (test vs live) follows the expansion trader pattern.
  */
 class TrapTrader {
-  constructor({ symbol, api, onDestroy, changePercent }) {
+  constructor({ symbol, api, onDestroy, changePercent, equityFraction }) {
     this.id = `${symbol}-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
     this.symbol = symbol;
     this.api = api;
     this.onDestroy = onDestroy;
     this.changePercent = Number(changePercent) || 0;
     this.trapPercent = Math.round(this.changePercent / 10) || 3;
+    this.equityFraction = Number(equityFraction) || Number(config.equityFraction) || 0.9;
 
     this.active = true;
     this.createdAt = new Date().toISOString();
@@ -76,7 +77,7 @@ class TrapTrader {
   _calcQuantity(price) {
     const equity = this.equity || Number(config.startingBalanceUSDT) || 200;
     const leverage = Number(config.leverage) || 10;
-    const fraction = Number(config.equityFraction) || 0.9;
+    const fraction = this.equityFraction;
     const notional = equity * fraction * leverage;
     if (notional <= 0 || price <= 0) return 0;
     return Number((notional / price).toFixed(4));
@@ -186,7 +187,7 @@ class TrapTrader {
     });
 
     log(`TRAP ${this.symbol}`, `Destroyed (${reason}) | PnL $${fmt(this.realizedPnl)} | Trades=${this.totalTrades} | Peak=$${fmt(this.highestNetProfit)}`);
-    if (this.onDestroy) this.onDestroy(this.symbol, this.realizedPnl);
+    if (this.onDestroy) this.onDestroy(this.symbol, this.realizedPnl, reason);
   }
 
   // ── Order matching helper (from expansion trader) ──────────

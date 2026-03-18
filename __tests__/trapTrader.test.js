@@ -282,7 +282,7 @@ describe("TrapTrader", () => {
     expect(trader.active).toBe(false);
     expect(trader.positions.size).toBe(0);
     expect(store.removeTrader).toHaveBeenCalled();
-    expect(onDestroy).toHaveBeenCalledWith("TESTUSDT", expect.any(Number));
+    expect(onDestroy).toHaveBeenCalledWith("TESTUSDT", expect.any(Number), "manual");
   });
 
   test("live mode: SL order fill triggers close and re-entry", async () => {
