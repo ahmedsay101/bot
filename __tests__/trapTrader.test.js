@@ -386,14 +386,14 @@ describe("TrapTrader", () => {
     expect(trader2.trapPercent).toBe(10); // Math.round(100/10) = 10
   });
 
-  test("destroys when net profit >= trapPercent% of equity", async () => {
+  test("destroys when net profit >= tp target", async () => {
     config.feeRate = 0;
     config.leverage = 10;
     config.equityFraction = 1;
     const api = new FakeApi({ price: 100 });
     const onDestroy = jest.fn();
-    // changePercent=50 → trapPercent=5 → target = 1000 * 5/100 = $50
-    const trader = new TrapTrader({ symbol: "TESTUSDT", api, onDestroy, changePercent: 50 });
+    // changePercent=50 → trapPercent=5 → target = 1000 * 1 * 10 * 5/100 = $500
+    const trader = new TrapTrader({ symbol: "TESTUSDT", api, onDestroy, changePercent: 50, equityFraction: 1 });
     await trader.start();
     expect(trader.trapPercent).toBe(5);
 
@@ -406,8 +406,8 @@ describe("TrapTrader", () => {
     const pos = Array.from(trader.positions.values())[0];
     const qty = pos.quantity;
 
-    // Price drops so unrealized >= $50: PnL = (95 - price) * qty >= 50
-    const targetPrice = 95 - (50 / qty) - 0.01;
+    // Price drops so unrealized >= $500: PnL = (95 - price) * qty >= 500
+    const targetPrice = 95 - (500 / qty) - 0.01;
     api.price = targetPrice;
     trader.lastPrice = targetPrice;
     await trader._checkTakeProfit(targetPrice);

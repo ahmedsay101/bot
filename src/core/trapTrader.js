@@ -494,9 +494,10 @@ class TrapTrader {
     if (!this.active) return;
     const unrealized = this._calcUnrealizedPnl(price);
     const netProfit = this.realizedPnl + unrealized;
-    const tpTarget = this.equity * (this._trapPercent / 100);
+    const leverage = Number(config.leverage) || 2;
+    const tpTarget = this.equity * this.equityFraction * leverage * (this._trapPercent / 100);
     if (netProfit >= tpTarget) {
-      log(`TRAP ${this.symbol}`, `Net profit $${fmt(netProfit)} >= ${this._trapPercent}% of equity ($${fmt(tpTarget)}) — destroying`);
+      log(`TRAP ${this.symbol}`, `Net profit $${fmt(netProfit)} >= TP target ($${fmt(tpTarget)}) — destroying`);
       await this.destroy("take-profit");
     }
   }
