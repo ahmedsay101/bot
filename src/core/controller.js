@@ -1,4 +1,4 @@
-const TrapTrader = require("./trapTrader");
+const DCATrader = require("./dcaTrader");
 const { log } = require("../utils/logger");
 const config = require("../utils/config");
 const store = require("../state/store");
@@ -84,6 +84,9 @@ class Controller {
       if (this.traders.size >= config.maxTraders) break;
       if (this.traders.has(symbol)) continue;
 
+      const minPct = Number(config.minPctRequired) || 0;
+      if (minPct > 0 && changePercent < minPct) continue;
+
       if (config.mode === "live" && !this.leverageSet.has(symbol)) {
         try {
           await this.api.setLeverage(symbol, config.leverage);
@@ -95,17 +98,16 @@ class Controller {
         }
       }
 
-      const trader = new TrapTrader({
+      const trader = new DCATrader({
         symbol,
         api: this.api,
         changePercent,
-        equityFraction: this.equityFraction,
         onDestroy: (sym, pnl, reason) => this._onTraderDestroyed(sym, pnl, reason)
       });
       this.traders.set(symbol, trader);
       try {
         await trader.start();
-        log("CONTROLLER", `Launched TRAP trader for ${symbol}`);
+        log("CONTROLLER", `Launched DCA trader for ${symbol}`);
       } catch (err) {
         log("CONTROLLER", `Trader ${symbol} failed to start: ${err.message}`);
         this.traders.delete(symbol);

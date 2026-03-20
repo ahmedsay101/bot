@@ -46,7 +46,7 @@ class SymbolScanner {
 
     return candidates
       .sort((a, b) => b.change - a.change)
-      .slice(0, Math.max(1, Number(config.maxTraders) || 1))
+      .slice(0, 10)
       .map((t) => ({ symbol: t.symbol, change: t.change }));
   }
 }

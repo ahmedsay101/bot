@@ -32,82 +32,89 @@ function StatCard({ label, value, sub, color }) {
   );
 }
 
-/* ── Trap Level Indicator ──────────────────────────────────── */
-function TrapLevelIndicator({ trader }) {
+/* ── DCA Level Indicator ───────────────────────────────────── */
+function DCALevelIndicator({ trader }) {
   const price = Number(trader.lastPrice);
-  const start = Number(trader.startPrice);
-  const longEntry = Number(trader.longEntryPrice);
-  const shortEntry = Number(trader.shortEntryPrice);
-  if (!Number.isFinite(price) || !Number.isFinite(start)) return null;
+  const tp = Number(trader.tpPrice);
+  const orders = trader.orders || [];
+  if (!Number.isFinite(price) || orders.length === 0) return null;
 
-  const range = longEntry - shortEntry;
-  const pricePct = range > 0 ? ((price - shortEntry) / range) * 100 : 50;
-  const clampedPct = Math.max(0, Math.min(100, pricePct));
+  const highest = orders[orders.length - 1]?.targetPrice || price;
+  const low = Math.min(tp || price, price) * 0.95;
+  const high = highest * 1.05;
+  const range = high - low || 1;
+  const pct = (v) => Math.max(0, Math.min(100, ((v - low) / range) * 100));
 
   return (
     <div className="space-y-1">
       <div className="flex justify-between text-[10px] text-slate-500">
-        <span>SHORT {fmtPrice(shortEntry)}</span>
-        <span>SL {fmtPrice(start)}</span>
-        <span>LONG {fmtPrice(longEntry)}</span>
+        <span>TP {fmtPrice(tp)}</span>
+        <span>Avg {fmtPrice(trader.averagePrice)}</span>
+        <span>#{orders.length - 1} {fmtPrice(highest)}</span>
       </div>
       <div className="relative h-3 w-full overflow-hidden rounded-full bg-slate-800">
-        {/* Short zone */}
-        <div className="absolute left-0 h-full w-1/2 bg-rose-500/15" />
-        {/* Long zone */}
-        <div className="absolute right-0 h-full w-1/2 bg-emerald-500/15" />
-        {/* Center line (SL) */}
-        <div className="absolute left-1/2 top-0 h-full w-0.5 -translate-x-1/2 bg-amber-400/60" />
+        {/* TP zone */}
+        <div
+          className="absolute h-full bg-emerald-500/15"
+          style={{ left: 0, width: `${pct(tp)}%` }}
+        />
+        {/* TP line */}
+        {Number.isFinite(tp) && tp > 0 && (
+          <div
+            className="absolute top-0 h-full w-0.5 bg-emerald-400/80"
+            style={{ left: `${pct(tp)}%` }}
+          />
+        )}
+        {/* Average line */}
+        {Number.isFinite(trader.averagePrice) && trader.averagePrice > 0 && (
+          <div
+            className="absolute top-0 h-full w-0.5 bg-amber-400/60"
+            style={{ left: `${pct(trader.averagePrice)}%` }}
+          />
+        )}
+        {/* Order dots */}
+        {orders.map((o, i) => (
+          <div
+            key={i}
+            className={`absolute top-1/2 -translate-y-1/2 w-1.5 h-1.5 rounded-full ${
+              o.filled
+                ? "bg-rose-400 shadow-sm shadow-rose-400/50"
+                : "bg-slate-600 border border-slate-500"
+            }`}
+            style={{ left: `calc(${pct(o.targetPrice)}% - 3px)` }}
+          />
+        ))}
         {/* Price marker */}
         <div
           className="absolute top-0 h-full w-1.5 rounded-full bg-sky-400 shadow-lg shadow-sky-400/50 transition-all"
-          style={{ left: `calc(${clampedPct}% - 3px)` }}
+          style={{ left: `calc(${pct(price)}% - 3px)` }}
         />
       </div>
     </div>
   );
 }
 
-/* ── Open Position Row ─────────────────────────────────────── */
-function PositionRow({ pos }) {
+/* ── DCA Order Row ─────────────────────────────────────────── */
+function DCAOrderRow({ order }) {
   return (
     <div className="flex items-center justify-between rounded-xl bg-slate-800/40 px-4 py-2.5">
       <div className="flex items-center gap-2">
-        <span className={`rounded-md px-2 py-0.5 text-xs font-bold uppercase ${
-          pos.direction === "LONG"
-            ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30"
-            : "bg-rose-500/20 text-rose-400 border border-rose-500/30"
+        <span className="text-[10px] font-bold text-slate-500">#{order.level}</span>
+        <span className={`rounded-md px-2 py-0.5 text-[10px] font-bold uppercase ${
+          order.filled
+            ? "bg-rose-500/20 text-rose-400 border border-rose-500/30"
+            : "bg-slate-700/50 text-slate-500 border border-dashed border-white/10"
         }`}>
-          {pos.direction}
+          {order.filled ? "FILLED" : "PENDING"}
         </span>
-        <span className="text-xs font-mono text-slate-300">@ {fmtPrice(pos.entryPrice)}</span>
-        <span className="text-[10px] text-slate-500">qty {fmt(pos.quantity, 4)}</span>
+        <span className="text-xs font-mono text-slate-300">@ {fmtPrice(order.targetPrice)}</span>
       </div>
       <div className="flex items-center gap-3">
-        <span className="text-[10px] text-slate-500">SL {fmtPrice(pos.stopLossPrice)}</span>
-        <span className={`text-xs font-mono font-bold ${pnlColor(pos.unrealizedPnl)}`}>
-          ${fmt(pos.unrealizedPnl, 4)}
-        </span>
+        <span className="text-[10px] text-slate-500">qty {fmt(order.quantity, 4)}</span>
+        {order.filled && order.fillPrice && (
+          <span className="text-[10px] text-slate-400">fill {fmtPrice(order.fillPrice)}</span>
+        )}
       </div>
-    </div>
-  );
-}
-
-/* ── Pending Entry Row ─────────────────────────────────────── */
-function PendingEntryRow({ entry }) {
-  return (
-    <div className="flex items-center justify-between rounded-xl bg-slate-800/20 border border-dashed border-white/10 px-4 py-2">
-      <div className="flex items-center gap-2">
-        <span className={`rounded-md px-2 py-0.5 text-[10px] font-bold uppercase ${
-          entry.direction === "LONG"
-            ? "bg-emerald-500/10 text-emerald-500/70 border border-emerald-500/20"
-            : "bg-rose-500/10 text-rose-500/70 border border-rose-500/20"
-        }`}>
-          {entry.direction}
-        </span>
-        <span className="text-xs text-slate-500">pending</span>
-      </div>
-      <span className="text-xs font-mono text-slate-400">@ {fmtPrice(entry.price)}</span>
     </div>
   );
 }
@@ -126,7 +133,7 @@ function TradeTable({ trades }) {
             <th className="py-2 pr-3">#</th>
             <th className="py-2 pr-3">Dir</th>
             <th className="py-2 pr-3">Reason</th>
-            <th className="py-2 pr-3 text-right">Entry</th>
+            <th className="py-2 pr-3 text-right">Avg Entry</th>
             <th className="py-2 pr-3 text-right">Exit</th>
             <th className="py-2 pr-3 text-right">Qty</th>
             <th className="py-2 pr-3 text-right">Gross</th>
@@ -139,9 +146,7 @@ function TradeTable({ trades }) {
             <tr key={i} className="border-b border-white/[0.03] hover:bg-white/[0.02]">
               <td className="py-1.5 pr-3 text-slate-500">{trades.length - i}</td>
               <td className="py-1.5 pr-3">
-                <span className={t.direction === "LONG" ? "text-emerald-400" : "text-rose-400"}>
-                  {t.direction}
-                </span>
+                <span className="text-rose-400">{t.direction}</span>
               </td>
               <td className="py-1.5 pr-3 text-slate-400">{t.reason}</td>
               <td className="py-1.5 pr-3 text-right font-mono text-slate-300">{fmtPrice(t.entry)}</td>
@@ -165,8 +170,9 @@ function TradeTable({ trades }) {
 /* ── Trader Card ───────────────────────────────────────────── */
 function TraderCard({ trader, onDestroy }) {
   const [expanded, setExpanded] = useState(false);
-  const openPositions = trader.openPositions || [];
-  const pendingEntries = trader.pendingEntries || [];
+  const orders = trader.orders || [];
+  const filledCount = trader.filledCount || 0;
+  const numOrders = trader.numOrders || orders.length;
   const netPnl = (trader.realizedPnl || 0) + (trader.unrealizedPnl || 0);
 
   return (
@@ -179,29 +185,23 @@ function TraderCard({ trader, onDestroy }) {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <h3 className="text-lg font-bold text-slate-100">{trader.symbol}</h3>
-            <span className="rounded-full bg-amber-500/15 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-amber-400 border border-amber-500/20">
-              TRAP ±{trader.trapPercent || 1}%
+            <span className="rounded-full bg-violet-500/15 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-violet-400 border border-violet-500/20">
+              DCA {trader.leverage || 1}x
             </span>
-            {openPositions.map((p, i) => (
-              <span key={i} className={`rounded-md px-2 py-0.5 text-[10px] font-bold uppercase ${
-                p.direction === "LONG"
-                  ? "bg-emerald-500/15 text-emerald-400"
-                  : "bg-rose-500/15 text-rose-400"
-              }`}>
-                {p.direction}
-              </span>
-            ))}
+            <span className="rounded-full bg-rose-500/10 px-2 py-0.5 text-[10px] font-bold text-rose-400">
+              {filledCount}/{numOrders} filled
+            </span>
           </div>
           <div className="flex items-center gap-2">
             <div className="flex flex-wrap gap-2 text-xs">
               <span className="rounded-full bg-white/5 border border-white/10 px-2.5 py-1 text-slate-300">
-                {trader.totalTrades || 0} trades · {trader.slCount || 0} SL
+                Avg {fmtPrice(trader.averagePrice)}
+              </span>
+              <span className="rounded-full bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-1 text-emerald-400">
+                TP {fmtPrice(trader.tpPrice)}
               </span>
               <span className={`rounded-full bg-white/5 border border-white/10 px-2.5 py-1 ${pnlColor(netPnl)}`}>
                 Net ${fmt(netPnl)}
-              </span>
-              <span className="rounded-full bg-white/5 border border-white/10 px-2.5 py-1 text-sky-400">
-                Peak ${fmt(trader.highestNetProfit)}
               </span>
             </div>
             <button
@@ -219,14 +219,14 @@ function TraderCard({ trader, onDestroy }) {
         </div>
 
         <div className="mt-3">
-          <TrapLevelIndicator trader={trader} />
+          <DCALevelIndicator trader={trader} />
         </div>
       </button>
 
       {expanded && (
         <div className="border-t border-white/5 p-5 space-y-5">
-          {/* Trap Info */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
+          {/* Config Info */}
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 text-sm">
             <div>
               <p className="text-[10px] uppercase text-slate-500">Start Price</p>
               <p className="font-mono text-slate-200">{fmtPrice(trader.startPrice)}</p>
@@ -236,49 +236,31 @@ function TraderCard({ trader, onDestroy }) {
               <p className="font-mono text-slate-200">{fmtPrice(trader.lastPrice)}</p>
             </div>
             <div>
-              <p className="text-[10px] uppercase text-slate-500">LONG Entry</p>
-              <p className="font-mono text-emerald-400">{fmtPrice(trader.longEntryPrice)}</p>
+              <p className="text-[10px] uppercase text-slate-500">Average Price</p>
+              <p className="font-mono text-amber-400">{fmtPrice(trader.averagePrice)}</p>
             </div>
             <div>
-              <p className="text-[10px] uppercase text-slate-500">SHORT Entry</p>
-              <p className="font-mono text-rose-400">{fmtPrice(trader.shortEntryPrice)}</p>
+              <p className="text-[10px] uppercase text-slate-500">Take Profit</p>
+              <p className="font-mono text-emerald-400">{fmtPrice(trader.tpPrice)}</p>
+            </div>
+            <div>
+              <p className="text-[10px] uppercase text-slate-500">Notional / Order</p>
+              <p className="font-mono text-slate-200">${trader.notionalPerOrder || 50}</p>
             </div>
           </div>
 
-          {/* Open Positions */}
+          {/* Orders */}
           <div>
             <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">
-              Open Positions ({openPositions.length})
+              Orders ({filledCount}/{numOrders} filled)
             </h4>
-            {openPositions.length === 0 ? (
-              <p className="text-xs text-slate-600">No open positions</p>
-            ) : (
-              <div className="space-y-1.5">
-                {openPositions.map((p, i) => <PositionRow key={i} pos={p} />)}
-              </div>
-            )}
-          </div>
-
-          {/* Pending Entries */}
-          {pendingEntries.length > 0 && (
-            <div>
-              <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">
-                Pending Entries ({pendingEntries.length})
-              </h4>
-              <div className="space-y-1.5">
-                {pendingEntries.map((e, i) => <PendingEntryRow key={i} entry={e} />)}
-              </div>
+            <div className="space-y-1.5">
+              {orders.map((o, i) => <DCAOrderRow key={i} order={o} />)}
             </div>
-          )}
+          </div>
 
           {/* Stats */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <div className="rounded-xl bg-slate-800/40 p-3">
-              <p className="text-[10px] uppercase text-slate-500">Realized</p>
-              <p className={`text-sm font-mono font-bold ${pnlColor(trader.realizedPnl)}`}>
-                ${fmt(trader.realizedPnl, 4)}
-              </p>
-            </div>
             <div className="rounded-xl bg-slate-800/40 p-3">
               <p className="text-[10px] uppercase text-slate-500">Unrealized</p>
               <p className={`text-sm font-mono font-bold ${pnlColor(trader.unrealizedPnl)}`}>
@@ -292,6 +274,10 @@ function TraderCard({ trader, onDestroy }) {
             <div className="rounded-xl bg-slate-800/40 p-3">
               <p className="text-[10px] uppercase text-slate-500">Peak Profit</p>
               <p className="text-sm font-mono font-bold text-sky-400">${fmt(trader.highestNetProfit, 4)}</p>
+            </div>
+            <div className="rounded-xl bg-slate-800/40 p-3">
+              <p className="text-[10px] uppercase text-slate-500">Total Qty</p>
+              <p className="text-sm font-mono text-slate-300">{fmt(trader.totalFilledQty, 4)}</p>
             </div>
           </div>
 
@@ -436,7 +422,7 @@ function App() {
         {/* ── Header ── */}
         <div className="glass rounded-2xl px-6 py-5 flex flex-wrap items-center justify-between gap-4">
           <div>
-            <h1 className="text-2xl font-bold">Trap Trader</h1>
+            <h1 className="text-2xl font-bold">DCA Trader</h1>
             <p className="text-xs text-slate-500 mt-1">
               Binance Futures · {status.mode}
               <span className="ml-3">{socketStatus === "connected" ? "● Connected" : "○ Disconnected"}</span>
