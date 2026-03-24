@@ -394,7 +394,17 @@ function App() {
       const next = d.traders || [];
       const bal = Number(d.balance || 0);
       const unr = next.reduce((s, t) => s + Number(t.unrealizedPnl || 0), 0);
-      setTraders(next);
+      // Preserve the latest price from priceUpdate if it's newer than the snapshot
+      setTraders((prev) => {
+        const priceMap = new Map(prev.map((t) => [t.symbol, t.lastPrice]));
+        return next.map((t) => {
+          const cached = priceMap.get(t.symbol);
+          if (cached != null && Number.isFinite(cached) && cached > t.lastPrice) {
+            return { ...t, lastPrice: cached };
+          }
+          return t;
+        });
+      });
       setPerformance((p) => ({ ...p, ...(d.performance || {}) }));
       if (d.topGainers) setTopGainers(d.topGainers);
       if (d.traderResults) setTraderResults(d.traderResults);
