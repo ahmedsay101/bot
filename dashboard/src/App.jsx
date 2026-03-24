@@ -423,7 +423,7 @@ function App() {
         </div>
 
         {/* ── Main Stats Row ── */}
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-7">
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-6">
           <StatCard label="Balance" value={`$${fmt(status.balance)}`} />
           <StatCard label="Equity" value={`$${fmt(status.equity)}`} />
           <StatCard
@@ -433,11 +433,6 @@ function App() {
           />
           <StatCard label="Trades" value={performance.totalTrades} sub={`${fmt(performance.winRate)}% win rate`} />
           <StatCard label="Fees" value={`$${fmt(performance.feesPaid)}`} color="text-slate-400" />
-          <StatCard
-            label="Max Drawdown"
-            value={`${fmt(performance.maxDrawdown)}%`}
-            color="text-rose-400"
-          />
           <StatCard
             label="Max Filled"
             value={maxFilled.total > 0 ? `${maxFilled.count}/${maxFilled.total}` : "-"}
