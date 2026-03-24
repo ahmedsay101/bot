@@ -65,11 +65,13 @@ function updateTopGainersFromTickers(tickers) {
   for (const t of list) {
     const symbol = t?.symbol || t?.s;
     const percent = Number(t?.priceChangePercent ?? t?.P);
+    const quoteVolume = Number(t?.quoteVolume ?? t?.q ?? 0);
     if (typeof symbol !== "string" || !symbol.endsWith("USDT")) continue;
     if (!Number.isFinite(percent)) continue;
-    tickerCache.set(symbol, { symbol, percent });
+    tickerCache.set(symbol, { symbol, percent, quoteVolume });
   }
   topGainers = Array.from(tickerCache.values())
+    .filter((t) => t.quoteVolume >= 10_000_000)
     .sort((a, b) => b.percent - a.percent)
     .slice(0, 5);
 }

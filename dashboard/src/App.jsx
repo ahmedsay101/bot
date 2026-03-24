@@ -293,37 +293,6 @@ function TraderCard({ trader, onDestroy }) {
     </div>
   );
 }
-/* ── Win/Loss Streak ───────────────────────────────────── */
-function WinLossStreak({ results }) {
-  if (!results || results.length === 0) return null;
-  const wins = results.filter(r => r.result === "win").length;
-  const losses = results.filter(r => r.result === "loss").length;
-
-  return (
-    <div className="glass rounded-2xl p-5">
-      <div className="flex items-center justify-between mb-3">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-500">Trader Results</h3>
-        <div className="flex gap-3 text-xs">
-          <span className="text-emerald-400">{wins}W</span>
-          <span className="text-rose-400">{losses}L</span>
-        </div>
-      </div>
-      <div className="flex flex-wrap gap-1.5">
-        {results.map((r, i) => (
-          <div
-            key={i}
-            title={`${r.symbol} — ${r.result} — $${fmt(r.pnl)}`}
-            className={`w-4 h-4 rounded-full border ${
-              r.result === "win"
-                ? "bg-emerald-500 border-emerald-400 shadow-sm shadow-emerald-500/40"
-                : "bg-rose-500 border-rose-400 shadow-sm shadow-rose-500/40"
-            }`}
-          />
-        ))}
-      </div>
-    </div>
-  );
-}
 /* ── Top Gainers Table ─────────────────────────────────────── */
 function TopGainersTable({ gainers, activeSymbols }) {
   if (!gainers || gainers.length === 0) return (
@@ -366,7 +335,7 @@ function App() {
   });
   const [socketStatus, setSocketStatus] = useState("disconnected");
   const [topGainers, setTopGainers] = useState([]);
-  const [traderResults, setTraderResults] = useState([]);
+  const [maxFilled, setMaxFilled] = useState({ count: 0, total: 0, symbol: "" });
 
   const activeSymbols = useMemo(
     () => new Set(traders.map((t) => t.symbol)),
@@ -405,9 +374,14 @@ function App() {
           return t;
         });
       });
+      // Track max filled across all traders (all-time high)
+      for (const t of next) {
+        const filled = t.filledCount || 0;
+        const total = t.numOrders || (t.orders || []).length || 0;
+        setMaxFilled((prev) => filled > prev.count ? { count: filled, total, symbol: t.symbol } : prev);
+      }
       setPerformance((p) => ({ ...p, ...(d.performance || {}) }));
       if (d.topGainers) setTopGainers(d.topGainers);
-      if (d.traderResults) setTraderResults(d.traderResults);
       setStatus((p) => ({ ...p, ...(d.status || {}), balance: bal, equity: bal + unr }));
     });
 
@@ -449,7 +423,7 @@ function App() {
         </div>
 
         {/* ── Main Stats Row ── */}
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-6">
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-7">
           <StatCard label="Balance" value={`$${fmt(status.balance)}`} />
           <StatCard label="Equity" value={`$${fmt(status.equity)}`} />
           <StatCard
@@ -464,12 +438,15 @@ function App() {
             value={`${fmt(performance.maxDrawdown)}%`}
             color="text-rose-400"
           />
+          <StatCard
+            label="Max Filled"
+            value={maxFilled.total > 0 ? `${maxFilled.count}/${maxFilled.total}` : "-"}
+            sub={maxFilled.symbol || undefined}
+            color="text-violet-400"
+          />
         </div>
 
-        {/* ── Win/Loss Streak ── */}
-        <WinLossStreak results={traderResults} />
-
-        {/* ── Top Gainers + Traders ── */}
+        {/* ── Top Gainers + Traders ── */>
         <div className="grid gap-6 lg:grid-cols-[1fr_300px]">
           {/* Traders list */}
           <div className="space-y-4">
