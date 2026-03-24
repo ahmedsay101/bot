@@ -446,7 +446,7 @@ function App() {
           />
         </div>
 
-        {/* ── Top Gainers + Traders ── */>
+        {/* ── Top Gainers + Traders ── */}
         <div className="grid gap-6 lg:grid-cols-[1fr_300px]">
           {/* Traders list */}
           <div className="space-y-4">
