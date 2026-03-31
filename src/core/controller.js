@@ -142,7 +142,7 @@ class Controller {
     this.traders.delete(symbol);
 
     const isWin = reason === "take-profit";
-    const isLoss = reason === "max-stop-losses";
+    const isLoss = reason === "stop-loss";
     if (isWin || isLoss) {
       const result = isWin ? "win" : "loss";
       this.traderResults.push({ symbol, result, pnl, time: new Date().toISOString() });
