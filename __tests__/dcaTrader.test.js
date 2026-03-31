@@ -41,7 +41,7 @@ describe("DCATrader", () => {
     Object.assign(config, baseConfig, {
       mode: "test",
       leverage: 2,
-      notionalPerOrder: 50,
+      equityFraction: 0.05,
       takeProfitPercent: 10,
       stopLossPercent: 50,
       feeRate: 0,
@@ -60,7 +60,7 @@ describe("DCATrader", () => {
 
     expect(trader.startPrice).toBe(100);
     expect(trader.entryPrice).toBe(100);
-    // qty = notional * leverage / price = 50 * 2 / 100 = 1
+    // equity=1000 * fraction=0.05 = margin=50, notional=50*2=100, qty=100/100=1
     expect(trader.quantity).toBe(1);
   });
 
@@ -75,15 +75,15 @@ describe("DCATrader", () => {
     expect(trader.slPrice).toBe(150);
   });
 
-  test("quantity formula: notional * leverage / price", async () => {
-    config.notionalPerOrder = 100;
+  test("quantity formula: equity * fraction * leverage / price", async () => {
+    config.equityFraction = 0.5;
     config.leverage = 5;
     const api = new FakeApi({ price: 200 });
-    const trader = new DCATrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn(), changePercent: 60 });
+    // equity=1000, fraction=0.5 → margin=500, notional=500*5=2500, qty=2500/200=12.5
+    const trader = new DCATrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn(), changePercent: 60, equity: 1000 });
     await trader.start();
 
-    // qty = 100 * 5 / 200 = 2.5
-    expect(trader.quantity).toBe(2.5);
+    expect(trader.quantity).toBe(12.5);
   });
 
   test("destroys on take-profit when price drops to TP", async () => {
@@ -122,7 +122,7 @@ describe("DCATrader", () => {
     const trader = new DCATrader({ symbol: "TESTUSDT", api, onDestroy, changePercent: 60 });
     await trader.start();
 
-    // qty = 50 * 2 / 100 = 1
+    // margin=50, notional=100, qty=100/100=1
     trader.lastPrice = 90;
     await trader._checkExits(90);
 
@@ -227,7 +227,7 @@ describe("DCATrader", () => {
     const trader = new DCATrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn(), changePercent: 60 });
     await trader.start();
 
-    // Price drops to 90 → short profit = 10
+    // Price drops to 90 → short profit = (100-90)*1 = 10
     trader.lastPrice = 90;
     trader._trackHighestProfit();
     expect(trader.highestNetProfit).toBeCloseTo(10, 4);
@@ -239,17 +239,19 @@ describe("DCATrader", () => {
   });
 
   test("configurable parameters are respected", async () => {
-    config.notionalPerOrder = 100;
+    config.equityFraction = 0.1;
     config.leverage = 3;
     config.takeProfitPercent = 20;
     config.stopLossPercent = 30;
 
     const api = new FakeApi({ price: 200 });
-    const trader = new DCATrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn(), changePercent: 60 });
+    // equity=1000, fraction=0.1 → margin=100, notional=100*3=300, qty=300/200=1.5
+    const trader = new DCATrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn(), changePercent: 60, equity: 1000 });
     await trader.start();
 
     expect(trader.leverage).toBe(3);
-    // qty = 100 * 3 / 200 = 1.5
+    expect(trader.margin).toBeCloseTo(100, 4);
+    expect(trader.notional).toBeCloseTo(300, 4);
     expect(trader.quantity).toBe(1.5);
     // TP = 200 * 0.8 = 160
     expect(trader.tpPrice).toBeCloseTo(160, 4);
@@ -297,6 +299,8 @@ describe("DCATrader", () => {
         slPrice: 150,
         leverage: 2,
         quantity: 1,
+        margin: 50,
+        notional: 100,
         status: "ACTIVE"
       })
     );

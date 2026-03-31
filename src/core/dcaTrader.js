@@ -15,7 +15,7 @@ function fmt(value, digits = 2) {
  * Stop-loss   = entry * (1 + stopLossPercent / 100)
  */
 class DCATrader {
-  constructor({ symbol, api, onDestroy, changePercent }) {
+  constructor({ symbol, api, onDestroy, changePercent, equity }) {
     this.id = `${symbol}-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
     this.symbol = symbol;
     this.api = api;
@@ -28,8 +28,10 @@ class DCATrader {
     this.lastPrice = null;
 
     // Configurable parameters
-    this.notionalPerOrder = Number(config.notionalPerOrder) || 50;
     this.leverage = Number(config.leverage) || 2;
+    this.equityFraction = Number(config.equityFraction) || 0.9;
+    this.margin = (Number(equity) || Number(config.startingBalanceUSDT)) * this.equityFraction;
+    this.notional = this.margin * this.leverage;
     this.takeProfitPercent = Number(config.takeProfitPercent) || 10;
     this.stopLossPercent = Number(config.stopLossPercent) || 50;
 
@@ -60,7 +62,7 @@ class DCATrader {
     this.startPrice = await this.api.getMarkPrice(this.symbol);
     this.lastPrice = this.startPrice;
 
-    this.quantity = Number((this.notionalPerOrder * this.leverage / this.startPrice).toFixed(4));
+    this.quantity = Number((this.notional / this.startPrice).toFixed(4));
 
     const marketResult = await this.api.placeMarketOrder({
       symbol: this.symbol,
@@ -79,6 +81,7 @@ class DCATrader {
 
     log(`DCA ${this.symbol}`,
       `SHORT @ ${fmt(this.entryPrice, 6)} | qty=${this.quantity} ` +
+      `margin=$${fmt(this.margin)} notional=$${fmt(this.notional)} ` +
       `lev=${this.leverage}x TP=${fmt(this.tpPrice, 6)} SL=${fmt(this.slPrice, 6)}`);
     this._updateStore();
   }
@@ -209,7 +212,8 @@ class DCATrader {
       startPrice: this.startPrice,
       entryPrice: this.entryPrice,
       leverage: this.leverage,
-      notionalPerOrder: this.notionalPerOrder,
+      notional: this.notional,
+      margin: this.margin,
       takeProfitPercent: this.takeProfitPercent,
       stopLossPercent: this.stopLossPercent,
       quantity: this.quantity,

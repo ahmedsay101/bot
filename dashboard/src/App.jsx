@@ -205,7 +205,7 @@ function TraderCard({ trader, onDestroy }) {
       {expanded && (
         <div className="border-t border-white/5 p-5 space-y-5">
           {/* Config Info */}
-          <div className="grid grid-cols-2 sm:grid-cols-6 gap-3 text-sm">
+          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3 text-sm">
             <div>
               <p className="text-[10px] uppercase text-slate-500">Start Price</p>
               <p className="font-mono text-slate-200">{fmtPrice(trader.startPrice)}</p>
@@ -224,7 +224,11 @@ function TraderCard({ trader, onDestroy }) {
             </div>
             <div>
               <p className="text-[10px] uppercase text-slate-500">Notional</p>
-              <p className="font-mono text-slate-200">${trader.notionalPerOrder || 50}</p>
+              <p className="font-mono text-slate-200">${fmt(trader.notional)}</p>
+            </div>
+            <div>
+              <p className="text-[10px] uppercase text-slate-500">Margin</p>
+              <p className="font-mono text-slate-200">${fmt(trader.margin)}</p>
             </div>
             <div>
               <p className="text-[10px] uppercase text-slate-500">Duration</p>

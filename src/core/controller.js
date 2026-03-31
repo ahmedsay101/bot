@@ -98,10 +98,12 @@ class Controller {
         }
       }
 
+      const equity = store.getStatus().equity || Number(config.startingBalanceUSDT);
       const trader = new DCATrader({
         symbol,
         api: this.api,
         changePercent,
+        equity,
         onDestroy: (sym, pnl, reason) => this._onTraderDestroyed(sym, pnl, reason)
       });
       this.traders.set(symbol, trader);
