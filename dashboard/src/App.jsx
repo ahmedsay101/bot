@@ -293,6 +293,64 @@ function TraderCard({ trader, onDestroy }) {
     </div>
   );
 }
+/* ── Trader History Table ──────────────────────────────────── */
+function TraderHistoryTable({ history }) {
+  if (!history || history.length === 0) return (
+    <p className="py-3 text-center text-xs text-slate-600">No closed traders yet</p>
+  );
+
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-xs">
+        <thead>
+          <tr className="border-b border-white/5 text-left text-[10px] uppercase tracking-wider text-slate-500">
+            <th className="py-2 pr-3">Symbol</th>
+            <th className="py-2 pr-3">24h %</th>
+            <th className="py-2 pr-3">Filled</th>
+            <th className="py-2 pr-3 text-right">Avg Price</th>
+            <th className="py-2 pr-3 text-right">Start</th>
+            <th className="py-2 pr-3 text-right">End</th>
+            <th className="py-2 pr-3 text-right">PnL</th>
+            <th className="py-2 pr-3 text-right">Fees</th>
+            <th className="py-2 pr-3">Reason</th>
+            <th className="py-2">Closed</th>
+          </tr>
+        </thead>
+        <tbody>
+          {history.map((h, i) => (
+            <tr key={h.id || i} className="border-b border-white/[0.03] hover:bg-white/[0.02]">
+              <td className="py-1.5 pr-3 font-medium text-slate-200">{h.symbol}</td>
+              <td className="py-1.5 pr-3 text-emerald-400">{fmt(h.changePercent)}%</td>
+              <td className="py-1.5 pr-3">
+                <span className="text-violet-400">{h.filledCount || 0}/{h.numOrders || "?"}</span>
+              </td>
+              <td className="py-1.5 pr-3 text-right font-mono text-amber-400">{fmtPrice(h.averagePrice)}</td>
+              <td className="py-1.5 pr-3 text-right font-mono text-slate-400">{fmtPrice(h.startPrice)}</td>
+              <td className="py-1.5 pr-3 text-right font-mono text-slate-400">{fmtPrice(h.endPrice)}</td>
+              <td className={`py-1.5 pr-3 text-right font-mono font-bold ${pnlColor(h.realizedPnl)}`}>
+                ${fmt(h.realizedPnl, 4)}
+              </td>
+              <td className="py-1.5 pr-3 text-right font-mono text-slate-500">${fmt(h.feesPaid, 4)}</td>
+              <td className="py-1.5 pr-3">
+                <span className={`rounded-md px-1.5 py-0.5 text-[10px] font-bold uppercase ${
+                  h.reason === "take-profit"
+                    ? "bg-emerald-500/15 text-emerald-400"
+                    : "bg-slate-700/50 text-slate-400"
+                }`}>
+                  {h.reason}
+                </span>
+              </td>
+              <td className="py-1.5 text-slate-500">
+                {h.closedAt ? new Date(h.closedAt).toLocaleTimeString() : "-"}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 /* ── Top Gainers Table ─────────────────────────────────────── */
 function TopGainersTable({ gainers, activeSymbols }) {
   if (!gainers || gainers.length === 0) return (
@@ -336,6 +394,7 @@ function App() {
   const [socketStatus, setSocketStatus] = useState("disconnected");
   const [topGainers, setTopGainers] = useState([]);
   const [maxFilled, setMaxFilled] = useState({ count: 0, total: 0, symbol: "" });
+  const [closedTraders, setClosedTraders] = useState([]);
 
   const activeSymbols = useMemo(
     () => new Set(traders.map((t) => t.symbol)),
@@ -380,8 +439,14 @@ function App() {
         const total = t.numOrders || (t.orders || []).length || 0;
         setMaxFilled((prev) => filled > prev.count ? { count: filled, total, symbol: t.symbol } : prev);
       }
+      for (const t of (d.closedTraders || [])) {
+        const filled = t.filledCount || 0;
+        const total = t.numOrders || 0;
+        setMaxFilled((prev) => filled > prev.count ? { count: filled, total, symbol: t.symbol } : prev);
+      }
       setPerformance((p) => ({ ...p, ...(d.performance || {}) }));
       if (d.topGainers) setTopGainers(d.topGainers);
+      if (d.closedTraders) setClosedTraders(d.closedTraders);
       setStatus((p) => ({ ...p, ...(d.status || {}), balance: bal, equity: bal + unr }));
     });
 
@@ -462,6 +527,14 @@ function App() {
             <div className="glass rounded-2xl p-4">
               <TopGainersTable gainers={topGainers} activeSymbols={activeSymbols} />
             </div>
+          </div>
+        </div>
+
+        {/* ── Trader History ── */}
+        <div>
+          <h2 className="text-lg font-semibold mb-4">Trader History ({closedTraders.length})</h2>
+          <div className="glass rounded-2xl p-5">
+            <TraderHistoryTable history={closedTraders} />
           </div>
         </div>
       </div>

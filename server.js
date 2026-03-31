@@ -77,7 +77,10 @@ function updateTopGainersFromTickers(tickers) {
 }
 
 function startTopGainersWs() {
-  if (topGainersWs) return;
+  if (topGainersWs) {
+    try { topGainersWs.terminate(); } catch (_) {}
+    topGainersWs = null;
+  }
   const url = `${config.baseWsUrl}/ws/!ticker@arr`;
   topGainersWs = new WebSocket(url);
 
@@ -87,6 +90,7 @@ function startTopGainersWs() {
 
   topGainersWs.on("message", (raw) => {
     try {
+      topGainersWs._lastMessage = Date.now();
       const data = JSON.parse(raw.toString());
       if (Array.isArray(data)) {
         updateTopGainersFromTickers(data);
@@ -99,15 +103,26 @@ function startTopGainersWs() {
   });
 
   topGainersWs.on("close", () => {
-    log("API", "Top gainers WS closed");
+    log("API", "Top gainers WS closed — reconnecting in 5s");
     topGainersWs = null;
     setTimeout(startTopGainersWs, 5000);
   });
 
   topGainersWs.on("error", (err) => {
-    log("API", `Top gainers WS error: ${err.message}`);
+    log("API", `Top gainers WS error: ${err.message} — reconnecting`);
+    try { topGainersWs.terminate(); } catch (_) {}
+    topGainersWs = null;
+    setTimeout(startTopGainersWs, 5000);
   });
 }
+
+// Watchdog: restart top gainers WS if no message received in 60s
+setInterval(() => {
+  if (topGainersWs && topGainersWs._lastMessage && Date.now() - topGainersWs._lastMessage > 60000) {
+    log("API", "Top gainers WS stale (no data 60s) — reconnecting");
+    startTopGainersWs();
+  }
+}, 30000);
 
 io.on("connection", (socket) => {
   socket.emit("dashboardUpdate", {

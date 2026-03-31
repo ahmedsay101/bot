@@ -149,6 +149,7 @@ function getDashboardUpdate() {
       ...trader
     })),
     performance: getPerformance(),
+    closedTraders: state.closedTraders,
     traderResults: state.traderResults,
     marketStatus: state.marketStatus
   };

@@ -309,6 +309,8 @@ class DCATrader {
     store.removeTrader(this.id, {
       id: this.id,
       symbol: this.symbol,
+      changePercent: this.changePercent,
+      numOrders: this.numOrders,
       realizedPnl: this.realizedPnl,
       feesPaid: this.feesPaid,
       totalTrades: this.totalTrades,
