@@ -421,11 +421,10 @@ class BinanceApi extends EventEmitter {
   }
 
   async getMarkPrice(symbol) {
-    if (this.mode === "test" && this.markPrices.has(symbol)) {
-      return this.markPrices.get(symbol);
-    }
     const data = await this._request("GET", "/fapi/v1/premiumIndex", { symbol });
-    return Number(data.markPrice);
+    const price = Number(data.markPrice);
+    this.markPrices.set(symbol, price);
+    return price;
   }
 
   async getTickerPrice(symbol) {
@@ -696,7 +695,7 @@ class BinanceApi extends EventEmitter {
     const book = this.bestBook.get(symbol);
     const mark = this.markPrices.get(symbol);
     const base = book ? (side === "BUY" ? book.ask : book.bid) : mark;
-    const slip = base * config.slippageRate;
+    const slip = base * (config.slippageRate || 0);
     return side === "BUY" ? base + slip : base - slip;
   }
 
