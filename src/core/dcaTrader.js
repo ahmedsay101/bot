@@ -11,7 +11,7 @@ function fmt(value, digits = 2) {
  * DCATrader — simple short strategy.
  *
  * On start: places a single market SHORT at the current price.
- * Take-profit = entry * (1 - takeProfitPercent / 100)
+ * Take-profit = entry * (1 - round(changePercent / 10) / 100)
  * Stop-loss   = entry * (1 + stopLossPercent / 100)
  */
 class DCATrader {
@@ -32,7 +32,8 @@ class DCATrader {
     this.equityFraction = Number(config.equityFraction) || 0.9;
     this.margin = (Number(equity) || Number(config.startingBalanceUSDT)) * this.equityFraction;
     this.notional = this.margin * this.leverage;
-    this.takeProfitPercent = Number(config.takeProfitPercent) || 10;
+    // TP% = round(24h change / 10), minimum 1%
+    this.takeProfitPercent = Math.max(1, Math.round(this.changePercent / 10));
     this.stopLossPercent = Number(config.stopLossPercent) || 50;
 
     this.entryPrice = 0;

@@ -84,9 +84,6 @@ class Controller {
       if (this.traders.size >= config.maxTraders) break;
       if (this.traders.has(symbol)) continue;
 
-      const minPct = Number(config.minPctRequired) || 0;
-      if (minPct > 0 && changePercent < minPct) continue;
-
       if (config.mode === "live" && !this.leverageSet.has(symbol)) {
         try {
           await this.api.setLeverage(symbol, config.leverage);
