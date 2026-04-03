@@ -30,7 +30,10 @@ class DCATrader {
     // Configurable parameters
     this.leverage = Number(config.leverage) || 2;
     this.equityFraction = Number(config.equityFraction) || 0.9;
-    this.margin = (Number(equity) || Number(config.startingBalanceUSDT)) * this.equityFraction;
+    const eq = Number(equity) || Number(config.startingBalanceUSDT);
+    const fixedNotional = Number(config.fixedNotional) || 200;
+    // Use fixed notional as margin if equity covers it, otherwise fall back to fraction of equity
+    this.margin = eq >= fixedNotional ? fixedNotional : eq * this.equityFraction;
     this.notional = this.margin * this.leverage;
     // TP% = round(24h change / 10), minimum 1%
     this.takeProfitPercent = Math.max(1, Math.round(this.changePercent / 10));
@@ -63,15 +66,17 @@ class DCATrader {
     this.startPrice = await this.api.getMarkPrice(this.symbol);
     this.lastPrice = this.startPrice;
 
-    this.quantity = Number((this.notional / this.startPrice).toFixed(4));
+    const rawQty = Number((this.notional / this.startPrice).toFixed(4));
 
     const marketResult = await this.api.placeMarketOrder({
       symbol: this.symbol,
       side: "SELL",
-      quantity: this.quantity
+      quantity: rawQty
     });
 
+    // Use actual fill price and quantity from the exchange
     this.entryPrice = Number(marketResult.price) || this.startPrice;
+    this.quantity = Number(marketResult.quantity) || rawQty;
     this.feesPaid += this.entryPrice * this.quantity * this._feeRate;
 
     this.tpPrice = this.entryPrice * (1 - this.takeProfitPercent / 100);
@@ -116,6 +121,15 @@ class DCATrader {
 
   async _checkExits(price) {
     if (!this.active) return;
+
+    // Lifetime expiry
+    const maxLifetime = Number(config.maxLifetimeMs) || 12 * 60 * 60 * 1000;
+    if (Date.now() - new Date(this.createdAt).getTime() >= maxLifetime) {
+      log(`DCA ${this.symbol}`, `Max lifetime reached`);
+      await this.destroy("expired");
+      return;
+    }
+
     if (price <= this.tpPrice) {
       log(`DCA ${this.symbol}`, `TP hit @ ${fmt(price, 6)} <= ${fmt(this.tpPrice, 6)}`);
       await this.destroy("take-profit");
@@ -136,7 +150,12 @@ class DCATrader {
 
     await this.api.cancelAllOpenOrders(this.symbol);
 
-    const exitPrice = this.lastPrice || this.startPrice;
+    // Use TP/SL price as exit when triggered by those conditions,
+    // not lastPrice which could have gapped past the target
+    let exitPrice = this.lastPrice || this.startPrice;
+    if (reason === "take-profit") exitPrice = this.tpPrice;
+    else if (reason === "stop-loss") exitPrice = this.slPrice;
+
     const grossPnl = (this.entryPrice - exitPrice) * this.quantity;
     const closeFees = exitPrice * this.quantity * this._feeRate;
 

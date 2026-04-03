@@ -26,7 +26,7 @@ class FakeApi extends EventEmitter {
   async getBalance() { return 1000; }
 
   async placeMarketOrder({ side, quantity }) {
-    return { status: "FILLED", price: this.price, orderId: `M-${++this.orderSeq}` };
+    return { status: "FILLED", price: this.price, quantity };
   }
 
   async cancelOrder() { return { status: "CANCELED" }; }
@@ -41,7 +41,8 @@ describe("DCATrader", () => {
     Object.assign(config, baseConfig, {
       mode: "test",
       leverage: 2,
-      equityFraction: 0.05,
+      fixedNotional: 50,
+      equityFraction: 0.9,
       stopLossPercent: 50,
       feeRate: 0,
       startingBalanceUSDT: 1000
@@ -59,7 +60,7 @@ describe("DCATrader", () => {
 
     expect(trader.startPrice).toBe(100);
     expect(trader.entryPrice).toBe(100);
-    // equity=1000 * fraction=0.05 = margin=50, notional=50*2=100, qty=100/100=1
+    // equity=1000 >= fixedNotional=50, margin=50, notional=50*2=100, qty=100/100=1
     expect(trader.quantity).toBe(1);
   });
 
@@ -75,15 +76,26 @@ describe("DCATrader", () => {
     expect(trader.slPrice).toBe(150);
   });
 
-  test("quantity formula: equity * fraction * leverage / price", async () => {
-    config.equityFraction = 0.5;
+  test("quantity formula: fixedNotional path vs equity fraction fallback", async () => {
+    // Path 1: equity >= fixedNotional → margin = fixedNotional
+    config.fixedNotional = 100;
     config.leverage = 5;
     const api = new FakeApi({ price: 200 });
-    // equity=1000, fraction=0.5 → margin=500, notional=500*5=2500, qty=2500/200=12.5
-    const trader = new DCATrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn(), changePercent: 60, equity: 1000 });
-    await trader.start();
+    // equity=1000 >= 100 → margin=100, notional=100*5=500, qty=500/200=2.5
+    const t1 = new DCATrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn(), changePercent: 60, equity: 1000 });
+    await t1.start();
+    expect(t1.margin).toBeCloseTo(100, 4);
+    expect(t1.quantity).toBe(2.5);
 
-    expect(trader.quantity).toBe(12.5);
+    // Path 2: equity < fixedNotional → margin = equity * fraction
+    config.fixedNotional = 200;
+    config.equityFraction = 0.5;
+    config.leverage = 5;
+    // equity=150 < 200 → margin=150*0.5=75, notional=75*5=375, qty=375/200=1.875
+    const t2 = new DCATrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn(), changePercent: 60, equity: 150 });
+    await t2.start();
+    expect(t2.margin).toBeCloseTo(75, 4);
+    expect(t2.quantity).toBe(1.875);
   });
 
   test("destroys on take-profit when price drops to TP", async () => {
@@ -240,13 +252,14 @@ describe("DCATrader", () => {
   });
 
   test("configurable parameters are respected", async () => {
+    config.fixedNotional = 100;
     config.equityFraction = 0.1;
     config.leverage = 3;
     config.stopLossPercent = 30;
 
     const api = new FakeApi({ price: 200 });
     // changePercent=80 → TP% = round(80/10) = 8
-    // equity=1000, fraction=0.1 → margin=100, notional=100*3=300, qty=300/200=1.5
+    // equity=1000 >= fixedNotional=100 → margin=100, notional=100*3=300, qty=300/200=1.5
     const trader = new DCATrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn(), changePercent: 80, equity: 1000 });
     await trader.start();
 
@@ -328,5 +341,54 @@ describe("DCATrader", () => {
     await t3.start();
     expect(t3.takeProfitPercent).toBe(1);
     expect(t3.tpPrice).toBeCloseTo(99, 4);
+  });
+
+  test("TP/SL exit uses target price, not gapped lastPrice", async () => {
+    const api = new FakeApi({ price: 100 });
+    const onDestroy = jest.fn();
+    const trader = new DCATrader({ symbol: "TESTUSDT", api, onDestroy, changePercent: 60 });
+    await trader.start();
+
+    // TP=94, but price gaps down to 80 (far past TP)
+    trader.lastPrice = 80;
+    await trader._checkExits(80);
+
+    // Exit should use tpPrice (94), not lastPrice (80)
+    expect(trader.tradeHistory[0].exit).toBe(94);
+    // PnL = (100 - 94) * 1 = 6, not (100 - 80) * 1 = 20
+    expect(trader.realizedPnl).toBeCloseTo(6, 2);
+  });
+
+  test("SL exit uses slPrice, not gapped lastPrice", async () => {
+    const api = new FakeApi({ price: 100 });
+    const onDestroy = jest.fn();
+    const trader = new DCATrader({ symbol: "TESTUSDT", api, onDestroy, changePercent: 60 });
+    await trader.start();
+
+    // SL=150, but price gaps up to 170 (past SL)
+    trader.lastPrice = 170;
+    await trader._checkExits(170);
+
+    // Exit should use slPrice (150), not lastPrice (170)
+    expect(trader.tradeHistory[0].exit).toBe(150);
+    // PnL = (100 - 150) * 1 = -50, not (100 - 170) * 1 = -70
+    expect(trader.realizedPnl).toBeCloseTo(-50, 2);
+  });
+
+  test("trader is destroyed when max lifetime is reached", async () => {
+    config.maxLifetimeMs = 1000; // 1 second
+    const api = new FakeApi({ price: 100 });
+    const onDestroy = jest.fn();
+    const trader = new DCATrader({ symbol: "TESTUSDT", api, onDestroy, changePercent: 60 });
+    await trader.start();
+
+    // Backdate createdAt so it appears expired
+    trader.createdAt = new Date(Date.now() - 2000).toISOString();
+
+    // Price in safe zone, but lifetime expired
+    await trader._checkExits(98);
+
+    expect(trader.active).toBe(false);
+    expect(onDestroy).toHaveBeenCalledWith("TESTUSDT", expect.any(Number), "expired");
   });
 });

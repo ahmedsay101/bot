@@ -675,7 +675,7 @@ class BinanceApi extends EventEmitter {
         "BINANCE",
         `Order TEST market ${symbol} ${side} qty=${nextQuantity} fill=${price} pnl=${pnl} positionSide=${positionSide || ""}`
       );
-      return { status: "FILLED", price, pnl };
+      return { status: "FILLED", price, quantity: nextQuantity };
     }
 
     log("BINANCE", `Order market ${symbol} ${side} qty=${nextQuantity} positionSide=${positionSide || ""}`);
@@ -688,7 +688,12 @@ class BinanceApi extends EventEmitter {
     };
     if (positionSide) payload.positionSide = positionSide;
 
-    return this._sendOrder("MARKET", payload);
+    const result = await this._sendOrder("MARKET", payload);
+
+    // Normalize response: Binance returns avgPrice/executedQty for market fills
+    const fillPrice = Number(result.avgPrice) || Number(result.price) || 0;
+    const filledQty = Number(result.executedQty) || nextQuantity;
+    return { status: result.status || "FILLED", price: fillPrice, quantity: filledQty };
   }
 
   _getFillPrice(symbol, side) {
