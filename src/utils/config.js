@@ -9,7 +9,6 @@ const config = {
   fixedNotional: 200,
   equityFraction: 0.9,
   leverage: 2,
-  stopLossPercent: 25,
   startingBalanceUSDT: 200,
   scannerIntervalMs: 1 * 60 * 1000,
   maxLifetimeMs: 12 * 60 * 60 * 1000,
