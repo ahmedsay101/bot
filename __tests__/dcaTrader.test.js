@@ -71,8 +71,8 @@ describe("DCATrader", () => {
     // changePercent=60, TP% = round(60/10) = 6
     // TP = 100 * (1 - 6/100) = 94
     expect(trader.tpPrice).toBe(94);
-    // changePercent=60 → TP%=6, SL%=12 → SL = 100 * (1 + 12/100) = 112
-    expect(trader.slPrice).toBeCloseTo(112, 4);
+    // changePercent=60 → TP%=6, SL%=60 → SL = 100 * (1 + 60/100) = 160
+    expect(trader.slPrice).toBeCloseTo(160, 4);
   });
 
   test("quantity formula: fixedNotional path vs equity fraction fallback", async () => {
@@ -119,11 +119,11 @@ describe("DCATrader", () => {
     const trader = new DCATrader({ symbol: "TESTUSDT", api, onDestroy, changePercent: 60 });
     await trader.start();
 
-    // changePercent=60 → TP%=6, SL%=12 → SL = 100 * 1.12 = 112
-    expect(trader.slPrice).toBeCloseTo(112, 4);
+    // changePercent=60 → TP%=6, SL%=60 → SL = 100 * 1.60 = 160
+    expect(trader.slPrice).toBeCloseTo(160, 4);
 
-    trader.lastPrice = 113;
-    await trader._checkExits(113);
+    trader.lastPrice = 161;
+    await trader._checkExits(161);
 
     expect(trader.active).toBe(false);
     expect(onDestroy).toHaveBeenCalledWith("TESTUSDT", expect.any(Number), "stop-loss");
@@ -149,11 +149,11 @@ describe("DCATrader", () => {
     const trader = new DCATrader({ symbol: "TESTUSDT", api, onDestroy, changePercent: 60 });
     await trader.start();
 
-    trader.lastPrice = 113;
-    await trader._checkExits(113);
+    trader.lastPrice = 161;
+    await trader._checkExits(161);
 
-    // Short PnL uses slPrice ≈ 112 (capped to SL), so (100 - 112) * 1 = -12
-    expect(trader.realizedPnl).toBeCloseTo(-12, 0);
+    // Short PnL uses slPrice ≈ 160 (capped to SL), so (100 - 160) * 1 = -60
+    expect(trader.realizedPnl).toBeCloseTo(-60, 0);
   });
 
   test("does not trigger TP or SL in safe zone", async () => {
@@ -161,14 +161,14 @@ describe("DCATrader", () => {
     const trader = new DCATrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn(), changePercent: 60 });
     await trader.start();
 
-    // Price at 95 → between TP(94) and SL(112), should stay active
+    // Price at 95 → between TP(94) and SL(160), should stay active
     trader.lastPrice = 95;
     await trader._checkExits(95);
     expect(trader.active).toBe(true);
 
-    // Price at 105 → still between TP and SL(112)
-    trader.lastPrice = 105;
-    await trader._checkExits(105);
+    // Price at 120 → still between TP and SL(160)
+    trader.lastPrice = 120;
+    await trader._checkExits(120);
     expect(trader.active).toBe(true);
   });
 
@@ -266,11 +266,11 @@ describe("DCATrader", () => {
     expect(trader.notional).toBeCloseTo(300, 4);
     expect(trader.quantity).toBe(1.5);
     expect(trader.takeProfitPercent).toBe(8);
-    expect(trader.stopLossPercent).toBe(16);
+    expect(trader.stopLossPercent).toBe(80);
     // TP = 200 * (1 - 8/100) = 184
     expect(trader.tpPrice).toBeCloseTo(184, 4);
-    // SL = 200 * (1 + 16/100) = 232
-    expect(trader.slPrice).toBeCloseTo(232, 4);
+    // SL = 200 * (1 + 80/100) = 360
+    expect(trader.slPrice).toBeCloseTo(360, 4);
   });
 
   test("markPrice event triggers exit check", async () => {
@@ -292,8 +292,8 @@ describe("DCATrader", () => {
     const trader = new DCATrader({ symbol: "TESTUSDT", api, onDestroy, changePercent: 60 });
     await trader.start();
 
-    // Emit book ticker with bid/ask averaging to SL level
-    await trader._onBookTicker({ symbol: "TESTUSDT", bid: 149, ask: 151 });
+    // Emit book ticker with bid/ask averaging to SL level (SL=160)
+    await trader._onBookTicker({ symbol: "TESTUSDT", bid: 159, ask: 161 });
 
     expect(trader.active).toBe(false);
     expect(onDestroy).toHaveBeenCalledWith("TESTUSDT", expect.any(Number), "stop-loss");
@@ -310,7 +310,7 @@ describe("DCATrader", () => {
         traderType: "DCA",
         entryPrice: 100,
         tpPrice: 94,
-        slPrice: expect.closeTo(112, 0),
+        slPrice: expect.closeTo(160, 0),
         leverage: 2,
         quantity: 1,
         margin: 50,
@@ -364,14 +364,14 @@ describe("DCATrader", () => {
     const trader = new DCATrader({ symbol: "TESTUSDT", api, onDestroy, changePercent: 60 });
     await trader.start();
 
-    // SL=112, but price gaps up to 130 (past SL)
-    trader.lastPrice = 130;
-    await trader._checkExits(130);
+    // SL=160, but price gaps up to 180 (past SL)
+    trader.lastPrice = 180;
+    await trader._checkExits(180);
 
-    // Exit should use slPrice (~112), not lastPrice (130)
-    expect(trader.tradeHistory[0].exit).toBeCloseTo(112, 0);
-    // PnL = (100 - 112) * 1 = -12, not (100 - 130) * 1 = -30
-    expect(trader.realizedPnl).toBeCloseTo(-12, 2);
+    // Exit should use slPrice (~160), not lastPrice (180)
+    expect(trader.tradeHistory[0].exit).toBeCloseTo(160, 0);
+    // PnL = (100 - 160) * 1 = -60, not (100 - 180) * 1 = -80
+    expect(trader.realizedPnl).toBeCloseTo(-60, 0);
   });
 
   test("trader is destroyed when max lifetime is reached", async () => {

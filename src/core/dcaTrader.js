@@ -37,8 +37,8 @@ class DCATrader {
     this.notional = this.margin * this.leverage;
     // TP% = round(24h change / 10), minimum 1%
     this.takeProfitPercent = Math.max(1, Math.round(this.changePercent / 10));
-    // SL% is always double the TP%
-    this.stopLossPercent = this.takeProfitPercent * 2;
+    // SL% is always 10x the TP%
+    this.stopLossPercent = this.takeProfitPercent * 10;
 
     this.entryPrice = 0;
     this.quantity = 0;
