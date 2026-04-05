@@ -100,6 +100,26 @@ class SymbolScanner {
       .sort((a, b) => b.change - a.change)
       .slice(0, Number(config.maxTraders) || 1);
   }
+
+  /**
+   * Return the average 24h change % of the top 5 gainers.
+   */
+  async getTopGainersAvg() {
+    const tickers = await this.api.get24hTickers();
+    const tradableSymbols = await this._getTradableSymbols();
+    const list = Array.isArray(tickers) ? tickers : [];
+
+    const top5 = list
+      .map((t) => ({ symbol: t.symbol, change: Number(t.priceChangePercent) }))
+      .filter((t) => typeof t.symbol === "string" && t.symbol.endsWith("USDT"))
+      .filter((t) => tradableSymbols.has(t.symbol))
+      .filter((t) => Number.isFinite(t.change) && t.change > 0)
+      .sort((a, b) => b.change - a.change)
+      .slice(0, 5);
+
+    if (top5.length === 0) return 0;
+    return top5.reduce((sum, t) => sum + t.change, 0) / top5.length;
+  }
 }
 
 module.exports = SymbolScanner;
