@@ -78,11 +78,11 @@ class Controller {
 
     // Market heat filter: skip if top-5 average 24h% > 35
     const avg24h = await this.scanner.getTopGainersAvg();
-    if (avg24h > 35) {
-      log("CONTROLLER", `Market too hot: top-5 avg ${avg24h.toFixed(1)}% > 35% — skipping`);
+    if (avg24h > 45) {
+      log("CONTROLLER", `Market too hot: top-5 avg ${avg24h.toFixed(1)}% > 45% — skipping`);
       return;
     }
-    log("CONTROLLER", `Top-5 avg ${avg24h.toFixed(1)}% <= 35% — proceeding`);
+    log("CONTROLLER", `Top-5 avg ${avg24h.toFixed(1)}% <= 45% — proceeding`);
 
     const candidates = await this.scanner.scan();
 
