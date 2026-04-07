@@ -491,7 +491,7 @@ function App() {
             <div className="glass rounded-2xl p-4">
               {topGainers.length > 0 && (() => {
                 const avg = topGainers.reduce((s, g) => s + (g.percent || 0), 0) / topGainers.length;
-                const blocked = avg > 35;
+                const blocked = avg > 40;
                 return (
                   <div className={`mb-3 flex items-center justify-between rounded-xl px-4 py-2.5 ${blocked ? "bg-rose-500/10 border border-rose-500/20" : "bg-emerald-500/10 border border-emerald-500/20"}`}>
                     <span className="text-[10px] uppercase tracking-widest text-slate-400">Top 5 Avg</span>

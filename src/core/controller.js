@@ -12,6 +12,7 @@ class Controller {
     this._scanning = false;
     this.equityFraction = Number(config.equityFraction) || 0.9;
     this.traderResults = []; // { symbol, result: "win"|"loss", pnl, time }
+    this._cooldownUntil = 0; // timestamp when cooldown expires
   }
 
   async start() {
@@ -76,13 +77,30 @@ class Controller {
   async _doScanAndLaunch() {
     if (this.traders.size >= config.maxTraders) return;
 
-    // Market heat filter: skip if top-5 average 24h% > 35
-    const avg24h = await this.scanner.getTopGainersAvg();
-    if (avg24h > 35) {
-      log("CONTROLLER", `Market too hot: top-5 avg ${avg24h.toFixed(1)}% > 35% — skipping`);
+    // Cooldown check
+    if (Date.now() < this._cooldownUntil) {
+      const mins = Math.ceil((this._cooldownUntil - Date.now()) / 60000);
+      log("CONTROLLER", `Cooldown active: ${mins}m remaining — skipping`);
       return;
     }
-    log("CONTROLLER", `Top-5 avg ${avg24h.toFixed(1)}% <= 35% — proceeding`);
+
+    // Market heat filter: skip if top-5 average 24h% > 40
+    const avg24h = await this.scanner.getTopGainersAvg();
+    if (avg24h > 40) {
+      log("CONTROLLER", `Market too hot: top-5 avg ${avg24h.toFixed(1)}% > 40% — destroying all traders & entering 1h cooldown`);
+      // Destroy all active traders
+      for (const [symbol, trader] of this.traders) {
+        try {
+          await trader.destroy("market-heat");
+        } catch (err) {
+          log("CONTROLLER", `Failed to destroy ${symbol}: ${err.message}`);
+        }
+      }
+      // Set 1 hour cooldown
+      this._cooldownUntil = Date.now() + 60 * 60 * 1000;
+      return;
+    }
+    log("CONTROLLER", `Top-5 avg ${avg24h.toFixed(1)}% <= 40% — proceeding`);
 
     const candidates = await this.scanner.scan();
 
