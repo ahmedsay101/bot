@@ -87,17 +87,23 @@ class Controller {
     // Market heat filter: skip if top-5 average 24h% > 40
     const avg24h = await this.scanner.getTopGainersAvg();
     if (avg24h > 40) {
-      log("CONTROLLER", `Market too hot: top-5 avg ${avg24h.toFixed(1)}% > 40% — destroying all traders & entering 1h cooldown`);
       // Destroy all active traders
+      let destroyed = 0;
       for (const [symbol, trader] of this.traders) {
         try {
           await trader.destroy("market-heat");
+          destroyed++;
         } catch (err) {
           log("CONTROLLER", `Failed to destroy ${symbol}: ${err.message}`);
         }
       }
-      // Set 1 hour cooldown
-      this._cooldownUntil = Date.now() + 60 * 60 * 1000;
+      // Only enforce cooldown if traders were actually destroyed
+      if (destroyed > 0) {
+        this._cooldownUntil = Date.now() + 60 * 60 * 1000;
+        log("CONTROLLER", `Market too hot: top-5 avg ${avg24h.toFixed(1)}% > 40% — destroyed ${destroyed} trader(s) & entering 1h cooldown`);
+      } else {
+        log("CONTROLLER", `Market too hot: top-5 avg ${avg24h.toFixed(1)}% > 40% — no active traders, skipping`);
+      }
       return;
     }
     log("CONTROLLER", `Top-5 avg ${avg24h.toFixed(1)}% <= 40% — proceeding`);
