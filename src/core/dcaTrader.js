@@ -38,7 +38,7 @@ class DCATrader {
     // TP% = round(24h change / 10), minimum 1%
     this.takeProfitPercent = Math.max(1, Math.round(this.changePercent / 10));
     // Fixed SL%
-    this.stopLossPercent = 50;
+    this.stopLossPercent = 30;
 
     this.entryPrice = 0;
     this.quantity = 0;
