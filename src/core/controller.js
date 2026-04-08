@@ -12,7 +12,7 @@ class Controller {
     this._scanning = false;
     this.equityFraction = Number(config.equityFraction) || 0.9;
     this.traderResults = []; // { symbol, result: "win"|"loss", pnl, time }
-    this._cooldownUntil = 0; // timestamp when cooldown expires
+    this._marketBlocked = false; // hysteresis flag
   }
 
   async start() {
@@ -77,16 +77,10 @@ class Controller {
   async _doScanAndLaunch() {
     if (this.traders.size >= config.maxTraders) return;
 
-    // Cooldown check
-    if (Date.now() < this._cooldownUntil) {
-      const mins = Math.ceil((this._cooldownUntil - Date.now()) / 60000);
-      log("CONTROLLER", `Cooldown active: ${mins}m remaining — skipping`);
-      return;
-    }
-
-    // Market heat filter: skip if top-5 average 24h% > 40
+    // Market heat hysteresis: block above 50%, resume below 45%
     const avg24h = await this.scanner.getTopGainersAvg();
-    if (avg24h > 40) {
+    if (!this._marketBlocked && avg24h > 50) {
+      this._marketBlocked = true;
       // Destroy all active traders
       let destroyed = 0;
       for (const [symbol, trader] of this.traders) {
@@ -97,16 +91,20 @@ class Controller {
           log("CONTROLLER", `Failed to destroy ${symbol}: ${err.message}`);
         }
       }
-      // Only enforce cooldown if traders were actually destroyed
-      if (destroyed > 0) {
-        this._cooldownUntil = Date.now() + 60 * 60 * 1000;
-        log("CONTROLLER", `Market too hot: top-5 avg ${avg24h.toFixed(1)}% > 40% — destroyed ${destroyed} trader(s) & entering 1h cooldown`);
-      } else {
-        log("CONTROLLER", `Market too hot: top-5 avg ${avg24h.toFixed(1)}% > 40% — no active traders, skipping`);
-      }
+      log("CONTROLLER", `Market too hot: top-5 avg ${avg24h.toFixed(1)}% > 50% — destroyed ${destroyed} trader(s), blocking`);
       return;
     }
-    log("CONTROLLER", `Top-5 avg ${avg24h.toFixed(1)}% <= 40% — proceeding`);
+    if (this._marketBlocked) {
+      if (avg24h <= 45) {
+        this._marketBlocked = false;
+        log("CONTROLLER", `Market cooled: top-5 avg ${avg24h.toFixed(1)}% <= 45% — resuming`);
+      } else {
+        log("CONTROLLER", `Market still hot: top-5 avg ${avg24h.toFixed(1)}% > 45% — blocked`);
+        return;
+      }
+    } else {
+      log("CONTROLLER", `Top-5 avg ${avg24h.toFixed(1)}% <= 50% — proceeding`);
+    }
 
     const candidates = await this.scanner.scan();
 
