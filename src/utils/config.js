@@ -7,7 +7,7 @@ const config = {
   maxTraders: 3,
   feeRate: 0.0004,
   fixedNotional: 500,
-  leverage: 2,
+  leverage: 10,
   gridLevels: 5,
   gapPercent: 1,
   takeProfitPercent: 5,
