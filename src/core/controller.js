@@ -1,4 +1,4 @@
-const DCATrader = require("./dcaTrader");
+const GridTrader = require("./gridTrader");
 const { log } = require("../utils/logger");
 const config = require("../utils/config");
 const store = require("../state/store");
@@ -7,12 +7,9 @@ class Controller {
   constructor({ api, scanner }) {
     this.api = api;
     this.scanner = scanner;
-    this.traders = new Map();
+    this.traders = new Map(); // symbol -> trader
     this.leverageSet = new Set();
     this._scanning = false;
-    this.equityFraction = Number(config.equityFraction) || 0.9;
-    this.traderResults = []; // { symbol, result: "win"|"loss", pnl, time }
-    this._marketBlocked = false; // hysteresis flag
   }
 
   async start() {
@@ -77,40 +74,10 @@ class Controller {
   async _doScanAndLaunch() {
     if (this.traders.size >= config.maxTraders) return;
 
-    // Market heat hysteresis: block above 50%, resume below 45%
-    const avg24h = await this.scanner.getTopGainersAvg();
-    if (!this._marketBlocked && avg24h > 50) {
-      this._marketBlocked = true;
-      // Destroy all active traders
-      let destroyed = 0;
-      for (const [symbol, trader] of this.traders) {
-        try {
-          await trader.destroy("market-heat");
-          destroyed++;
-        } catch (err) {
-          log("CONTROLLER", `Failed to destroy ${symbol}: ${err.message}`);
-        }
-      }
-      log("CONTROLLER", `Market too hot: top-5 avg ${avg24h.toFixed(1)}% > 50% — destroyed ${destroyed} trader(s), blocking`);
-      return;
-    }
-    if (this._marketBlocked) {
-      if (avg24h <= 45) {
-        this._marketBlocked = false;
-        log("CONTROLLER", `Market cooled: top-5 avg ${avg24h.toFixed(1)}% <= 45% — resuming`);
-      } else {
-        log("CONTROLLER", `Market still hot: top-5 avg ${avg24h.toFixed(1)}% > 45% — blocked`);
-        return;
-      }
-    } else {
-      log("CONTROLLER", `Top-5 avg ${avg24h.toFixed(1)}% <= 50% — proceeding`);
-    }
-
     const candidates = await this.scanner.scan();
 
     for (const candidate of candidates) {
       const symbol = candidate.symbol;
-      const changePercent = candidate.change;
       if (this.traders.size >= config.maxTraders) break;
       if (this.traders.has(symbol)) continue;
 
@@ -125,18 +92,15 @@ class Controller {
         }
       }
 
-      const equity = store.getStatus().equity || Number(config.startingBalanceUSDT);
-      const trader = new DCATrader({
+      const trader = new GridTrader({
         symbol,
         api: this.api,
-        changePercent,
-        equity,
         onDestroy: (sym, pnl, reason) => this._onTraderDestroyed(sym, pnl, reason)
       });
       this.traders.set(symbol, trader);
       try {
         await trader.start();
-        log("CONTROLLER", `Launched DCA trader for ${symbol}`);
+        log("CONTROLLER", `Launched grid trader for ${symbol}`);
       } catch (err) {
         log("CONTROLLER", `Trader ${symbol} failed to start: ${err.message}`);
         this.traders.delete(symbol);
@@ -169,18 +133,7 @@ class Controller {
   async _onTraderDestroyed(symbol, pnl, reason) {
     if (!this.traders.has(symbol)) return;
     this.traders.delete(symbol);
-
-    const isWin = reason === "take-profit";
-    const isLoss = reason === "stop-loss";
-    if (isWin || isLoss) {
-      const result = isWin ? "win" : "loss";
-      this.traderResults.push({ symbol, result, pnl, time: new Date().toISOString() });
-      this.equityFraction = isWin ? 0.9 : 0.1;
-      store.setTraderResults(this.traderResults);
-      log("CONTROLLER", `Trader ${symbol} ${result} | equityFraction → ${this.equityFraction}`);
-    }
-
-    log("CONTROLLER", `Trader ${symbol} destroyed`);
+    log("CONTROLLER", `Trader ${symbol} destroyed (${reason}) PnL=${pnl?.toFixed(2)}`);
     await this._refreshMarketStreams();
   }
 

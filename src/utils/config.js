@@ -7,11 +7,12 @@ const config = {
   maxTraders: 3,
   feeRate: 0.0004,
   fixedNotional: 500,
-  equityFraction: 0.3,
   leverage: 2,
+  gridLevels: 5,
+  gapPercent: 1,
+  takeProfitPercent: 5,
   startingBalanceUSDT: 200,
   scannerIntervalMs: 1 * 60 * 1000,
-  maxLifetimeMs: 3 * 60 * 60 * 1000,
   recvWindow: 5000
 };
 

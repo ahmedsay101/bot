@@ -41,58 +41,58 @@ function StatCard({ label, value, sub, color }) {
   );
 }
 
-/* ── Price Level Indicator ──────────────────────────────────── */
-function PriceLevelIndicator({ trader }) {
-  const price = Number(trader.lastPrice);
-  const tp = Number(trader.tpPrice);
-  const sl = Number(trader.slPrice);
-  const entry = Number(trader.entryPrice);
-  if (!Number.isFinite(price) || !Number.isFinite(tp) || !Number.isFinite(sl)) return null;
-
-  const low = tp * 0.97;
-  const high = sl * 1.03;
-  const range = high - low || 1;
-  const pct = (v) => Math.max(0, Math.min(100, ((v - low) / range) * 100));
+/* ── Ladder View ───────────────────────────────────────────── */
+function LadderView({ ladder, lastPrice, basePrice }) {
+  if (!ladder || ladder.length === 0) return (
+    <p className="py-3 text-center text-xs text-slate-600">No levels</p>
+  );
 
   return (
     <div className="space-y-1">
-      <div className="flex justify-between text-[10px] text-slate-500">
-        <span>TP {fmtPrice(tp)}</span>
-        <span>Entry {fmtPrice(entry)}</span>
-        <span>SL {fmtPrice(sl)}</span>
-      </div>
-      <div className="relative h-3 w-full overflow-hidden rounded-full bg-slate-800">
-        {/* TP zone */}
-        <div
-          className="absolute h-full bg-emerald-500/15"
-          style={{ left: 0, width: `${pct(tp)}%` }}
-        />
-        {/* SL zone */}
-        <div
-          className="absolute h-full bg-rose-500/10"
-          style={{ left: `${pct(sl)}%`, width: `${100 - pct(sl)}%` }}
-        />
-        {/* TP line */}
-        <div
-          className="absolute top-0 h-full w-0.5 bg-emerald-400/80"
-          style={{ left: `${pct(tp)}%` }}
-        />
-        {/* Entry line */}
-        <div
-          className="absolute top-0 h-full w-0.5 bg-amber-400/60"
-          style={{ left: `${pct(entry)}%` }}
-        />
-        {/* SL line */}
-        <div
-          className="absolute top-0 h-full w-0.5 bg-rose-400/80"
-          style={{ left: `${pct(sl)}%` }}
-        />
-        {/* Price marker */}
-        <div
-          className="absolute top-0 h-full w-1.5 rounded-full bg-sky-400 shadow-lg shadow-sky-400/50 transition-all"
-          style={{ left: `calc(${pct(price)}% - 3px)` }}
-        />
-      </div>
+      {ladder.map((level) => {
+        const isFilled = level.status === "FILLED";
+        const isPending = level.status === "PENDING";
+        const isLong = level.direction === "LONG";
+        const isCurrentPrice = lastPrice && Math.abs(lastPrice - level.price) / level.price < 0.001;
+
+        let bg = "bg-slate-800/30";
+        let border = "border-transparent";
+        if (isFilled && isLong) { bg = "bg-emerald-500/10"; border = "border-emerald-500/20"; }
+        else if (isFilled && !isLong) { bg = "bg-rose-500/10"; border = "border-rose-500/20"; }
+        else if (isPending && isLong) { bg = "bg-emerald-500/5"; border = "border-emerald-500/10"; }
+        else if (isPending && !isLong) { bg = "bg-rose-500/5"; border = "border-rose-500/10"; }
+
+        return (
+          <div key={level.index} className={`flex items-center justify-between rounded-lg px-3 py-1.5 border ${bg} ${border} ${isCurrentPrice ? "ring-1 ring-sky-400/30" : ""}`}>
+            <div className="flex items-center gap-2 min-w-0">
+              <span className={`w-5 text-center text-[10px] font-bold ${isLong ? "text-emerald-400" : "text-rose-400"}`}>
+                {isLong ? "L" : "S"}{Math.abs(level.index)}
+              </span>
+              <span className="font-mono text-xs text-slate-300">{fmtPrice(level.price)}</span>
+            </div>
+            <div className="flex items-center gap-3">
+              <span className={`text-[10px] font-bold uppercase ${isFilled ? (isLong ? "text-emerald-400" : "text-rose-400") : isPending ? "text-slate-500" : "text-slate-600"}`}>
+                {level.status}
+              </span>
+              {isFilled && (
+                <span className={`font-mono text-xs font-bold ${pnlColor(level.unrealizedPnl)}`}>
+                  {fmt(level.unrealizedPnl, 4)}
+                </span>
+              )}
+            </div>
+          </div>
+        );
+      })}
+      {/* Current price marker */}
+      {lastPrice && (
+        <div className="flex items-center justify-between rounded-lg px-3 py-1.5 bg-sky-500/10 border border-sky-500/20">
+          <div className="flex items-center gap-2">
+            <span className="w-5 text-center text-[10px] font-bold text-sky-400">▸</span>
+            <span className="font-mono text-xs text-sky-300">Price: {fmtPrice(lastPrice)}</span>
+          </div>
+          <span className="text-[10px] text-sky-400">CURRENT</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -108,10 +108,10 @@ function TradeTable({ trades }) {
       <table className="w-full text-xs">
         <thead>
           <tr className="border-b border-white/5 text-left text-[10px] uppercase tracking-wider text-slate-500">
-            <th className="py-2 pr-3">#</th>
+            <th className="py-2 pr-3">Level</th>
             <th className="py-2 pr-3">Dir</th>
             <th className="py-2 pr-3">Reason</th>
-            <th className="py-2 pr-3 text-right">Avg Entry</th>
+            <th className="py-2 pr-3 text-right">Entry</th>
             <th className="py-2 pr-3 text-right">Exit</th>
             <th className="py-2 pr-3 text-right">Qty</th>
             <th className="py-2 pr-3 text-right">Gross</th>
@@ -122,9 +122,9 @@ function TradeTable({ trades }) {
         <tbody>
           {trades.slice().reverse().map((t, i) => (
             <tr key={i} className="border-b border-white/[0.03] hover:bg-white/[0.02]">
-              <td className="py-1.5 pr-3 text-slate-500">{trades.length - i}</td>
+              <td className="py-1.5 pr-3 text-slate-500">L{t.levelIndex}</td>
               <td className="py-1.5 pr-3">
-                <span className="text-rose-400">{t.direction}</span>
+                <span className={t.direction === "LONG" ? "text-emerald-400" : "text-rose-400"}>{t.direction}</span>
               </td>
               <td className="py-1.5 pr-3 text-slate-400">{t.reason}</td>
               <td className="py-1.5 pr-3 text-right font-mono text-slate-300">{fmtPrice(t.entry)}</td>
@@ -148,7 +148,8 @@ function TradeTable({ trades }) {
 /* ── Trader Card ───────────────────────────────────────────── */
 function TraderCard({ trader, onDestroy }) {
   const [expanded, setExpanded] = useState(false);
-  const netPnl = (trader.realizedPnl || 0) + (trader.unrealizedPnl || 0);
+  const totalPnl = Number(trader.totalPnl || 0);
+  const profitPct = Number(trader.profitPercent || 0);
 
   return (
     <div className="glass rounded-2xl overflow-hidden">
@@ -161,7 +162,7 @@ function TraderCard({ trader, onDestroy }) {
           <div className="flex items-center gap-3">
             <h3 className="text-lg font-bold text-slate-100">{trader.symbol}</h3>
             <span className="rounded-full bg-violet-500/15 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-violet-400 border border-violet-500/20">
-              SHORT {trader.leverage || 2}x
+              GRID {trader.leverage || 2}x
             </span>
             <span className="text-[10px] text-slate-500">
               {trader.createdAt ? new Date(trader.createdAt).toLocaleString() : ""}
@@ -171,16 +172,13 @@ function TraderCard({ trader, onDestroy }) {
           <div className="flex items-center gap-2">
             <div className="flex flex-wrap gap-2 text-xs">
               <span className="rounded-full bg-white/5 border border-white/10 px-2.5 py-1 text-slate-300">
-                Entry {fmtPrice(trader.entryPrice)}
+                Base {fmtPrice(trader.basePrice)}
               </span>
-              <span className="rounded-full bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-1 text-emerald-400">
-                TP {fmtPrice(trader.tpPrice)}
+              <span className="rounded-full bg-white/5 border border-white/10 px-2.5 py-1 text-slate-300">
+                Filled {(trader.filledLongCount || 0) + (trader.filledShortCount || 0)}/{trader.totalOrders || 0}
               </span>
-              <span className="rounded-full bg-rose-500/10 border border-rose-500/20 px-2.5 py-1 text-rose-400">
-                SL {fmtPrice(trader.slPrice)}
-              </span>
-              <span className={`rounded-full bg-white/5 border border-white/10 px-2.5 py-1 ${pnlColor(netPnl)}`}>
-                Net ${fmt(netPnl)}
+              <span className={`rounded-full bg-white/5 border border-white/10 px-2.5 py-1 font-bold ${pnlColor(totalPnl)}`}>
+                PnL ${fmt(totalPnl)} ({fmt(profitPct)}%)
               </span>
             </div>
             <button
@@ -196,10 +194,6 @@ function TraderCard({ trader, onDestroy }) {
             </button>
           </div>
         </div>
-
-        <div className="mt-3">
-          <PriceLevelIndicator trader={trader} />
-        </div>
       </button>
 
       {expanded && (
@@ -207,37 +201,43 @@ function TraderCard({ trader, onDestroy }) {
           {/* Config Info */}
           <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3 text-sm">
             <div>
-              <p className="text-[10px] uppercase text-slate-500">Start Price</p>
-              <p className="font-mono text-slate-200">{fmtPrice(trader.startPrice)}</p>
+              <p className="text-[10px] uppercase text-slate-500">Base Price</p>
+              <p className="font-mono text-slate-200">{fmtPrice(trader.basePrice)}</p>
             </div>
             <div>
-              <p className="text-[10px] uppercase text-slate-500">Current Price</p>
+              <p className="text-[10px] uppercase text-slate-500">Current</p>
               <p className="font-mono text-slate-200">{fmtPrice(trader.lastPrice)}</p>
             </div>
             <div>
-              <p className="text-[10px] uppercase text-slate-500">Entry Price</p>
-              <p className="font-mono text-amber-400">{fmtPrice(trader.entryPrice)}</p>
+              <p className="text-[10px] uppercase text-slate-500">Equity</p>
+              <p className="font-mono text-slate-200">${fmt(trader.allocatedEquity)}</p>
             </div>
             <div>
-              <p className="text-[10px] uppercase text-slate-500">Quantity</p>
-              <p className="font-mono text-slate-200">{fmt(trader.quantity, 4)}</p>
+              <p className="text-[10px] uppercase text-slate-500">Gap</p>
+              <p className="font-mono text-slate-200">{trader.gapPercent}%</p>
             </div>
             <div>
-              <p className="text-[10px] uppercase text-slate-500">Notional</p>
-              <p className="font-mono text-slate-200">${fmt(trader.notional)}</p>
+              <p className="text-[10px] uppercase text-slate-500">Levels</p>
+              <p className="font-mono text-slate-200">{trader.gridLevels} x 2</p>
             </div>
             <div>
-              <p className="text-[10px] uppercase text-slate-500">Margin</p>
-              <p className="font-mono text-slate-200">${fmt(trader.margin)}</p>
+              <p className="text-[10px] uppercase text-slate-500">$/Order</p>
+              <p className="font-mono text-slate-200">${fmt(trader.notionalPerOrder)}</p>
             </div>
             <div>
-              <p className="text-[10px] uppercase text-slate-500">Duration</p>
-              <p className="font-mono text-slate-200">{fmtDuration(trader.createdAt)}</p>
+              <p className="text-[10px] uppercase text-slate-500">TP Target</p>
+              <p className="font-mono text-emerald-400">{trader.takeProfitPercent}%</p>
             </div>
           </div>
 
           {/* Stats */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div className="rounded-xl bg-slate-800/40 p-3">
+              <p className="text-[10px] uppercase text-slate-500">Realized</p>
+              <p className={`text-sm font-mono font-bold ${pnlColor(trader.realizedPnl)}`}>
+                ${fmt(trader.realizedPnl, 4)}
+              </p>
+            </div>
             <div className="rounded-xl bg-slate-800/40 p-3">
               <p className="text-[10px] uppercase text-slate-500">Unrealized</p>
               <p className={`text-sm font-mono font-bold ${pnlColor(trader.unrealizedPnl)}`}>
@@ -245,35 +245,44 @@ function TraderCard({ trader, onDestroy }) {
               </p>
             </div>
             <div className="rounded-xl bg-slate-800/40 p-3">
-              <p className="text-[10px] uppercase text-slate-500">Fees Paid</p>
+              <p className="text-[10px] uppercase text-slate-500">Fees</p>
               <p className="text-sm font-mono text-slate-400">${fmt(trader.feesPaid, 4)}</p>
             </div>
             <div className="rounded-xl bg-slate-800/40 p-3">
-              <p className="text-[10px] uppercase text-slate-500">Peak Profit</p>
-              <p className="text-sm font-mono font-bold text-sky-400">${fmt(trader.highestNetProfit, 4)}</p>
-            </div>
-            <div className="rounded-xl bg-slate-800/40 p-3">
-              <p className="text-[10px] uppercase text-slate-500">TP / SL %</p>
-              <p className="text-sm font-mono text-slate-300">
-                <span className="text-emerald-400">{trader.takeProfitPercent || 10}%</span>
-                {" / "}
-                <span className="text-rose-400">{trader.stopLossPercent || 50}%</span>
+              <p className="text-[10px] uppercase text-slate-500">Profit %</p>
+              <p className={`text-sm font-mono font-bold ${pnlColor(profitPct)}`}>
+                {fmt(profitPct)}%
               </p>
             </div>
           </div>
 
-          {/* Trade History */}
+          {/* Ladder */}
           <div>
             <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-3">
-              Trade History ({trader.totalTrades || trader.tradeHistory?.length || 0})
+              Grid Ladder ({(trader.filledLongCount || 0) + (trader.filledShortCount || 0)} filled / {trader.totalOrders || 0} total)
             </h4>
-            <TradeTable trades={trader.tradeHistory} />
+            <LadderView
+              ladder={trader.ladder}
+              lastPrice={trader.lastPrice}
+              basePrice={trader.basePrice}
+            />
           </div>
+
+          {/* Trade History */}
+          {trader.tradeHistory && trader.tradeHistory.length > 0 && (
+            <div>
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-3">
+                Trade History ({trader.tradeHistory.length})
+              </h4>
+              <TradeTable trades={trader.tradeHistory} />
+            </div>
+          )}
         </div>
       )}
     </div>
   );
 }
+
 /* ── Trader History Table ──────────────────────────────────── */
 function TraderHistoryTable({ history }) {
   if (!history || history.length === 0) return (
@@ -286,10 +295,9 @@ function TraderHistoryTable({ history }) {
         <thead>
           <tr className="border-b border-white/5 text-left text-[10px] uppercase tracking-wider text-slate-500">
             <th className="py-2 pr-3">Symbol</th>
-            <th className="py-2 pr-3">24h %</th>
-            <th className="py-2 pr-3 text-right">Entry</th>
-            <th className="py-2 pr-3 text-right">Exit</th>
             <th className="py-2 pr-3 text-right">PnL</th>
+            <th className="py-2 pr-3 text-right">Profit %</th>
+            <th className="py-2 pr-3 text-right">Equity</th>
             <th className="py-2 pr-3 text-right">Fees</th>
             <th className="py-2 pr-3">Reason</th>
             <th className="py-2 pr-3">Duration</th>
@@ -300,19 +308,24 @@ function TraderHistoryTable({ history }) {
           {history.map((h, i) => (
             <tr key={h.id || i} className="border-b border-white/[0.03] hover:bg-white/[0.02]">
               <td className="py-1.5 pr-3 font-medium text-slate-200">{h.symbol}</td>
-              <td className="py-1.5 pr-3 text-emerald-400">{fmt(h.changePercent)}%</td>
-              <td className="py-1.5 pr-3 text-right font-mono text-amber-400">{fmtPrice(h.entryPrice || h.startPrice)}</td>
-              <td className="py-1.5 pr-3 text-right font-mono text-slate-400">{fmtPrice(h.endPrice)}</td>
               <td className={`py-1.5 pr-3 text-right font-mono font-bold ${pnlColor(h.realizedPnl)}`}>
                 ${fmt(h.realizedPnl, 4)}
+              </td>
+              <td className={`py-1.5 pr-3 text-right font-mono ${pnlColor(h.profitPercent)}`}>
+                {fmt(h.profitPercent)}%
+              </td>
+              <td className="py-1.5 pr-3 text-right font-mono text-slate-400">
+                ${fmt(h.allocatedEquity)}
               </td>
               <td className="py-1.5 pr-3 text-right font-mono text-slate-500">${fmt(h.feesPaid, 4)}</td>
               <td className="py-1.5 pr-3">
                 <span className={`rounded-md px-1.5 py-0.5 text-[10px] font-bold uppercase ${
                   h.reason === "take-profit"
                     ? "bg-emerald-500/15 text-emerald-400"
-                    : h.reason === "stop-loss"
-                    ? "bg-rose-500/15 text-rose-400"
+                    : h.reason === "all-filled"
+                    ? "bg-sky-500/15 text-sky-400"
+                    : h.reason === "manual"
+                    ? "bg-amber-500/15 text-amber-400"
                     : "bg-slate-700/50 text-slate-400"
                 }`}>
                   {h.reason}
@@ -402,7 +415,6 @@ function App() {
       const next = d.traders || [];
       const bal = Number(d.balance || 0);
       const unr = next.reduce((s, t) => s + Number(t.unrealizedPnl || 0), 0);
-      // Preserve the latest price from priceUpdate if it's newer than the snapshot
       setTraders((prev) => {
         const priceMap = new Map(prev.map((t) => [t.symbol, t.lastPrice]));
         return next.map((t) => {
@@ -441,7 +453,7 @@ function App() {
         {/* ── Header ── */}
         <div className="glass rounded-2xl px-6 py-5 flex flex-wrap items-center justify-between gap-4">
           <div>
-            <h1 className="text-2xl font-bold">DCA Trader</h1>
+            <h1 className="text-2xl font-bold">Grid Trader</h1>
             <p className="text-xs text-slate-500 mt-1">
               Binance Futures · {status.mode}
               <span className="ml-3">{socketStatus === "connected" ? "● Connected" : "○ Disconnected"}</span>
@@ -477,7 +489,7 @@ function App() {
             <h2 className="text-lg font-semibold">Active Traders</h2>
             {traders.length === 0 && (
               <div className="glass rounded-2xl p-8 text-center text-slate-500">
-                No active traders. Waiting for scanner to find candidates...
+                No active traders. Waiting for scanner...
               </div>
             )}
             {traders.map((t) => (
@@ -489,23 +501,6 @@ function App() {
           <div>
             <h2 className="text-lg font-semibold mb-4">Top Gainers (24h)</h2>
             <div className="glass rounded-2xl p-4">
-              {topGainers.length > 0 && (() => {
-                const avg = topGainers.reduce((s, g) => s + (g.percent || 0), 0) / topGainers.length;
-                const blocked = avg > 50;
-                return (
-                  <div className={`mb-3 flex items-center justify-between rounded-xl px-4 py-2.5 ${blocked ? "bg-rose-500/10 border border-rose-500/20" : "bg-emerald-500/10 border border-emerald-500/20"}`}>
-                    <span className="text-[10px] uppercase tracking-widest text-slate-400">Top 5 Avg</span>
-                    <div className="flex items-center gap-2">
-                      <span className={`text-sm font-bold font-mono ${blocked ? "text-rose-400" : "text-emerald-400"}`}>
-                        {fmt(avg)}%
-                      </span>
-                      <span className={`rounded-full px-2 py-0.5 text-[9px] font-bold uppercase ${blocked ? "bg-rose-500/20 text-rose-400" : "bg-emerald-500/20 text-emerald-400"}`}>
-                        {blocked ? "BLOCKED" : "OK"}
-                      </span>
-                    </div>
-                  </div>
-                );
-              })()}
               <TopGainersTable gainers={topGainers} activeSymbols={activeSymbols} />
             </div>
           </div>
