@@ -10,7 +10,7 @@ const config = {
   leverage: 10,
   gridLevels: 10,
   gapPercent: 1,
-  takeProfitPercent: 5,
+  takeProfitPercent: 3,
   maxLifetimeMs: 1 * 60 * 60 * 1000,
   startingBalanceUSDT: 1700,
   scannerIntervalMs: 1 * 60 * 1000,
