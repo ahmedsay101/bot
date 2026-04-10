@@ -42,18 +42,37 @@ function StatCard({ label, value, sub, color }) {
 }
 
 /* ── Ladder View ───────────────────────────────────────────── */
-function LadderView({ ladder, lastPrice, basePrice }) {
+function LadderView({ ladder, lastPrice }) {
   if (!ladder || ladder.length === 0) return (
     <p className="py-3 text-center text-xs text-slate-600">No levels</p>
   );
 
+  // Build combined list of levels + current price, sorted by price descending
+  const rows = ladder.map((level) => ({ type: "level", price: level.price, data: level }));
+  if (lastPrice && Number.isFinite(lastPrice)) {
+    rows.push({ type: "price", price: lastPrice, data: null });
+  }
+  rows.sort((a, b) => b.price - a.price);
+
   return (
     <div className="space-y-1">
-      {ladder.map((level) => {
+      {rows.map((row) => {
+        if (row.type === "price") {
+          return (
+            <div key="current-price" className="flex items-center justify-between rounded-lg px-3 py-1.5 bg-sky-500/10 border border-sky-500/20">
+              <div className="flex items-center gap-2">
+                <span className="w-5 text-center text-[10px] font-bold text-sky-400">▸</span>
+                <span className="font-mono text-xs text-sky-300">Price: {fmtPrice(row.price)}</span>
+              </div>
+              <span className="text-[10px] text-sky-400">CURRENT</span>
+            </div>
+          );
+        }
+
+        const level = row.data;
         const isFilled = level.status === "FILLED";
         const isPending = level.status === "PENDING";
         const isLong = level.direction === "LONG";
-        const isCurrentPrice = lastPrice && Math.abs(lastPrice - level.price) / level.price < 0.001;
 
         let bg = "bg-slate-800/30";
         let border = "border-transparent";
@@ -63,7 +82,7 @@ function LadderView({ ladder, lastPrice, basePrice }) {
         else if (isPending && !isLong) { bg = "bg-rose-500/5"; border = "border-rose-500/10"; }
 
         return (
-          <div key={level.index} className={`flex items-center justify-between rounded-lg px-3 py-1.5 border ${bg} ${border} ${isCurrentPrice ? "ring-1 ring-sky-400/30" : ""}`}>
+          <div key={level.index} className={`flex items-center justify-between rounded-lg px-3 py-1.5 border ${bg} ${border}`}>
             <div className="flex items-center gap-2 min-w-0">
               <span className={`w-5 text-center text-[10px] font-bold ${isLong ? "text-emerald-400" : "text-rose-400"}`}>
                 {isLong ? "L" : "S"}{Math.abs(level.index)}
@@ -83,16 +102,6 @@ function LadderView({ ladder, lastPrice, basePrice }) {
           </div>
         );
       })}
-      {/* Current price marker */}
-      {lastPrice && (
-        <div className="flex items-center justify-between rounded-lg px-3 py-1.5 bg-sky-500/10 border border-sky-500/20">
-          <div className="flex items-center gap-2">
-            <span className="w-5 text-center text-[10px] font-bold text-sky-400">▸</span>
-            <span className="font-mono text-xs text-sky-300">Price: {fmtPrice(lastPrice)}</span>
-          </div>
-          <span className="text-[10px] text-sky-400">CURRENT</span>
-        </div>
-      )}
     </div>
   );
 }
@@ -151,6 +160,12 @@ function TraderCard({ trader, onDestroy }) {
   const totalPnl = Number(trader.totalPnl || 0);
   const profitPct = Number(trader.profitPercent || 0);
 
+  // Derive filled count from ladder for accuracy (fallback to backend counts)
+  const filledCount = trader.ladder
+    ? trader.ladder.filter((l) => l.status === "FILLED").length
+    : (trader.filledLongCount || 0) + (trader.filledShortCount || 0);
+  const totalOrders = trader.totalOrders || (trader.ladder ? trader.ladder.length : 0);
+
   return (
     <div className="glass rounded-2xl overflow-hidden">
       <button
@@ -175,7 +190,7 @@ function TraderCard({ trader, onDestroy }) {
                 Base {fmtPrice(trader.basePrice)}
               </span>
               <span className="rounded-full bg-white/5 border border-white/10 px-2.5 py-1 text-slate-300">
-                Filled {(trader.filledLongCount || 0) + (trader.filledShortCount || 0)}/{trader.totalOrders || 0}
+                Filled {filledCount}/{totalOrders}
               </span>
               <span className={`rounded-full bg-white/5 border border-white/10 px-2.5 py-1 font-bold ${pnlColor(totalPnl)}`}>
                 PnL ${fmt(totalPnl)} ({fmt(profitPct)}%)
@@ -259,12 +274,11 @@ function TraderCard({ trader, onDestroy }) {
           {/* Ladder */}
           <div>
             <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-3">
-              Grid Ladder ({(trader.filledLongCount || 0) + (trader.filledShortCount || 0)} filled / {trader.totalOrders || 0} total)
+              Grid Ladder ({filledCount} filled / {totalOrders} total)
             </h4>
             <LadderView
               ladder={trader.ladder}
               lastPrice={trader.lastPrice}
-              basePrice={trader.basePrice}
             />
           </div>
 

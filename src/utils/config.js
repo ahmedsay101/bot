@@ -11,6 +11,7 @@ const config = {
   gridLevels: 5,
   gapPercent: 1,
   takeProfitPercent: 5,
+  maxLifetimeMs: 1 * 60 * 60 * 1000,
   startingBalanceUSDT: 1700,
   scannerIntervalMs: 1 * 60 * 1000,
   recvWindow: 5000

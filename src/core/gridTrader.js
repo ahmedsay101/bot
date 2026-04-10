@@ -337,7 +337,15 @@ class GridTrader {
       return;
     }
 
-    // Condition 2: Profit % target reached
+    // Condition 2: Max lifetime exceeded
+    const maxLife = Number(config.maxLifetimeMs) || 0;
+    if (maxLife > 0 && Date.now() - new Date(this.createdAt).getTime() >= maxLife) {
+      log(`GRID ${this.symbol}`, `Max lifetime reached — destroying`);
+      this.destroy("max-lifetime");
+      return;
+    }
+
+    // Condition 3: Profit % target reached
     const price = this.lastPrice || this.basePrice;
     const profitPct = this._calcProfitPercent(price);
     if (profitPct >= this.takeProfitPercent) {
