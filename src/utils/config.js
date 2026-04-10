@@ -8,7 +8,7 @@ const config = {
   feeRate: 0.0004,
   fixedNotional: 500,
   leverage: 10,
-  gridLevels: 5,
+  gridLevels: 10,
   gapPercent: 1,
   takeProfitPercent: 5,
   maxLifetimeMs: 1 * 60 * 60 * 1000,
