@@ -6,10 +6,10 @@ const config = {
   baseWsUrl: "wss://fstream.binance.com",
   maxTraders: 1,
   feeRate: 0.0004,
-  fixedNotional: 200,
+  fixedNotional: 500,
   equityFraction: 0.9,
   leverage: 2,
-  startingBalanceUSDT: 200,
+  startingBalanceUSDT: 500,
   scannerIntervalMs: 1 * 60 * 1000,
   maxLifetimeMs: 3 * 60 * 60 * 1000,
   recvWindow: 5000
