@@ -246,53 +246,87 @@ describe("GridTrader", () => {
     expect(trader._calcProfitPercent(100)).toBe(0);
   });
 
-  // ── Destroy conditions ──
-  test("destroys when all levels filled", async () => {
-    const { trader, api, onDestroy } = makeTrader();
+  // ── Base-price cross closes positions ──
+  test("closes filled long positions when price returns to base", async () => {
+    const { trader, api } = makeTrader();
     await trader.start();
 
-    // Fill all levels except last
-    const entries = [...trader.pendingEntriesById.entries()];
-    const longEntries = entries.filter(([, idx]) => idx > 0);
-    const shortEntries = entries.filter(([, idx]) => idx < 0);
+    // Fill a long position (above base)
+    const [orderId, levelIndex] = [...trader.pendingEntriesById.entries()].find(
+      ([, idx]) => idx > 0
+    );
+    const entryPrice = trader.levels.get(levelIndex).price;
 
-    // Fill all longs
-    for (const [orderId, levelIndex] of longEntries) {
-      api.emit("orderFilled", {
-        symbol: "TESTUSDT",
-        orderId,
-        price: trader.levels.get(levelIndex).price
-      });
-    }
-
-    // Fill all shorts except last
-    for (let i = 0; i < shortEntries.length - 1; i++) {
-      const [orderId, levelIndex] = shortEntries[i];
-      api.emit("orderFilled", {
-        symbol: "TESTUSDT",
-        orderId,
-        price: trader.levels.get(levelIndex).price
-      });
-    }
-
-    expect(trader.active).toBe(true);
-
-    // Fill last short -> should trigger all-filled destroy
-    const [lastOrderId, lastLevelIndex] = shortEntries[shortEntries.length - 1];
     api.emit("orderFilled", {
       symbol: "TESTUSDT",
-      orderId: lastOrderId,
-      price: trader.levels.get(lastLevelIndex).price
+      orderId,
+      price: entryPrice
     });
 
-    // destroy() is async — flush the microtask queue
+    expect(trader.positions.size).toBe(1);
+
+    // Price returns to base (100) — should close the long
+    api.emit("markPrice", { symbol: "TESTUSDT", price: 100 });
     await new Promise((r) => setImmediate(r));
 
-    expect(trader.active).toBe(false);
-    expect(onDestroy).toHaveBeenCalledWith("TESTUSDT", expect.any(Number), "all-filled");
-    expect(store.removeTrader).toHaveBeenCalled();
+    expect(trader.positions.size).toBe(0);
+    expect(trader.levels.get(levelIndex).status).toBe("CLOSED");
+    expect(api.placeMarketOrder).toHaveBeenCalled();
+    expect(store.recordTrade).toHaveBeenCalled();
+    expect(trader.tradeHistory.length).toBe(1);
+    expect(trader.tradeHistory[0].reason).toBe("base-cross");
   });
 
+  test("closes filled short positions when price returns to base", async () => {
+    const { trader, api } = makeTrader();
+    await trader.start();
+
+    // Fill a short position (below base)
+    const [orderId, levelIndex] = [...trader.pendingEntriesById.entries()].find(
+      ([, idx]) => idx < 0
+    );
+    const entryPrice = trader.levels.get(levelIndex).price;
+
+    api.emit("orderFilled", {
+      symbol: "TESTUSDT",
+      orderId,
+      price: entryPrice
+    });
+
+    expect(trader.positions.size).toBe(1);
+
+    // Price returns to base (100) — should close the short
+    api.emit("markPrice", { symbol: "TESTUSDT", price: 100 });
+    await new Promise((r) => setImmediate(r));
+
+    expect(trader.positions.size).toBe(0);
+    expect(trader.levels.get(levelIndex).status).toBe("CLOSED");
+    expect(trader.tradeHistory[0].reason).toBe("base-cross");
+  });
+
+  test("does not close positions when price is away from base", async () => {
+    const { trader, api } = makeTrader();
+    await trader.start();
+
+    // Fill a long position
+    const [orderId, levelIndex] = [...trader.pendingEntriesById.entries()].find(
+      ([, idx]) => idx > 0
+    );
+
+    api.emit("orderFilled", {
+      symbol: "TESTUSDT",
+      orderId,
+      price: trader.levels.get(levelIndex).price
+    });
+
+    // Price goes higher, away from base — should NOT close
+    api.emit("markPrice", { symbol: "TESTUSDT", price: 105 });
+    await new Promise((r) => setImmediate(r));
+
+    expect(trader.positions.size).toBe(1);
+  });
+
+  // ── Destroy conditions ──
   test("destroys when profit % >= takeProfitPercent", async () => {
     const { trader, api, onDestroy } = makeTrader();
     await trader.start();

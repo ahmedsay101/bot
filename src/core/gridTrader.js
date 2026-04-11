@@ -242,6 +242,7 @@ class GridTrader {
     if (!this.active || symbol !== this.symbol) return;
     this.lastPrice = price;
     if (config.mode === "test") this._simulateExitCheck(price);
+    await this._checkBasePriceCross(price);
     this._updateStore();
     this._checkDestroyConditions();
   }
@@ -261,6 +262,7 @@ class GridTrader {
     if (!Number.isFinite(price)) return;
     this.lastPrice = price;
     if (config.mode === "test") this._simulateExitCheck(price);
+    await this._checkBasePriceCross(price);
     this._updateStore();
     this._checkDestroyConditions();
   }
@@ -268,8 +270,85 @@ class GridTrader {
   /* ── Exit / PnL ── */
   _simulateExitCheck(_price) {
     // In test mode, stop-limit fills are handled by the API's _simulateFills.
-    // Positions stay open — they contribute to unrealized PnL.
-    // No per-position TP/SL: the whole grid closes on profitPercent or all-filled.
+    // Positions are closed when price crosses back to basePrice.
+  }
+
+  /**
+   * When price crosses back to basePrice, close all filled positions at market
+   * and remove them from the grid (level becomes CLOSED).
+   */
+  async _checkBasePriceCross(price) {
+    if (!this.active || this.positions.size === 0) return;
+
+    // Check if price has crossed base: longs are above base, so price returning
+    // down to base means long profits should be taken. Shorts are below base,
+    // so price returning up to base means short profits should be taken.
+    // Simple rule: any filled position whose direction would be profitable at
+    // basePrice gets closed when price is back at (or past) basePrice.
+    const tolerance = this.basePrice * 0.0005; // 0.05% tolerance band
+    const atBase = Math.abs(price - this.basePrice) <= tolerance;
+    // Also trigger if price crossed through base:
+    // - For long positions (above base): price moved back down to or below base
+    const belowBase = price <= this.basePrice + tolerance;
+    // - For short positions (below base): price moved back up to or above base
+    const aboveBase = price >= this.basePrice - tolerance;
+
+    const toClose = [];
+    for (const [levelIndex, pos] of this.positions) {
+      if (pos.direction === "LONG" && belowBase) {
+        toClose.push(levelIndex);
+      } else if (pos.direction === "SHORT" && aboveBase) {
+        toClose.push(levelIndex);
+      }
+    }
+
+    for (const levelIndex of toClose) {
+      await this._closePosition(levelIndex, price, "base-cross");
+    }
+  }
+
+  /** Close a single position by level index */
+  async _closePosition(levelIndex, currentPrice, reason) {
+    const pos = this.positions.get(levelIndex);
+    if (!pos) return;
+
+    const side = pos.direction === "LONG" ? "SELL" : "BUY";
+    const positionSide = pos.direction === "LONG" ? "LONG" : "SHORT";
+    const result = await this.api.placeMarketOrder({
+      symbol: this.symbol,
+      side,
+      quantity: pos.quantity,
+      positionSide
+    });
+
+    const exitPrice = result.price || currentPrice;
+    const direction = pos.direction === "LONG" ? 1 : -1;
+    const grossPnl = (exitPrice - pos.entryPrice) * pos.quantity * direction;
+    const exitFee = exitPrice * pos.quantity * (Number(config.feeRate) || 0.0004);
+
+    this.feesPaid += exitFee;
+    this.realizedPnl += grossPnl - exitFee - pos.entryFee;
+
+    this.tradeHistory.push({
+      levelIndex,
+      direction: pos.direction,
+      entry: pos.entryPrice,
+      exit: exitPrice,
+      quantity: pos.quantity,
+      grossPnl,
+      fees: pos.entryFee + exitFee,
+      netPnl: grossPnl - pos.entryFee - exitFee,
+      reason
+    });
+
+    store.recordTrade({ pnl: grossPnl, fees: pos.entryFee + exitFee });
+
+    // Remove position and mark level as CLOSED
+    this.positions.delete(levelIndex);
+    const level = this.levels.get(levelIndex);
+    if (level) level.status = "CLOSED";
+
+    log(`GRID ${this.symbol}`, `Closed ${pos.direction} L${levelIndex} @ ${fmt(exitPrice, 6)} (${reason}) PnL=${fmt(grossPnl - pos.entryFee - exitFee, 4)}`);
   }
 
   _calcUnrealizedPnl(price) {
@@ -281,8 +360,18 @@ class GridTrader {
     return pnl;
   }
 
+  /** Estimate exit fees for all open positions at the given price */
+  _estimateExitFees(price) {
+    const feeRate = Number(config.feeRate) || 0.0004;
+    let fees = 0;
+    for (const pos of this.positions.values()) {
+      fees += price * pos.quantity * feeRate;
+    }
+    return fees;
+  }
+
   _calcTotalPnl(price) {
-    return this.realizedPnl + this._calcUnrealizedPnl(price);
+    return this.realizedPnl + this._calcUnrealizedPnl(price) - this._estimateExitFees(price);
   }
 
   _calcProfitPercent(price) {
@@ -330,14 +419,7 @@ class GridTrader {
   _checkDestroyConditions() {
     if (!this.active) return;
 
-    // Condition 1: All orders filled (both sides)
-    if (this.filledLongCount >= this.gridLevels && this.filledShortCount >= this.gridLevels) {
-      log(`GRID ${this.symbol}`, "All levels filled — destroying");
-      this.destroy("all-filled");
-      return;
-    }
-
-    // Condition 2: Max lifetime exceeded
+    // Condition 1: Max lifetime exceeded
     const maxLife = Number(config.maxLifetimeMs) || 0;
     if (maxLife > 0 && Date.now() - new Date(this.createdAt).getTime() >= maxLife) {
       log(`GRID ${this.symbol}`, `Max lifetime reached — destroying`);
@@ -345,7 +427,7 @@ class GridTrader {
       return;
     }
 
-    // Condition 3: Profit % target reached
+    // Condition 2: Profit % target reached
     const price = this.lastPrice || this.basePrice;
     const profitPct = this._calcProfitPercent(price);
     if (profitPct >= this.takeProfitPercent) {
@@ -360,7 +442,8 @@ class GridTrader {
     if (!this.active) return;
     const price = this.lastPrice || this.basePrice || 0;
     const unrealizedPnl = this._calcUnrealizedPnl(price);
-    const totalPnl = this.realizedPnl + unrealizedPnl;
+    const estExitFees = this._estimateExitFees(price);
+    const totalPnl = this.realizedPnl + unrealizedPnl - estExitFees;
     const profitPercent = this.allocatedEquity > 0 ? (totalPnl / this.allocatedEquity) * 100 : 0;
 
     // Build ladder: sorted from highest to lowest price
