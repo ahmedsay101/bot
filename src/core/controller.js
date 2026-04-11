@@ -10,9 +10,6 @@ class Controller {
     this.traders = new Map();
     this.leverageSet = new Set();
     this._scanning = false;
-    this.equityFraction = Number(config.equityFraction) || 0.9;
-    this.traderResults = []; // { symbol, result: "win"|"loss", pnl, time }
-    this._marketBlocked = false; // hysteresis flag
   }
 
   async start() {
@@ -77,34 +74,13 @@ class Controller {
   async _doScanAndLaunch() {
     if (this.traders.size >= config.maxTraders) return;
 
-    // Market heat hysteresis: block above 50%, resume below 45%
+    // Only proceed if top-5 avg <= 50%
     const avg24h = await this.scanner.getTopGainersAvg();
-    if (!this._marketBlocked && avg24h > 50) {
-      this._marketBlocked = true;
-      // Destroy all active traders
-      let destroyed = 0;
-      for (const [symbol, trader] of this.traders) {
-        try {
-          await trader.destroy("market-heat");
-          destroyed++;
-        } catch (err) {
-          log("CONTROLLER", `Failed to destroy ${symbol}: ${err.message}`);
-        }
-      }
-      log("CONTROLLER", `Market too hot: top-5 avg ${avg24h.toFixed(1)}% > 50% — destroyed ${destroyed} trader(s), blocking`);
+    if (avg24h > 50) {
+      log("CONTROLLER", `Market too hot: top-5 avg ${avg24h.toFixed(1)}% > 50% — skipping`);
       return;
     }
-    if (this._marketBlocked) {
-      if (avg24h <= 45) {
-        this._marketBlocked = false;
-        log("CONTROLLER", `Market cooled: top-5 avg ${avg24h.toFixed(1)}% <= 45% — resuming`);
-      } else {
-        log("CONTROLLER", `Market still hot: top-5 avg ${avg24h.toFixed(1)}% > 45% — blocked`);
-        return;
-      }
-    } else {
-      log("CONTROLLER", `Top-5 avg ${avg24h.toFixed(1)}% <= 50% — proceeding`);
-    }
+    log("CONTROLLER", `Top-5 avg ${avg24h.toFixed(1)}% <= 50% — proceeding`);
 
     const candidates = await this.scanner.scan();
 
@@ -169,18 +145,7 @@ class Controller {
   async _onTraderDestroyed(symbol, pnl, reason) {
     if (!this.traders.has(symbol)) return;
     this.traders.delete(symbol);
-
-    const isWin = reason === "take-profit";
-    const isLoss = reason === "stop-loss";
-    if (isWin || isLoss) {
-      const result = isWin ? "win" : "loss";
-      this.traderResults.push({ symbol, result, pnl, time: new Date().toISOString() });
-      this.equityFraction = isWin ? 0.9 : 0.1;
-      store.setTraderResults(this.traderResults);
-      log("CONTROLLER", `Trader ${symbol} ${result} | equityFraction → ${this.equityFraction}`);
-    }
-
-    log("CONTROLLER", `Trader ${symbol} destroyed`);
+    log("CONTROLLER", `Trader ${symbol} destroyed (${reason})`);
     await this._refreshMarketStreams();
   }
 
