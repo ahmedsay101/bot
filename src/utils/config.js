@@ -11,7 +11,7 @@ const config = {
   leverage: 2,
   startingBalanceUSDT: 500,
   scannerIntervalMs: 1 * 60 * 1000,
-  maxLifetimeMs: 3 * 60 * 60 * 1000,
+  maxLifetimeMs: 24 * 60 * 60 * 1000,
   recvWindow: 5000
 };
 

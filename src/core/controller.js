@@ -74,13 +74,13 @@ class Controller {
   async _doScanAndLaunch() {
     if (this.traders.size >= config.maxTraders) return;
 
-    // Only proceed if top-5 avg <= 50%
+    // Only proceed if top-5 avg <= 60%
     const avg24h = await this.scanner.getTopGainersAvg();
-    if (avg24h > 50) {
-      log("CONTROLLER", `Market too hot: top-5 avg ${avg24h.toFixed(1)}% > 50% — skipping`);
+    if (avg24h > 60) {
+      log("CONTROLLER", `Market too hot: top-5 avg ${avg24h.toFixed(1)}% > 60% — skipping`);
       return;
     }
-    log("CONTROLLER", `Top-5 avg ${avg24h.toFixed(1)}% <= 50% — proceeding`);
+    log("CONTROLLER", `Top-5 avg ${avg24h.toFixed(1)}% <= 60% — proceeding`);
 
     const candidates = await this.scanner.scan();
 
