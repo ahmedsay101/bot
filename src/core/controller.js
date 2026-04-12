@@ -10,6 +10,7 @@ class Controller {
     this.traders = new Map();
     this.leverageSet = new Set();
     this._scanning = false;
+    this._marketBlocked = false;
   }
 
   async start() {
@@ -74,13 +75,32 @@ class Controller {
   async _doScanAndLaunch() {
     if (this.traders.size >= config.maxTraders) return;
 
-    // Only proceed if top-5 avg <= 60%
+    // Hysteresis: block above 60%, allow at or below 55%
     const avg24h = await this.scanner.getTopGainersAvg();
-    if (avg24h > 60) {
-      log("CONTROLLER", `Market too hot: top-5 avg ${avg24h.toFixed(1)}% > 60% — skipping`);
+    if (!this._marketBlocked && avg24h > 60) {
+      this._marketBlocked = true;
+      // Destroy all active traders
+      for (const [sym, trader] of this.traders) {
+        try {
+          await trader.destroy("market-heat");
+        } catch (err) {
+          log("CONTROLLER", `Failed to destroy ${sym}: ${err.message}`);
+        }
+      }
+      log("CONTROLLER", `Market too hot: top-5 avg ${avg24h.toFixed(1)}% > 60% — destroyed ${this.traders.size} trader(s), blocking`);
       return;
     }
-    log("CONTROLLER", `Top-5 avg ${avg24h.toFixed(1)}% <= 60% — proceeding`);
+    if (this._marketBlocked) {
+      if (avg24h <= 55) {
+        this._marketBlocked = false;
+        log("CONTROLLER", `Market cooled: top-5 avg ${avg24h.toFixed(1)}% <= 55% — resuming`);
+      } else {
+        log("CONTROLLER", `Market still hot: top-5 avg ${avg24h.toFixed(1)}% > 55% — blocked`);
+        return;
+      }
+    } else {
+      log("CONTROLLER", `Top-5 avg ${avg24h.toFixed(1)}% <= 60% — proceeding`);
+    }
 
     const candidates = await this.scanner.scan();
 
