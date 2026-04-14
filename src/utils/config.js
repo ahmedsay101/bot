@@ -12,6 +12,7 @@ const config = {
   startingBalanceUSDT: 500,
   scannerIntervalMs: 1 * 60 * 1000,
   maxLifetimeMs: 24 * 60 * 60 * 1000,
+  slCooldownMs: 3 * 60 * 60 * 1000,
   recvWindow: 5000
 };
 

@@ -47,7 +47,7 @@ class SymbolScanner {
       .filter((t) => Number.isFinite(t.change) && t.change > 50 && t.change < 90)
       .filter((t) => t.quoteVolume >= 10_000_000)
       .sort((a, b) => b.change - a.change)
-      .slice(0, Number(config.maxTraders) || 1);
+      .slice(0, Math.max(10, Number(config.maxTraders) || 1));
 
     for (const c of candidates) {
       log("SCANNER", `${c.symbol} +${c.change.toFixed(1)}% — approved`);

@@ -39,7 +39,7 @@ class DCATrader {
     //this.takeProfitPercent = Math.max(1, Math.round(this.changePercent / 10));
     this.takeProfitPercent = 3;
     // Fixed SL%
-    this.stopLossPercent = 30;
+    this.stopLossPercent = 9;
 
     this.entryPrice = 0;
     this.quantity = 0;
