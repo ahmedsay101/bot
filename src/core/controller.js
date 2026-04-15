@@ -101,7 +101,15 @@ class Controller {
     const avg24h = await this.scanner.getTopGainersAvg();
     if (!this._marketBlocked && avg24h > 55) {
       this._marketBlocked = true;
-      log("CONTROLLER", `Market too hot: top-5 avg ${avg24h.toFixed(1)}% > 55% — blocking`);
+      // Destroy all active traders
+      for (const [sym, trader] of this.traders) {
+        try {
+          await trader.destroy("market-heat");
+        } catch (err) {
+          log("CONTROLLER", `Failed to destroy ${sym}: ${err.message}`);
+        }
+      }
+      log("CONTROLLER", `Market too hot: top-5 avg ${avg24h.toFixed(1)}% > 55% — destroyed ${this.traders.size} trader(s), blocking`);
       return;
     }
     if (this._marketBlocked) {

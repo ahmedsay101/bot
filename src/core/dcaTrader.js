@@ -39,7 +39,7 @@ class DCATrader {
     //this.takeProfitPercent = Math.max(1, Math.round(this.changePercent / 10));
     this.takeProfitPercent = 5;
     // Fixed SL%
-    this.stopLossPercent = 50;
+    this.stopLossPercent = 0;
 
     this.entryPrice = 0;
     this.quantity = 0;
@@ -135,7 +135,7 @@ class DCATrader {
     if (price <= this.tpPrice) {
       log(`DCA ${this.symbol}`, `TP hit @ ${fmt(price, 6)} <= ${fmt(this.tpPrice, 6)}`);
       await this.destroy("take-profit");
-    } else if (price >= this.slPrice) {
+    } else if (this.stopLossPercent > 0 && price >= this.slPrice) {
       log(`DCA ${this.symbol}`, `SL hit @ ${fmt(price, 6)} >= ${fmt(this.slPrice, 6)}`);
       await this.destroy("stop-loss");
     }
