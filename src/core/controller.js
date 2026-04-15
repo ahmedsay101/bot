@@ -1,4 +1,5 @@
 const DCATrader = require("./dcaTrader");
+const { filterSafeSymbols } = require("./safetyFilter");
 const { log } = require("../utils/logger");
 const config = require("../utils/config");
 const store = require("../state/store");
@@ -67,9 +68,29 @@ class Controller {
     if (this._scanning) return;
     this._scanning = true;
     try {
+      await this._destroyOverheated();
       await this._doScanAndLaunch();
     } finally {
       this._scanning = false;
+    }
+  }
+
+  async _destroyOverheated() {
+    if (this.traders.size === 0) return;
+    const tickers = await this.api.get24hTickers();
+    const tickerMap = new Map(
+      (Array.isArray(tickers) ? tickers : []).map((t) => [t.symbol, Number(t.priceChangePercent)])
+    );
+    for (const [symbol, trader] of this.traders) {
+      const change = tickerMap.get(symbol);
+      if (Number.isFinite(change) && change >= 80) {
+        log("CONTROLLER", `${symbol} 24h change ${change.toFixed(1)}% >= 80% — destroying`);
+        try {
+          await trader.destroy("overheated");
+        } catch (err) {
+          log("CONTROLLER", `Failed to destroy ${symbol}: ${err.message}`);
+        }
+      }
     }
   }
 
@@ -80,15 +101,7 @@ class Controller {
     const avg24h = await this.scanner.getTopGainersAvg();
     if (!this._marketBlocked && avg24h > 55) {
       this._marketBlocked = true;
-      // Destroy all active traders
-      for (const [sym, trader] of this.traders) {
-        try {
-          await trader.destroy("market-heat");
-        } catch (err) {
-          log("CONTROLLER", `Failed to destroy ${sym}: ${err.message}`);
-        }
-      }
-      log("CONTROLLER", `Market too hot: top-5 avg ${avg24h.toFixed(1)}% > 55% — destroyed ${this.traders.size} trader(s), blocking`);
+      log("CONTROLLER", `Market too hot: top-5 avg ${avg24h.toFixed(1)}% > 55% — blocking`);
       return;
     }
     if (this._marketBlocked) {
@@ -105,7 +118,11 @@ class Controller {
 
     const candidates = await this.scanner.scan();
 
-    for (const candidate of candidates) {
+    // Safety filter: volume spike, spread, funding, ATR, listing age
+    const exchangeInfoMap = await this._getExchangeInfoMap();
+    const safeCandidates = await filterSafeSymbols(candidates, this.api, exchangeInfoMap);
+
+    for (const candidate of safeCandidates) {
       const symbol = candidate.symbol;
       const changePercent = candidate.change;
       if (this.traders.size >= config.maxTraders) break;
@@ -150,6 +167,29 @@ class Controller {
     }
 
     await this._refreshMarketStreams();
+  }
+
+  async _getExchangeInfoMap() {
+    const cacheTtlMs = 10 * 60 * 1000;
+    const now = Date.now();
+    if (this._exchangeInfoMap && now - this._exchangeInfoMapAt < cacheTtlMs) {
+      return this._exchangeInfoMap;
+    }
+    try {
+      const info = await this.api.getExchangeInfo();
+      const symbols = Array.isArray(info.symbols) ? info.symbols : [];
+      const map = new Map();
+      for (const s of symbols) {
+        if (!s || !s.symbol) continue;
+        map.set(s.symbol, { onboardDate: s.onboardDate || null });
+      }
+      this._exchangeInfoMap = map;
+      this._exchangeInfoMapAt = now;
+      return map;
+    } catch (err) {
+      log("CONTROLLER", `ExchangeInfo fetch error: ${err.message}`);
+      return this._exchangeInfoMap || new Map();
+    }
   }
 
   async _syncAccount() {

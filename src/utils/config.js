@@ -13,6 +13,14 @@ const config = {
   scannerIntervalMs: 1 * 60 * 1000,
   maxLifetimeMs: 24 * 60 * 60 * 1000,
   slCooldownMs: 3 * 60 * 60 * 1000,
+  safetyFilter: {
+    maxAbsChange24h: 80,
+    maxVolumeSpike: 3,
+    maxSpreadPct: 0.2,
+    maxAbsFundingRate: 0.05,
+    maxAtrRatio: 0.08,
+    minListingAgeDays: 7
+  },
   recvWindow: 5000
 };
 

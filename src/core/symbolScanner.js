@@ -44,7 +44,7 @@ class SymbolScanner {
       }))
       .filter((t) => typeof t.symbol === "string" && t.symbol.endsWith("USDT"))
       .filter((t) => tradableSymbols.has(t.symbol))
-      .filter((t) => Number.isFinite(t.change) && t.change > 50 && t.change < 90)
+      .filter((t) => Number.isFinite(t.change) && t.change > 50 && t.change < 80)
       .filter((t) => t.quoteVolume >= 10_000_000)
       .sort((a, b) => b.change - a.change)
       .slice(0, Math.max(10, Number(config.maxTraders) || 1));
