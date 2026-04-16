@@ -9,18 +9,12 @@ const config = {
   fixedNotional: 500,
   equityFraction: 0.9,
   leverage: 2,
+  takeProfitPercent: 30,
+  stopLossPercent: 5,
   startingBalanceUSDT: 500,
   scannerIntervalMs: 1 * 60 * 1000,
   maxLifetimeMs: 24 * 60 * 60 * 1000,
-  slCooldownMs: 3 * 60 * 60 * 1000,
-  safetyFilter: {
-    maxAbsChange24h: 80,
-    maxVolumeSpike: 3,
-    maxSpreadPct: 0.2,
-    maxAbsFundingRate: 0.05,
-    maxAtrRatio: 0.08,
-    minListingAgeDays: 7
-  },
+  lossCooldownMs: 6 * 60 * 60 * 1000,
   recvWindow: 5000
 };
 

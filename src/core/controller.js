@@ -1,5 +1,4 @@
 const DCATrader = require("./dcaTrader");
-const { filterSafeSymbols } = require("./safetyFilter");
 const { log } = require("../utils/logger");
 const config = require("../utils/config");
 const store = require("../state/store");
@@ -11,7 +10,6 @@ class Controller {
     this.traders = new Map();
     this.leverageSet = new Set();
     this._scanning = false;
-    this._marketBlocked = false;
     this._cooldowns = new Map();
   }
 
@@ -68,69 +66,18 @@ class Controller {
     if (this._scanning) return;
     this._scanning = true;
     try {
-      await this._destroyOverheated();
       await this._doScanAndLaunch();
     } finally {
       this._scanning = false;
     }
   }
 
-  async _destroyOverheated() {
-    if (this.traders.size === 0) return;
-    const tickers = await this.api.get24hTickers();
-    const tickerMap = new Map(
-      (Array.isArray(tickers) ? tickers : []).map((t) => [t.symbol, Number(t.priceChangePercent)])
-    );
-    for (const [symbol, trader] of this.traders) {
-      const change = tickerMap.get(symbol);
-      if (Number.isFinite(change) && change >= 80) {
-        log("CONTROLLER", `${symbol} 24h change ${change.toFixed(1)}% >= 80% — destroying`);
-        try {
-          await trader.destroy("overheated");
-        } catch (err) {
-          log("CONTROLLER", `Failed to destroy ${symbol}: ${err.message}`);
-        }
-      }
-    }
-  }
-
   async _doScanAndLaunch() {
     if (this.traders.size >= config.maxTraders) return;
 
-    // Hysteresis: block above 55%, allow at or below 50%
-    const avg24h = await this.scanner.getTopGainersAvg();
-    if (!this._marketBlocked && avg24h > 55) {
-      this._marketBlocked = true;
-      // Destroy all active traders
-      for (const [sym, trader] of this.traders) {
-        try {
-          await trader.destroy("market-heat");
-        } catch (err) {
-          log("CONTROLLER", `Failed to destroy ${sym}: ${err.message}`);
-        }
-      }
-      log("CONTROLLER", `Market too hot: top-5 avg ${avg24h.toFixed(1)}% > 55% — destroyed ${this.traders.size} trader(s), blocking`);
-      return;
-    }
-    if (this._marketBlocked) {
-      if (avg24h <= 50) {
-        this._marketBlocked = false;
-        log("CONTROLLER", `Market cooled: top-5 avg ${avg24h.toFixed(1)}% <= 50% — resuming`);
-      } else {
-        log("CONTROLLER", `Market still hot: top-5 avg ${avg24h.toFixed(1)}% > 50% — blocked`);
-        return;
-      }
-    } else {
-      log("CONTROLLER", `Top-5 avg ${avg24h.toFixed(1)}% <= 55% — proceeding`);
-    }
-
     const candidates = await this.scanner.scan();
 
-    // Safety filter: volume spike, spread, funding, ATR, listing age
-    const exchangeInfoMap = await this._getExchangeInfoMap();
-    const safeCandidates = await filterSafeSymbols(candidates, this.api, exchangeInfoMap);
-
-    for (const candidate of safeCandidates) {
+    for (const candidate of candidates) {
       const symbol = candidate.symbol;
       const changePercent = candidate.change;
       if (this.traders.size >= config.maxTraders) break;
@@ -139,7 +86,7 @@ class Controller {
       const cooldownUntil = this._cooldowns.get(symbol);
       if (cooldownUntil && Date.now() < cooldownUntil) {
         const mins = Math.ceil((cooldownUntil - Date.now()) / 60000);
-        log("CONTROLLER", `${symbol} on SL cooldown — ${mins}m remaining`);
+        log("CONTROLLER", `${symbol} on cooldown — ${mins}m remaining`);
         continue;
       }
       this._cooldowns.delete(symbol);
@@ -166,7 +113,7 @@ class Controller {
       this.traders.set(symbol, trader);
       try {
         await trader.start();
-        log("CONTROLLER", `Launched DCA trader for ${symbol}`);
+        log("CONTROLLER", `Launched trader for ${symbol} (24h +${changePercent.toFixed(1)}%)`);
       } catch (err) {
         log("CONTROLLER", `Trader ${symbol} failed to start: ${err.message}`);
         this.traders.delete(symbol);
@@ -175,29 +122,6 @@ class Controller {
     }
 
     await this._refreshMarketStreams();
-  }
-
-  async _getExchangeInfoMap() {
-    const cacheTtlMs = 10 * 60 * 1000;
-    const now = Date.now();
-    if (this._exchangeInfoMap && now - this._exchangeInfoMapAt < cacheTtlMs) {
-      return this._exchangeInfoMap;
-    }
-    try {
-      const info = await this.api.getExchangeInfo();
-      const symbols = Array.isArray(info.symbols) ? info.symbols : [];
-      const map = new Map();
-      for (const s of symbols) {
-        if (!s || !s.symbol) continue;
-        map.set(s.symbol, { onboardDate: s.onboardDate || null });
-      }
-      this._exchangeInfoMap = map;
-      this._exchangeInfoMapAt = now;
-      return map;
-    } catch (err) {
-      log("CONTROLLER", `ExchangeInfo fetch error: ${err.message}`);
-      return this._exchangeInfoMap || new Map();
-    }
   }
 
   async _syncAccount() {
@@ -222,10 +146,10 @@ class Controller {
   async _onTraderDestroyed(symbol, pnl, reason) {
     if (!this.traders.has(symbol)) return;
     this.traders.delete(symbol);
-    if (reason === "stop-loss" && config.slCooldownMs > 0) {
-      this._cooldowns.set(symbol, Date.now() + config.slCooldownMs);
-      const hrs = (config.slCooldownMs / 3600000).toFixed(1);
-      log("CONTROLLER", `${symbol} cooldown ${hrs}h after stop-loss`);
+    if (reason === "max-loss" && config.lossCooldownMs > 0) {
+      this._cooldowns.set(symbol, Date.now() + config.lossCooldownMs);
+      const hrs = (config.lossCooldownMs / 3600000).toFixed(1);
+      log("CONTROLLER", `${symbol} cooldown ${hrs}h after loss`);
     }
     log("CONTROLLER", `Trader ${symbol} destroyed (${reason})`);
     await this._refreshMarketStreams();

@@ -8,11 +8,11 @@ function fmt(value, digits = 2) {
 }
 
 /**
- * DCATrader — simple short strategy.
+ * DCATrader — flip strategy.
  *
- * On start: places a single market SHORT at the current price.
- * Take-profit = entry * (1 - round(changePercent / 10) / 100)
- * Stop-loss   = entry * (1 + stopLossPercent / 100)
+ * Starts with a SHORT position.
+ * TP = 30% → trader destroyed (win).
+ * SL = 5%  → flip direction if accumulated SL% < TP%, else destroy (loss).
  */
 class DCATrader {
   constructor({ symbol, api, onDestroy, changePercent, equity }) {
@@ -27,19 +27,19 @@ class DCATrader {
     this.startPrice = null;
     this.lastPrice = null;
 
-    // Configurable parameters
     this.leverage = Number(config.leverage) || 2;
-    this.equityFraction = Number(config.equityFraction) || 0.9;
     const eq = Number(equity) || Number(config.startingBalanceUSDT);
     const fixedNotional = Number(config.fixedNotional) || 200;
-    // Use fixed notional as margin if equity covers it, otherwise fall back to fraction of equity
-    this.margin = eq >= fixedNotional ? fixedNotional : eq * this.equityFraction;
+    this.margin = eq >= fixedNotional ? fixedNotional : eq * (Number(config.equityFraction) || 0.9);
     this.notional = this.margin * this.leverage;
-    // TP% = round(24h change / 10), minimum 1%
-    //this.takeProfitPercent = Math.max(1, Math.round(this.changePercent / 10));
-    this.takeProfitPercent = 5;
-    // Fixed SL%
-    this.stopLossPercent = 0;
+
+    this.takeProfitPercent = Number(config.takeProfitPercent) || 30;
+    this.stopLossPercent = Number(config.stopLossPercent) || 5;
+
+    // Flip tracking
+    this.direction = "SHORT";       // current position direction
+    this.accumulatedSlPercent = 0;   // total SL% accumulated across flips
+    this.flipCount = 0;             // number of flips so far
 
     this.entryPrice = 0;
     this.quantity = 0;
@@ -54,11 +54,10 @@ class DCATrader {
     this.totalTrades = 0;
     this.tradeHistory = [];
 
+    this._flipping = false;
     this._onMarkPrice = this._onMarkPrice.bind(this);
     this._onBookTicker = this._onBookTicker.bind(this);
   }
-
-  // ── Config helpers ──────────────────────────────────────────
 
   get _feeRate() { return config.feeRate != null ? Number(config.feeRate) : 0.0004; }
 
@@ -68,30 +67,47 @@ class DCATrader {
     this.startPrice = await this.api.getMarkPrice(this.symbol);
     this.lastPrice = this.startPrice;
 
-    const rawQty = Number((this.notional / this.startPrice).toFixed(4));
-
-    const marketResult = await this.api.placeMarketOrder({
-      symbol: this.symbol,
-      side: "SELL",
-      quantity: rawQty
-    });
-
-    // Use actual fill price and quantity from the exchange
-    this.entryPrice = Number(marketResult.price) || this.startPrice;
-    this.quantity = Number(marketResult.quantity) || rawQty;
-    this.feesPaid += this.entryPrice * this.quantity * this._feeRate;
-
-    this.tpPrice = this.entryPrice * (1 - this.takeProfitPercent / 100);
-    this.slPrice = this.entryPrice * (1 + this.stopLossPercent / 100);
+    await this._openPosition("SHORT");
 
     this.api.on("markPrice", this._onMarkPrice);
     this.api.on("bookTicker", this._onBookTicker);
 
-    log(`DCA ${this.symbol}`,
-      `SHORT @ ${fmt(this.entryPrice, 6)} | qty=${this.quantity} ` +
-      `margin=$${fmt(this.margin)} notional=$${fmt(this.notional)} ` +
-      `lev=${this.leverage}x TP=${fmt(this.tpPrice, 6)} SL=${fmt(this.slPrice, 6)}`);
     this._updateStore();
+  }
+
+  async _openPosition(direction) {
+    this.direction = direction;
+    const side = direction === "SHORT" ? "SELL" : "BUY";
+    const price = this.lastPrice || this.startPrice;
+    const rawQty = Number((this.notional / price).toFixed(4));
+
+    const result = await this.api.placeMarketOrder({
+      symbol: this.symbol,
+      side,
+      quantity: rawQty
+    });
+
+    this.entryPrice = Number(result.price) || price;
+    this.quantity = Number(result.quantity) || rawQty;
+    const entryFee = this.entryPrice * this.quantity * this._feeRate;
+    this.feesPaid += entryFee;
+
+    this._setExitPrices();
+
+    log(`DCA ${this.symbol}`,
+      `${direction} @ ${fmt(this.entryPrice, 6)} | qty=${this.quantity} ` +
+      `flip#${this.flipCount} accSL=${this.accumulatedSlPercent}% ` +
+      `TP=${fmt(this.tpPrice, 6)} SL=${fmt(this.slPrice, 6)}`);
+  }
+
+  _setExitPrices() {
+    if (this.direction === "SHORT") {
+      this.tpPrice = this.entryPrice * (1 - this.takeProfitPercent / 100);
+      this.slPrice = this.entryPrice * (1 + this.stopLossPercent / 100);
+    } else {
+      this.tpPrice = this.entryPrice * (1 + this.takeProfitPercent / 100);
+      this.slPrice = this.entryPrice * (1 - this.stopLossPercent / 100);
+    }
   }
 
   // ── Price feeds ─────────────────────────────────────────────
@@ -122,22 +138,87 @@ class DCATrader {
   // ── TP / SL check ──────────────────────────────────────────
 
   async _checkExits(price) {
-    if (!this.active) return;
+    if (!this.active || this._flipping) return;
 
     // Lifetime expiry
-    const maxLifetime = Number(config.maxLifetimeMs) || 12 * 60 * 60 * 1000;
+    const maxLifetime = Number(config.maxLifetimeMs) || 24 * 60 * 60 * 1000;
     if (Date.now() - new Date(this.createdAt).getTime() >= maxLifetime) {
       log(`DCA ${this.symbol}`, `Max lifetime reached`);
       await this.destroy("expired");
       return;
     }
 
-    if (price <= this.tpPrice) {
-      log(`DCA ${this.symbol}`, `TP hit @ ${fmt(price, 6)} <= ${fmt(this.tpPrice, 6)}`);
+    const tpHit = this.direction === "SHORT"
+      ? price <= this.tpPrice
+      : price >= this.tpPrice;
+
+    const slHit = this.direction === "SHORT"
+      ? price >= this.slPrice
+      : price <= this.slPrice;
+
+    if (tpHit) {
+      log(`DCA ${this.symbol}`, `TP hit @ ${fmt(price, 6)} (${this.direction})`);
       await this.destroy("take-profit");
-    } else if (this.stopLossPercent > 0 && price >= this.slPrice) {
-      log(`DCA ${this.symbol}`, `SL hit @ ${fmt(price, 6)} >= ${fmt(this.slPrice, 6)}`);
-      await this.destroy("stop-loss");
+    } else if (slHit) {
+      await this._handleStopLoss(price);
+    }
+  }
+
+  async _handleStopLoss(price) {
+    this.accumulatedSlPercent += this.stopLossPercent;
+    log(`DCA ${this.symbol}`,
+      `SL hit @ ${fmt(price, 6)} (${this.direction}) | accSL=${this.accumulatedSlPercent}%`);
+
+    // Close current position
+    const exitPrice = this.slPrice;
+    const closeSide = this.direction === "SHORT" ? "BUY" : "SELL";
+    const grossPnl = this.direction === "SHORT"
+      ? (this.entryPrice - exitPrice) * this.quantity
+      : (exitPrice - this.entryPrice) * this.quantity;
+    const closeFee = exitPrice * this.quantity * this._feeRate;
+
+    await this.api.placeMarketOrder({
+      symbol: this.symbol,
+      side: closeSide,
+      quantity: this.quantity
+    });
+
+    this.feesPaid += closeFee;
+    this.realizedPnl += grossPnl - closeFee;
+    this.totalTrades += 1;
+
+    this.tradeHistory.push({
+      direction: this.direction,
+      entry: this.entryPrice,
+      exit: exitPrice,
+      quantity: this.quantity,
+      grossPnl,
+      fees: closeFee,
+      netPnl: grossPnl - closeFee,
+      reason: "stop-loss",
+      closedAt: new Date().toISOString()
+    });
+
+    store.recordTrade({ pnl: grossPnl, fees: closeFee });
+
+    // Check if accumulated SL >= TP → destroy
+    if (this.accumulatedSlPercent >= this.takeProfitPercent) {
+      log(`DCA ${this.symbol}`,
+        `Accumulated SL ${this.accumulatedSlPercent}% >= TP ${this.takeProfitPercent}% — destroying`);
+      await this.destroy("max-loss");
+      return;
+    }
+
+    // Flip direction
+    this._flipping = true;
+    try {
+      const nextDir = this.direction === "SHORT" ? "LONG" : "SHORT";
+      this.flipCount += 1;
+      log(`DCA ${this.symbol}`, `Flipping to ${nextDir} (flip #${this.flipCount})`);
+      await this._openPosition(nextDir);
+      this._updateStore();
+    } finally {
+      this._flipping = false;
     }
   }
 
@@ -152,43 +233,51 @@ class DCATrader {
 
     await this.api.cancelAllOpenOrders(this.symbol);
 
-    // Use TP/SL price as exit when triggered by those conditions,
-    // not lastPrice which could have gapped past the target
-    let exitPrice = this.lastPrice || this.startPrice;
-    if (reason === "take-profit") exitPrice = this.tpPrice;
-    else if (reason === "stop-loss") exitPrice = this.slPrice;
+    // Close position if not already closed by _handleStopLoss
+    if (reason !== "max-loss") {
+      let exitPrice = this.lastPrice || this.startPrice;
+      if (reason === "take-profit") exitPrice = this.tpPrice;
 
-    const grossPnl = (this.entryPrice - exitPrice) * this.quantity;
-    const closeFees = exitPrice * this.quantity * this._feeRate;
+      const closeSide = this.direction === "SHORT" ? "BUY" : "SELL";
+      const grossPnl = this.direction === "SHORT"
+        ? (this.entryPrice - exitPrice) * this.quantity
+        : (exitPrice - this.entryPrice) * this.quantity;
+      const closeFee = exitPrice * this.quantity * this._feeRate;
 
-    await this.api.placeMarketOrder({
-      symbol: this.symbol,
-      side: "BUY",
-      quantity: this.quantity
-    });
+      await this.api.placeMarketOrder({
+        symbol: this.symbol,
+        side: closeSide,
+        quantity: this.quantity
+      });
 
-    this.feesPaid += closeFees;
-    this.realizedPnl = grossPnl - this.feesPaid;
-    this.totalTrades = 1;
+      this.feesPaid += closeFee;
+      this.realizedPnl += grossPnl - closeFee;
+      this.totalTrades += 1;
 
-    this.tradeHistory.push({
-      direction: "SHORT",
-      entry: this.entryPrice,
-      exit: exitPrice,
-      quantity: this.quantity,
-      grossPnl,
-      fees: this.feesPaid,
-      netPnl: grossPnl - this.feesPaid,
-      reason,
-      closedAt: new Date().toISOString()
-    });
+      this.tradeHistory.push({
+        direction: this.direction,
+        entry: this.entryPrice,
+        exit: exitPrice,
+        quantity: this.quantity,
+        grossPnl,
+        fees: closeFee,
+        netPnl: grossPnl - closeFee,
+        reason,
+        closedAt: new Date().toISOString()
+      });
 
-    store.recordTrade({ pnl: grossPnl, fees: this.feesPaid });
+      store.recordTrade({ pnl: grossPnl, fees: closeFee });
+    }
+
+    const isLoss = reason === "max-loss" || reason === "expired" || reason === "manual";
 
     store.removeTrader(this.id, {
       id: this.id,
       symbol: this.symbol,
       changePercent: this.changePercent,
+      direction: this.direction,
+      flipCount: this.flipCount,
+      accumulatedSlPercent: this.accumulatedSlPercent,
       realizedPnl: this.realizedPnl,
       feesPaid: this.feesPaid,
       totalTrades: this.totalTrades,
@@ -201,20 +290,24 @@ class DCATrader {
       entryPrice: this.entryPrice
     });
 
-    log(`DCA ${this.symbol}`, `Destroyed (${reason}) | PnL $${fmt(this.realizedPnl)}`);
+    log(`DCA ${this.symbol}`,
+      `Destroyed (${reason}) | PnL $${fmt(this.realizedPnl)} | flips=${this.flipCount} accSL=${this.accumulatedSlPercent}%`);
     if (this.onDestroy) this.onDestroy(this.symbol, this.realizedPnl, reason);
   }
 
   // ── PnL helpers ─────────────────────────────────────────────
 
   _calcUnrealizedPnl(price) {
-    return (this.entryPrice - price) * this.quantity;
+    if (this.direction === "SHORT") {
+      return (this.entryPrice - price) * this.quantity;
+    }
+    return (price - this.entryPrice) * this.quantity;
   }
 
   _trackHighestProfit() {
     const price = this.lastPrice || this.startPrice || 0;
     const unrealized = this._calcUnrealizedPnl(price);
-    const totalNet = unrealized - this.feesPaid;
+    const totalNet = this.realizedPnl + unrealized - this.feesPaid;
     if (totalNet > this.highestNetProfit) this.highestNetProfit = totalNet;
   }
 
@@ -229,7 +322,10 @@ class DCATrader {
     store.upsertTrader({
       id: this.id,
       symbol: this.symbol,
-      traderType: "DCA",
+      traderType: "FLIP",
+      direction: this.direction,
+      flipCount: this.flipCount,
+      accumulatedSlPercent: this.accumulatedSlPercent,
       lastPrice: price,
       startPrice: this.startPrice,
       entryPrice: this.entryPrice,
@@ -248,7 +344,7 @@ class DCATrader {
       highestNetProfit: this.highestNetProfit,
       tradeHistory: this.tradeHistory,
       createdAt: this.createdAt,
-      status: this.active ? "ACTIVE" : "STOPPED"
+      status: "ACTIVE"
     });
   }
 }

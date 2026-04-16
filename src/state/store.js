@@ -19,7 +19,6 @@ const state = {
   },
   equityHistory: [],
   peakEquity: config.startingBalanceUSDT,
-  traderResults: [],
   marketStatus: {
     api: "unknown",
     ws: "unknown",
@@ -85,10 +84,6 @@ function recordTrade({ pnl, fees }) {
   state.pnlToday += gross - fee;
 }
 
-function setTraderResults(results) {
-  state.traderResults = results;
-}
-
 function getStatus() {
   return {
     mode: state.mode,
@@ -150,7 +145,6 @@ function getDashboardUpdate() {
     })),
     performance: getPerformance(),
     closedTraders: state.closedTraders,
-    traderResults: state.traderResults,
     marketStatus: state.marketStatus
   };
 }
@@ -162,7 +156,6 @@ module.exports = {
   upsertTrader,
   removeTrader,
   recordTrade,
-  setTraderResults,
   getStatus,
   getTraders,
   getTrader,

@@ -44,36 +44,15 @@ class SymbolScanner {
       }))
       .filter((t) => typeof t.symbol === "string" && t.symbol.endsWith("USDT"))
       .filter((t) => tradableSymbols.has(t.symbol))
-      .filter((t) => Number.isFinite(t.change) && t.change > 50 && t.change < 80)
-      .filter((t) => t.quoteVolume >= 10_000_000)
+      .filter((t) => Number.isFinite(t.change) && t.change > 50)
       .sort((a, b) => b.change - a.change)
       .slice(0, Math.max(10, Number(config.maxTraders) || 1));
 
     for (const c of candidates) {
-      log("SCANNER", `${c.symbol} +${c.change.toFixed(1)}% — approved`);
+      log("SCANNER", `${c.symbol} +${c.change.toFixed(1)}% — candidate`);
     }
 
     return candidates;
-  }
-
-  /**
-   * Return the average 24h change % of the top 5 gainers.
-   */
-  async getTopGainersAvg() {
-    const tickers = await this.api.get24hTickers();
-    const tradableSymbols = await this._getTradableSymbols();
-    const list = Array.isArray(tickers) ? tickers : [];
-
-    const top5 = list
-      .map((t) => ({ symbol: t.symbol, change: Number(t.priceChangePercent) }))
-      .filter((t) => typeof t.symbol === "string" && t.symbol.endsWith("USDT"))
-      .filter((t) => tradableSymbols.has(t.symbol))
-      .filter((t) => Number.isFinite(t.change) && t.change > 0)
-      .sort((a, b) => b.change - a.change)
-      .slice(0, 5);
-
-    if (top5.length === 0) return 0;
-    return top5.reduce((sum, t) => sum + t.change, 0) / top5.length;
   }
 }
 
