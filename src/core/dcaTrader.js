@@ -54,7 +54,7 @@ class DCATrader {
     this.totalTrades = 0;
     this.tradeHistory = [];
 
-    this._flipping = false;
+    this._processing = false;
     this._onMarkPrice = this._onMarkPrice.bind(this);
     this._onBookTicker = this._onBookTicker.bind(this);
   }
@@ -138,29 +138,33 @@ class DCATrader {
   // ── TP / SL check ──────────────────────────────────────────
 
   async _checkExits(price) {
-    if (!this.active || this._flipping) return;
+    if (!this.active || this._processing) return;
+    this._processing = true;
+    try {
+      // Lifetime expiry
+      const maxLifetime = Number(config.maxLifetimeMs) || 24 * 60 * 60 * 1000;
+      if (Date.now() - new Date(this.createdAt).getTime() >= maxLifetime) {
+        log(`DCA ${this.symbol}`, `Max lifetime reached`);
+        await this.destroy("expired");
+        return;
+      }
 
-    // Lifetime expiry
-    const maxLifetime = Number(config.maxLifetimeMs) || 24 * 60 * 60 * 1000;
-    if (Date.now() - new Date(this.createdAt).getTime() >= maxLifetime) {
-      log(`DCA ${this.symbol}`, `Max lifetime reached`);
-      await this.destroy("expired");
-      return;
-    }
+      const tpHit = this.direction === "SHORT"
+        ? price <= this.tpPrice
+        : price >= this.tpPrice;
 
-    const tpHit = this.direction === "SHORT"
-      ? price <= this.tpPrice
-      : price >= this.tpPrice;
+      const slHit = this.direction === "SHORT"
+        ? price >= this.slPrice
+        : price <= this.slPrice;
 
-    const slHit = this.direction === "SHORT"
-      ? price >= this.slPrice
-      : price <= this.slPrice;
-
-    if (tpHit) {
-      log(`DCA ${this.symbol}`, `TP hit @ ${fmt(price, 6)} (${this.direction})`);
-      await this.destroy("take-profit");
-    } else if (slHit) {
-      await this._handleStopLoss(price);
+      if (tpHit) {
+        log(`DCA ${this.symbol}`, `TP hit @ ${fmt(price, 6)} (${this.direction})`);
+        await this.destroy("take-profit");
+      } else if (slHit) {
+        await this._handleStopLoss(price);
+      }
+    } finally {
+      this._processing = false;
     }
   }
 
@@ -210,16 +214,11 @@ class DCATrader {
     }
 
     // Flip direction
-    this._flipping = true;
-    try {
-      const nextDir = this.direction === "SHORT" ? "LONG" : "SHORT";
-      this.flipCount += 1;
-      log(`DCA ${this.symbol}`, `Flipping to ${nextDir} (flip #${this.flipCount})`);
-      await this._openPosition(nextDir);
-      this._updateStore();
-    } finally {
-      this._flipping = false;
-    }
+    const nextDir = this.direction === "SHORT" ? "LONG" : "SHORT";
+    this.flipCount += 1;
+    log(`DCA ${this.symbol}`, `Flipping to ${nextDir} (flip #${this.flipCount})`);
+    await this._openPosition(nextDir);
+    this._updateStore();
   }
 
   // ── Destroy ─────────────────────────────────────────────────

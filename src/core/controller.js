@@ -75,6 +75,13 @@ class Controller {
   async _doScanAndLaunch() {
     if (this.traders.size >= config.maxTraders) return;
 
+    const equity = store.getStatus().equity || Number(config.startingBalanceUSDT);
+    const minEquity = Number(config.fixedNotional) || 200;
+    if (equity < minEquity) {
+      log("CONTROLLER", `Equity $${equity.toFixed(2)} below minimum $${minEquity.toFixed(2)} — skipping`);
+      return;
+    }
+
     const candidates = await this.scanner.scan();
 
     for (const candidate of candidates) {

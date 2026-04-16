@@ -325,6 +325,7 @@ function TraderHistoryTable({ history }) {
         <thead>
           <tr className="border-b border-white/5 text-left text-[10px] uppercase tracking-wider text-slate-500">
             <th className="py-2 pr-3">Symbol</th>
+            <th className="py-2 pr-3">Dir</th>
             <th className="py-2 pr-3">24h %</th>
             <th className="py-2 pr-3">Flips</th>
             <th className="py-2 pr-3 text-right">PnL</th>
@@ -338,6 +339,9 @@ function TraderHistoryTable({ history }) {
           {history.map((h, i) => (
             <tr key={h.id || i} className="border-b border-white/[0.03] hover:bg-white/[0.02]">
               <td className="py-1.5 pr-3 font-medium text-slate-200">{h.symbol}</td>
+              <td className="py-1.5 pr-3">
+                <span className={dirColor(h.direction || "SHORT")}>{h.direction || "SHORT"}</span>
+              </td>
               <td className="py-1.5 pr-3 text-emerald-400">{fmt(h.changePercent)}%</td>
               <td className="py-1.5 pr-3 font-mono text-amber-400">{h.flipCount || 0}</td>
               <td className={`py-1.5 pr-3 text-right font-mono font-bold ${pnlColor(h.realizedPnl)}`}>
