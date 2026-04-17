@@ -11,7 +11,7 @@ const config = {
   leverage: 2,
   dynamicTp: false,
   takeProfitPercent: 20,
-  stopLossPercent: 2,
+  stopLossPercent: 5,
   maxAccumulatedSlPercent: 10,
   startingBalanceUSDT: 500,
   scannerIntervalMs: 1 * 60 * 1000,
