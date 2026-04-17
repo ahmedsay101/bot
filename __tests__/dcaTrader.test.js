@@ -45,8 +45,9 @@ describe("DCATrader (Flip Strategy)", () => {
       equityFraction: 0.9,
       feeRate: 0,
       startingBalanceUSDT: 1000,
-      takeProfitPercent: 30,
-      stopLossPercent: 5
+      takeProfitPercent: 3,
+      stopLossPercent: 5,
+      maxAccumulatedSlPercent: 30
     });
   });
 
@@ -65,15 +66,16 @@ describe("DCATrader (Flip Strategy)", () => {
     expect(trader.quantity).toBe(1); // margin=50, notional=100, qty=100/100=1
   });
 
-  test("TP and SL use config percentages (not derived from changePercent)", async () => {
+  test("TP is dynamic: accSL + baseTpPercent", async () => {
     const api = new FakeApi({ price: 100 });
     const trader = new DCATrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn(), changePercent: 60 });
     await trader.start();
 
-    expect(trader.takeProfitPercent).toBe(30);
+    // Initially accSL=0, so TP% = 0 + 3 = 3
+    expect(trader.takeProfitPercent).toBe(3);
     expect(trader.stopLossPercent).toBe(5);
-    // SHORT: TP = 100 * (1 - 30/100) = 70
-    expect(trader.tpPrice).toBe(70);
+    // SHORT: TP = 100 * (1 - 3/100) = 97
+    expect(trader.tpPrice).toBe(97);
     // SHORT: SL = 100 * (1 + 5/100) = 105
     expect(trader.slPrice).toBe(105);
   });
@@ -84,14 +86,15 @@ describe("DCATrader (Flip Strategy)", () => {
     const trader = new DCATrader({ symbol: "TESTUSDT", api, onDestroy, changePercent: 60 });
     await trader.start();
 
-    trader.lastPrice = 70;
-    await trader._checkExits(70);
+    // TP = 97 (accSL=0, base=3%)
+    trader.lastPrice = 97;
+    await trader._checkExits(97);
 
     expect(trader.active).toBe(false);
     expect(onDestroy).toHaveBeenCalledWith("TESTUSDT", expect.any(Number), "take-profit");
   });
 
-  test("flips direction on first SL hit (accSL=5 < TP=30)", async () => {
+  test("flips direction on first SL hit (accSL=5 < maxAccSL=30)", async () => {
     const api = new FakeApi({ price: 100 });
     const onDestroy = jest.fn();
     const trader = new DCATrader({ symbol: "TESTUSDT", api, onDestroy, changePercent: 60 });
@@ -112,7 +115,7 @@ describe("DCATrader (Flip Strategy)", () => {
     expect(onDestroy).not.toHaveBeenCalled();
   });
 
-  test("LONG position sets correct TP/SL", async () => {
+  test("LONG position sets correct TP/SL (dynamic TP after flip)", async () => {
     const api = new FakeApi({ price: 100 });
     const trader = new DCATrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn(), changePercent: 60 });
     await trader.start();
@@ -122,28 +125,31 @@ describe("DCATrader (Flip Strategy)", () => {
     trader.lastPrice = 105;
     await trader._checkExits(105);
 
-    // LONG: TP = 105 * (1 + 30/100) = 136.5
-    expect(trader.tpPrice).toBe(136.5);
+    // After flip: accSL=5, TP% = 5 + 3 = 8
+    expect(trader.takeProfitPercent).toBe(8);
+    // LONG: TP = 105 * (1 + 8/100) = 113.4
+    expect(trader.tpPrice).toBeCloseTo(113.4, 4);
     // LONG: SL = 105 * (1 - 5/100) = 99.75
     expect(trader.slPrice).toBe(99.75);
   });
 
-  test("destroys when accumulated SL% >= TP%", async () => {
-    config.takeProfitPercent = 10;
+  test("destroys when accumulated SL% >= maxAccumulatedSlPercent", async () => {
+    config.takeProfitPercent = 3;
     config.stopLossPercent = 5;
+    config.maxAccumulatedSlPercent = 10;
     const api = new FakeApi({ price: 100 });
     const onDestroy = jest.fn();
     const trader = new DCATrader({ symbol: "TESTUSDT", api, onDestroy, changePercent: 60 });
     await trader.start();
 
-    // First SL: accSL = 5 < TP = 10 → flip to LONG
+    // First SL: accSL = 5 < maxAccSL = 10 → flip to LONG
     api.price = 105;
     trader.lastPrice = 105;
     await trader._checkExits(105);
     expect(trader.direction).toBe("LONG");
     expect(trader.accumulatedSlPercent).toBe(5);
 
-    // Second SL: accSL = 10 >= TP = 10 → destroy
+    // Second SL: accSL = 10 >= maxAccSL = 10 → destroy
     const slPrice = trader.slPrice; // 105 * 0.95 = 99.75
     api.price = slPrice;
     trader.lastPrice = slPrice;
@@ -155,8 +161,9 @@ describe("DCATrader (Flip Strategy)", () => {
   });
 
   test("multiple flips SHORT→LONG→SHORT→...", async () => {
-    config.takeProfitPercent = 30;
+    config.takeProfitPercent = 3;
     config.stopLossPercent = 5;
+    config.maxAccumulatedSlPercent = 30;
     const api = new FakeApi({ price: 100 });
     const trader = new DCATrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn(), changePercent: 60 });
     await trader.start();
@@ -192,17 +199,18 @@ describe("DCATrader (Flip Strategy)", () => {
     const trader = new DCATrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn(), changePercent: 60 });
     await trader.start();
 
-    // TP=70
-    trader.lastPrice = 70;
-    await trader._checkExits(70);
+    // TP=97 (accSL=0, base=3%)
+    trader.lastPrice = 97;
+    await trader._checkExits(97);
 
-    // Short PnL = (100 - 70) * 1 = 30
-    expect(trader.realizedPnl).toBeCloseTo(30, 2);
+    // Short PnL = (100 - 97) * 1 = 3
+    expect(trader.realizedPnl).toBeCloseTo(3, 2);
   });
 
   test("PnL tracks across flips", async () => {
-    config.takeProfitPercent = 30;
+    config.takeProfitPercent = 3;
     config.stopLossPercent = 5;
+    config.maxAccumulatedSlPercent = 30;
     const api = new FakeApi({ price: 100 });
     const trader = new DCATrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn(), changePercent: 60 });
     await trader.start();
@@ -278,8 +286,9 @@ describe("DCATrader (Flip Strategy)", () => {
   });
 
   test("max-loss destroy does not try to close position again", async () => {
-    config.takeProfitPercent = 5;
+    config.takeProfitPercent = 3;
     config.stopLossPercent = 5;
+    config.maxAccumulatedSlPercent = 5; // first SL triggers max-loss
     const api = new FakeApi({ price: 100 });
     const placeOrder = jest.spyOn(api, "placeMarketOrder");
     const onDestroy = jest.fn();
@@ -289,7 +298,7 @@ describe("DCATrader (Flip Strategy)", () => {
     // 1 call for opening SHORT
     expect(placeOrder).toHaveBeenCalledTimes(1);
 
-    // SL hit: accSL=5 >= TP=5 → destroy with "max-loss"
+    // SL hit: accSL=5 >= maxAccSL=5 → destroy with "max-loss"
     api.price = 105;
     trader.lastPrice = 105;
     await trader._checkExits(105);
@@ -305,7 +314,7 @@ describe("DCATrader (Flip Strategy)", () => {
     const trader = new DCATrader({ symbol: "TESTUSDT", api, onDestroy, changePercent: 60 });
     await trader.start();
 
-    await trader._onMarkPrice({ symbol: "TESTUSDT", price: 70 });
+    await trader._onMarkPrice({ symbol: "TESTUSDT", price: 97 });
 
     expect(trader.active).toBe(false);
     expect(onDestroy).toHaveBeenCalledWith("TESTUSDT", expect.any(Number), "take-profit");
@@ -337,13 +346,13 @@ describe("DCATrader (Flip Strategy)", () => {
         flipCount: 0,
         accumulatedSlPercent: 0,
         entryPrice: 100,
-        tpPrice: 70,
+        tpPrice: 97,
         slPrice: 105,
         leverage: 2,
         quantity: 1,
         margin: 50,
         notional: 100,
-        takeProfitPercent: 30,
+        takeProfitPercent: 3,
         stopLossPercent: 5,
         status: "ACTIVE"
       })
@@ -355,13 +364,13 @@ describe("DCATrader (Flip Strategy)", () => {
     const trader = new DCATrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn(), changePercent: 60 });
     await trader.start();
 
-    // TP=70, but price gaps to 50
+    // TP=97, but price gaps to 50
     trader.lastPrice = 50;
     await trader._checkExits(50);
 
-    expect(trader.tradeHistory[0].exit).toBe(70);
-    // PnL = (100 - 70) * 1 = 30, not (100 - 50) = 50
-    expect(trader.realizedPnl).toBeCloseTo(30, 2);
+    expect(trader.tradeHistory[0].exit).toBe(97);
+    // PnL = (100 - 97) * 1 = 3, not (100 - 50) = 50
+    expect(trader.realizedPnl).toBeCloseTo(3, 2);
   });
 
   test("SL exit uses slPrice, not gapped lastPrice", async () => {

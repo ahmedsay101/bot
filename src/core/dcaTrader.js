@@ -11,8 +11,8 @@ function fmt(value, digits = 2) {
  * DCATrader — flip strategy.
  *
  * Starts with a SHORT position.
- * TP = 30% → trader destroyed (win).
- * SL = 5%  → flip direction if accumulated SL% < TP%, else destroy (loss).
+ * TP = accumulatedSL% + base TP% (dynamic, grows with losses).
+ * SL = fixed % → flip direction, or destroy if accSL >= maxAccSL.
  */
 class DCATrader {
   constructor({ symbol, api, onDestroy, changePercent, equity }) {
@@ -33,8 +33,9 @@ class DCATrader {
     this.margin = eq >= fixedNotional ? fixedNotional : eq * (Number(config.equityFraction) || 0.9);
     this.notional = this.margin * this.leverage;
 
-    this.takeProfitPercent = Number(config.takeProfitPercent) || 30;
+    this.baseTpPercent = Number(config.takeProfitPercent) || 3;
     this.stopLossPercent = Number(config.stopLossPercent) || 5;
+    this.maxAccumulatedSlPercent = Number(config.maxAccumulatedSlPercent) || 30;
 
     // Flip tracking
     this.direction = "SHORT";       // current position direction
@@ -60,6 +61,9 @@ class DCATrader {
   }
 
   get _feeRate() { return config.feeRate != null ? Number(config.feeRate) : 0.0004; }
+
+  /** Dynamic TP%: grows with accumulated losses */
+  get takeProfitPercent() { return this.accumulatedSlPercent + this.baseTpPercent; }
 
   // ── Lifecycle ───────────────────────────────────────────────
 
@@ -96,7 +100,7 @@ class DCATrader {
 
     log(`DCA ${this.symbol}`,
       `${direction} @ ${fmt(this.entryPrice, 6)} | qty=${this.quantity} ` +
-      `flip#${this.flipCount} accSL=${this.accumulatedSlPercent}% ` +
+      `flip#${this.flipCount} accSL=${this.accumulatedSlPercent}% TP%=${this.takeProfitPercent} ` +
       `TP=${fmt(this.tpPrice, 6)} SL=${fmt(this.slPrice, 6)}`);
   }
 
@@ -205,10 +209,10 @@ class DCATrader {
 
     store.recordTrade({ pnl: grossPnl, fees: closeFee });
 
-    // Check if accumulated SL >= TP → destroy
-    if (this.accumulatedSlPercent >= this.takeProfitPercent) {
+    // Check if accumulated SL >= max allowed → destroy
+    if (this.accumulatedSlPercent >= this.maxAccumulatedSlPercent) {
       log(`DCA ${this.symbol}`,
-        `Accumulated SL ${this.accumulatedSlPercent}% >= TP ${this.takeProfitPercent}% — destroying`);
+        `Accumulated SL ${this.accumulatedSlPercent}% >= max ${this.maxAccumulatedSlPercent}% — destroying`);
       await this.destroy("max-loss");
       return;
     }
