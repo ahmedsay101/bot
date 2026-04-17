@@ -45,6 +45,7 @@ describe("DCATrader (Flip Strategy)", () => {
       equityFraction: 0.9,
       feeRate: 0,
       startingBalanceUSDT: 1000,
+      dynamicTp: true,
       takeProfitPercent: 3,
       stopLossPercent: 5,
       maxAccumulatedSlPercent: 30

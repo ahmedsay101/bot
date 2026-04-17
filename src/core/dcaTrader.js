@@ -62,8 +62,8 @@ class DCATrader {
 
   get _feeRate() { return config.feeRate != null ? Number(config.feeRate) : 0.0004; }
 
-  /** Dynamic TP%: grows with accumulated losses */
-  get takeProfitPercent() { return this.accumulatedSlPercent + this.baseTpPercent; }
+  /** TP%: dynamic (accSL + base) when config.dynamicTp is true, otherwise fixed base */
+  get takeProfitPercent() { return config.dynamicTp ? this.accumulatedSlPercent + this.baseTpPercent : this.baseTpPercent; }
 
   // ── Lifecycle ───────────────────────────────────────────────
 
