@@ -10,7 +10,7 @@ class Controller {
     this.traders = new Map();
     this.leverageSet = new Set();
     this._scanning = false;
-    this._cooldowns = new Map();
+    this._cooldownUntil = 0;
   }
 
   async start() {
@@ -83,13 +83,12 @@ class Controller {
       if (this.traders.size >= config.maxTraders) break;
       if (this.traders.has(symbol)) continue;
 
-      const cooldownUntil = this._cooldowns.get(symbol);
-      if (cooldownUntil && Date.now() < cooldownUntil) {
-        const mins = Math.ceil((cooldownUntil - Date.now()) / 60000);
-        log("CONTROLLER", `${symbol} on cooldown — ${mins}m remaining`);
-        continue;
+      if (this._cooldownUntil && Date.now() < this._cooldownUntil) {
+        const mins = Math.ceil((this._cooldownUntil - Date.now()) / 60000);
+        log("CONTROLLER", `Cooldown active — ${mins}m remaining, skipping all candidates`);
+        break;
       }
-      this._cooldowns.delete(symbol);
+      this._cooldownUntil = 0;
 
       if (config.mode === "live" && !this.leverageSet.has(symbol)) {
         try {
@@ -147,9 +146,9 @@ class Controller {
     if (!this.traders.has(symbol)) return;
     this.traders.delete(symbol);
     if (reason === "max-loss" && config.lossCooldownMs > 0) {
-      this._cooldowns.set(symbol, Date.now() + config.lossCooldownMs);
+      this._cooldownUntil = Date.now() + config.lossCooldownMs;
       const hrs = (config.lossCooldownMs / 3600000).toFixed(1);
-      log("CONTROLLER", `${symbol} cooldown ${hrs}h after loss`);
+      log("CONTROLLER", `Global cooldown ${hrs}h after ${symbol} loss`);
     }
     log("CONTROLLER", `Trader ${symbol} destroyed (${reason})`);
     await this._refreshMarketStreams();
