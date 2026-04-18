@@ -1,4 +1,4 @@
-const config = require("../utils/config");
+﻿const config = require("../utils/config");
 const { log } = require("../utils/logger");
 const store = require("../state/store");
 
@@ -7,12 +7,18 @@ function fmt(value, digits = 2) {
   return Number(value).toFixed(digits);
 }
 
+function round8(v) { return parseFloat(v.toFixed(8)); }
+
 /**
- * DCATrader â€” dual-position (hedge) strategy.
+ * DCATrader - ladder strategy.
  *
- * On start, opens one LONG and one SHORT market position simultaneously.
- * Both have TP at 1% and SL at 10%.
- * Trader is destroyed when both hit TP, or when either hits SL.
+ * Places 10 LONG stop-limit orders above the current price and
+ * 10 SHORT stop-limit orders below the current price, each spaced 1% apart.
+ * Each order has 1% TP and 1% SL.
+ *
+ * Orders are triggered (filled) when price reaches their stop level.
+ * Trader is destroyed when ALL orders on one side (long or short) are closed
+ * (either by TP or SL).
  */
 class DCATrader {
   constructor({ symbol, api, onDestroy, changePercent, equity }) {
@@ -33,12 +39,24 @@ class DCATrader {
     this.margin = eq >= fixedNotional ? fixedNotional : eq * (Number(config.equityFraction) || 0.9);
     this.notional = this.margin * this.leverage;
 
+    const levels = Number(config.ladderLevels) || 10;
+    const gap = Number(config.ladderGapPercent) || 1;
     this.takeProfitPercent = Number(config.takeProfitPercent) || 1;
-    this.stopLossPercent = Number(config.stopLossPercent) || 10;
+    this.stopLossPercent = Number(config.stopLossPercent) || 1;
 
-    // Dual-position state
-    this.long = { active: false, entryPrice: 0, quantity: 0, tpPrice: 0, slPrice: 0 };
-    this.short = { active: false, entryPrice: 0, quantity: 0, tpPrice: 0, slPrice: 0 };
+    this.ladderLevels = levels;
+    this.ladderGapPercent = gap;
+
+    // Arrays of order objects: { idx, side, stopPrice, entryPrice, tpPrice, slPrice, quantity, status }
+    // status: "pending" | "active" | "tp" | "sl"
+    this.longs = [];
+    this.shorts = [];
+
+    // Accumulated tracking
+    this.accumulatedTpCount = 0;
+    this.accumulatedSlCount = 0;
+    this.accumulatedTpPnl = 0;
+    this.accumulatedSlPnl = 0;
 
     this.realizedPnl = 0;
     this.feesPaid = 0;
@@ -55,53 +73,61 @@ class DCATrader {
 
   get _feeRate() { return config.feeRate != null ? Number(config.feeRate) : 0.0004; }
 
-  // â”€â”€ Lifecycle â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // -- Lifecycle -----------------------------------------------
 
   async start() {
     this.startPrice = await this.api.getMarkPrice(this.symbol);
     this.lastPrice = this.startPrice;
 
-    await this._openBothPositions();
+    this._buildLadder();
 
     this.api.on("markPrice", this._onMarkPrice);
     this.api.on("bookTicker", this._onBookTicker);
 
+    log(`DCA ${this.symbol}`,
+      `Ladder placed: ${this.ladderLevels} longs above / ${this.ladderLevels} shorts below @ ${fmt(this.startPrice, 6)}`);
+
     this._updateStore();
   }
 
-  async _openBothPositions() {
-    const price = this.lastPrice || this.startPrice;
-    const rawQty = Number((this.notional / price).toFixed(4));
+  _buildLadder() {
+    const price = this.startPrice;
+    const perOrder = this.notional / this.ladderLevels;
 
-    // Open LONG
-    const longResult = await this.api.placeMarketOrder({
-      symbol: this.symbol, side: "BUY", quantity: rawQty
-    });
-    this.long.entryPrice = Number(longResult.price) || price;
-    this.long.quantity = Number(longResult.quantity) || rawQty;
-    this.long.tpPrice = parseFloat((this.long.entryPrice * (1 + this.takeProfitPercent / 100)).toFixed(8));
-    this.long.slPrice = parseFloat((this.long.entryPrice * (1 - this.stopLossPercent / 100)).toFixed(8));
-    this.long.active = true;
-    this.feesPaid += this.long.entryPrice * this.long.quantity * this._feeRate;
+    for (let i = 0; i < this.ladderLevels; i++) {
+      const gapMult = (i + 1) * this.ladderGapPercent / 100;
 
-    // Open SHORT
-    const shortResult = await this.api.placeMarketOrder({
-      symbol: this.symbol, side: "SELL", quantity: rawQty
-    });
-    this.short.entryPrice = Number(shortResult.price) || price;
-    this.short.quantity = Number(shortResult.quantity) || rawQty;
-    this.short.tpPrice = parseFloat((this.short.entryPrice * (1 - this.takeProfitPercent / 100)).toFixed(8));
-    this.short.slPrice = parseFloat((this.short.entryPrice * (1 + this.stopLossPercent / 100)).toFixed(8));
-    this.short.active = true;
-    this.feesPaid += this.short.entryPrice * this.short.quantity * this._feeRate;
+      // LONG: stop price above current
+      const longStop = round8(price * (1 + gapMult));
+      const longQty = Number((perOrder / longStop).toFixed(4));
+      this.longs.push({
+        idx: i,
+        side: "LONG",
+        stopPrice: longStop,
+        entryPrice: longStop,
+        tpPrice: round8(longStop * (1 + this.takeProfitPercent / 100)),
+        slPrice: round8(longStop * (1 - this.stopLossPercent / 100)),
+        quantity: longQty,
+        status: "pending"
+      });
 
-    log(`DCA ${this.symbol}`,
-      `LONG @ ${fmt(this.long.entryPrice, 6)} TP=${fmt(this.long.tpPrice, 6)} SL=${fmt(this.long.slPrice, 6)} | ` +
-      `SHORT @ ${fmt(this.short.entryPrice, 6)} TP=${fmt(this.short.tpPrice, 6)} SL=${fmt(this.short.slPrice, 6)} | ` +
-      `qty=${rawQty}`);
+      // SHORT: stop price below current
+      const shortStop = round8(price * (1 - gapMult));
+      const shortQty = Number((perOrder / shortStop).toFixed(4));
+      this.shorts.push({
+        idx: i,
+        side: "SHORT",
+        stopPrice: shortStop,
+        entryPrice: shortStop,
+        tpPrice: round8(shortStop * (1 - this.takeProfitPercent / 100)),
+        slPrice: round8(shortStop * (1 + this.stopLossPercent / 100)),
+        quantity: shortQty,
+        status: "pending"
+      });
+    }
   }
 
-  // â”€â”€ Price feeds â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // -- Price feeds ---------------------------------------------
 
   async _onMarkPrice({ symbol, price }) {
     if (!this.active || symbol !== this.symbol) return;
@@ -126,7 +152,7 @@ class DCATrader {
     this._updateStore();
   }
 
-  // â”€â”€ TP / SL check â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // -- Order trigger + TP/SL check -----------------------------
 
   async _checkExits(price) {
     if (!this.active || this._processing) return;
@@ -140,67 +166,111 @@ class DCATrader {
         return;
       }
 
-      // Check LONG SL
-      if (this.long.active && price <= this.long.slPrice) {
-        log(`DCA ${this.symbol}`, `LONG SL hit @ ${fmt(price, 6)}`);
-        await this._closeLeg("long", this.long.slPrice, "stop-loss");
-        await this.destroy("stop-loss");
-        return;
+      // Trigger pending LONG orders (price rises to stop)
+      for (const order of this.longs) {
+        if (order.status === "pending" && price >= order.stopPrice) {
+          await this._fillOrder(order);
+        }
       }
 
-      // Check SHORT SL
-      if (this.short.active && price >= this.short.slPrice) {
-        log(`DCA ${this.symbol}`, `SHORT SL hit @ ${fmt(price, 6)}`);
-        await this._closeLeg("short", this.short.slPrice, "stop-loss");
-        await this.destroy("stop-loss");
-        return;
+      // Trigger pending SHORT orders (price drops to stop)
+      for (const order of this.shorts) {
+        if (order.status === "pending" && price <= order.stopPrice) {
+          await this._fillOrder(order);
+        }
       }
 
-      // Check LONG TP
-      if (this.long.active && price >= this.long.tpPrice) {
-        log(`DCA ${this.symbol}`, `LONG TP hit @ ${fmt(price, 6)}`);
-        await this._closeLeg("long", this.long.tpPrice, "take-profit");
+      // Check TP/SL on active LONG orders
+      for (const order of this.longs) {
+        if (order.status !== "active") continue;
+        if (price >= order.tpPrice) {
+          await this._closeOrder(order, order.tpPrice, "take-profit");
+        } else if (price <= order.slPrice) {
+          await this._closeOrder(order, order.slPrice, "stop-loss");
+        }
       }
 
-      // Check SHORT TP
-      if (this.short.active && price <= this.short.tpPrice) {
-        log(`DCA ${this.symbol}`, `SHORT TP hit @ ${fmt(price, 6)}`);
-        await this._closeLeg("short", this.short.tpPrice, "take-profit");
+      // Check TP/SL on active SHORT orders
+      for (const order of this.shorts) {
+        if (order.status !== "active") continue;
+        if (price <= order.tpPrice) {
+          await this._closeOrder(order, order.tpPrice, "take-profit");
+        } else if (price >= order.slPrice) {
+          await this._closeOrder(order, order.slPrice, "stop-loss");
+        }
       }
 
-      // Both TPs hit â†’ done
-      if (!this.long.active && !this.short.active) {
-        await this.destroy("take-profit");
+      // Check if all orders on one side are done (no pending or active)
+      const longsAllDone = this.longs.every(o => o.status === "tp" || o.status === "sl");
+      const shortsAllDone = this.shorts.every(o => o.status === "tp" || o.status === "sl");
+
+      if (longsAllDone || shortsAllDone) {
+        const reason = longsAllDone && shortsAllDone ? "all-closed" : "side-closed";
+        await this.destroy(reason);
       }
     } finally {
       this._processing = false;
     }
   }
 
-  async _closeLeg(side, exitPrice, reason) {
-    const leg = side === "long" ? this.long : this.short;
-    if (!leg.active) return;
-    leg.active = false;
+  async _fillOrder(order) {
+    order.status = "active";
 
-    const closeSide = side === "long" ? "SELL" : "BUY";
-    const grossPnl = side === "long"
-      ? (exitPrice - leg.entryPrice) * leg.quantity
-      : (leg.entryPrice - exitPrice) * leg.quantity;
-    const closeFee = exitPrice * leg.quantity * this._feeRate;
+    const side = order.side === "LONG" ? "BUY" : "SELL";
+    const result = await this.api.placeMarketOrder({
+      symbol: this.symbol, side, quantity: order.quantity
+    });
+
+    order.entryPrice = Number(result.price) || order.stopPrice;
+    order.quantity = Number(result.quantity) || order.quantity;
+
+    // Recalculate TP/SL based on actual fill price
+    if (order.side === "LONG") {
+      order.tpPrice = round8(order.entryPrice * (1 + this.takeProfitPercent / 100));
+      order.slPrice = round8(order.entryPrice * (1 - this.stopLossPercent / 100));
+    } else {
+      order.tpPrice = round8(order.entryPrice * (1 - this.takeProfitPercent / 100));
+      order.slPrice = round8(order.entryPrice * (1 + this.stopLossPercent / 100));
+    }
+
+    const entryFee = order.entryPrice * order.quantity * this._feeRate;
+    this.feesPaid += entryFee;
+
+    log(`DCA ${this.symbol}`,
+      `${order.side} #${order.idx + 1} filled @ ${fmt(order.entryPrice, 6)} | TP=${fmt(order.tpPrice, 6)} SL=${fmt(order.slPrice, 6)}`);
+  }
+
+  async _closeOrder(order, exitPrice, reason) {
+    const closeSide = order.side === "LONG" ? "SELL" : "BUY";
+    const grossPnl = order.side === "LONG"
+      ? (exitPrice - order.entryPrice) * order.quantity
+      : (order.entryPrice - exitPrice) * order.quantity;
+    const closeFee = exitPrice * order.quantity * this._feeRate;
 
     await this.api.placeMarketOrder({
-      symbol: this.symbol, side: closeSide, quantity: leg.quantity
+      symbol: this.symbol, side: closeSide, quantity: order.quantity
     });
+
+    order.status = reason === "take-profit" ? "tp" : "sl";
 
     this.feesPaid += closeFee;
     this.realizedPnl += grossPnl - closeFee;
     this.totalTrades += 1;
 
+    if (reason === "take-profit") {
+      this.accumulatedTpCount += 1;
+      this.accumulatedTpPnl += grossPnl - closeFee;
+    } else {
+      this.accumulatedSlCount += 1;
+      this.accumulatedSlPnl += grossPnl - closeFee;
+    }
+
     this.tradeHistory.push({
-      direction: side === "long" ? "LONG" : "SHORT",
-      entry: leg.entryPrice,
+      direction: order.side,
+      level: order.idx + 1,
+      entry: order.entryPrice,
       exit: exitPrice,
-      quantity: leg.quantity,
+      quantity: order.quantity,
       grossPnl,
       fees: closeFee,
       netPnl: grossPnl - closeFee,
@@ -209,9 +279,12 @@ class DCATrader {
     });
 
     store.recordTrade({ pnl: grossPnl, fees: closeFee });
+
+    log(`DCA ${this.symbol}`,
+      `${order.side} #${order.idx + 1} ${reason} @ ${fmt(exitPrice, 6)} | PnL ${fmt(grossPnl - closeFee, 4)}`);
   }
 
-  // â”€â”€ Destroy â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // -- Destroy -------------------------------------------------
 
   async destroy(reason) {
     if (!this.active) return;
@@ -222,17 +295,16 @@ class DCATrader {
 
     await this.api.cancelAllOpenOrders(this.symbol);
 
-    // Close any remaining open legs (e.g. on SL, the other leg is still open)
-    if (this.long.active) {
-      const exitPrice = this.lastPrice || this.startPrice;
-      await this._closeLeg("long", exitPrice, reason);
-    }
-    if (this.short.active) {
-      const exitPrice = this.lastPrice || this.startPrice;
-      await this._closeLeg("short", exitPrice, reason);
+    // Close any remaining active orders at market price
+    const exitPrice = this.lastPrice || this.startPrice;
+    for (const order of [...this.longs, ...this.shorts]) {
+      if (order.status === "active") {
+        await this._closeOrder(order, exitPrice, reason);
+      }
     }
 
-    const destroyReason = reason === "stop-loss" ? "max-loss" : reason;
+    const hasAnySl = this.accumulatedSlCount > 0;
+    const destroyReason = hasAnySl && reason === "side-closed" ? "max-loss" : reason;
 
     store.removeTrader(this.id, {
       id: this.id,
@@ -241,6 +313,10 @@ class DCATrader {
       realizedPnl: this.realizedPnl,
       feesPaid: this.feesPaid,
       totalTrades: this.totalTrades,
+      accumulatedTpCount: this.accumulatedTpCount,
+      accumulatedSlCount: this.accumulatedSlCount,
+      accumulatedTpPnl: this.accumulatedTpPnl,
+      accumulatedSlPnl: this.accumulatedSlPnl,
       highestNetProfit: this.highestNetProfit,
       createdAt: this.createdAt,
       closedAt: new Date().toISOString(),
@@ -250,16 +326,20 @@ class DCATrader {
     });
 
     log(`DCA ${this.symbol}`,
-      `Destroyed (${destroyReason}) | PnL $${fmt(this.realizedPnl)}`);
+      `Destroyed (${destroyReason}) | PnL $${fmt(this.realizedPnl)} | TP:${this.accumulatedTpCount} SL:${this.accumulatedSlCount}`);
     if (this.onDestroy) this.onDestroy(this.symbol, this.realizedPnl, destroyReason);
   }
 
-  // â”€â”€ PnL helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // -- PnL helpers ---------------------------------------------
 
   _calcUnrealizedPnl(price) {
     let pnl = 0;
-    if (this.long.active) pnl += (price - this.long.entryPrice) * this.long.quantity;
-    if (this.short.active) pnl += (this.short.entryPrice - price) * this.short.quantity;
+    for (const order of this.longs) {
+      if (order.status === "active") pnl += (price - order.entryPrice) * order.quantity;
+    }
+    for (const order of this.shorts) {
+      if (order.status === "active") pnl += (order.entryPrice - price) * order.quantity;
+    }
     return pnl;
   }
 
@@ -270,7 +350,7 @@ class DCATrader {
     if (totalNet > this.highestNetProfit) this.highestNetProfit = totalNet;
   }
 
-  // â”€â”€ Store sync â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // -- Store sync ----------------------------------------------
 
   _updateStore() {
     if (!this.active) return;
@@ -281,23 +361,22 @@ class DCATrader {
     store.upsertTrader({
       id: this.id,
       symbol: this.symbol,
-      traderType: "HEDGE",
-      longActive: this.long.active,
-      shortActive: this.short.active,
-      longEntry: this.long.entryPrice,
-      shortEntry: this.short.entryPrice,
-      longTp: this.long.tpPrice,
-      shortTp: this.short.tpPrice,
-      longSl: this.long.slPrice,
-      shortSl: this.short.slPrice,
+      traderType: "LADDER",
       lastPrice: price,
       startPrice: this.startPrice,
       leverage: this.leverage,
       notional: this.notional,
       margin: this.margin,
+      ladderLevels: this.ladderLevels,
+      ladderGapPercent: this.ladderGapPercent,
       takeProfitPercent: this.takeProfitPercent,
       stopLossPercent: this.stopLossPercent,
-      quantity: this.long.quantity,
+      longs: this.longs.map(o => ({ idx: o.idx, stopPrice: o.stopPrice, entryPrice: o.entryPrice, tpPrice: o.tpPrice, slPrice: o.slPrice, quantity: o.quantity, status: o.status })),
+      shorts: this.shorts.map(o => ({ idx: o.idx, stopPrice: o.stopPrice, entryPrice: o.entryPrice, tpPrice: o.tpPrice, slPrice: o.slPrice, quantity: o.quantity, status: o.status })),
+      accumulatedTpCount: this.accumulatedTpCount,
+      accumulatedSlCount: this.accumulatedSlCount,
+      accumulatedTpPnl: this.accumulatedTpPnl,
+      accumulatedSlPnl: this.accumulatedSlPnl,
       totalTrades: this.totalTrades,
       realizedPnl: this.realizedPnl,
       unrealizedPnl: unrealized,
