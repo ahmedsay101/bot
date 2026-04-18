@@ -161,6 +161,32 @@ describe("DCATrader (Flip Strategy)", () => {
     expect(onDestroy).toHaveBeenCalledWith("TESTUSDT", expect.any(Number), "max-loss");
   });
 
+  test("fixed TP: destroys when accumulated SL% >= takeProfitPercent", async () => {
+    config.dynamicTp = false;
+    config.takeProfitPercent = 10;
+    config.stopLossPercent = 5;
+    config.maxAccumulatedSlPercent = 50; // ignored when dynamicTp=false
+    const api = new FakeApi({ price: 100 });
+    const onDestroy = jest.fn();
+    const trader = new DCATrader({ symbol: "TESTUSDT", api, onDestroy, changePercent: 60 });
+    await trader.start();
+
+    // First SL: accSL = 5 < TP = 10 → flip
+    api.price = 105;
+    trader.lastPrice = 105;
+    await trader._checkExits(105);
+    expect(trader.direction).toBe("LONG");
+
+    // Second SL: accSL = 10 >= TP = 10 → destroy
+    const slPrice = trader.slPrice;
+    api.price = slPrice;
+    trader.lastPrice = slPrice;
+    await trader._checkExits(slPrice);
+
+    expect(trader.active).toBe(false);
+    expect(onDestroy).toHaveBeenCalledWith("TESTUSDT", expect.any(Number), "max-loss");
+  });
+
   test("multiple flips SHORT→LONG→SHORT→...", async () => {
     config.takeProfitPercent = 3;
     config.stopLossPercent = 5;
