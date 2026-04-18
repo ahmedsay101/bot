@@ -8,11 +8,11 @@ function fmt(value, digits = 2) {
 }
 
 /**
- * DCATrader — flip strategy.
+ * DCATrader â€” dual-position (hedge) strategy.
  *
- * Starts with a SHORT position.
- * TP = accumulatedSL% + base TP% (dynamic, grows with losses).
- * SL = fixed % → flip direction, or destroy if accSL >= maxAccSL.
+ * On start, opens one LONG and one SHORT market position simultaneously.
+ * Both have TP at 1% and SL at 10%.
+ * Trader is destroyed when both hit TP, or when either hits SL.
  */
 class DCATrader {
   constructor({ symbol, api, onDestroy, changePercent, equity }) {
@@ -33,19 +33,12 @@ class DCATrader {
     this.margin = eq >= fixedNotional ? fixedNotional : eq * (Number(config.equityFraction) || 0.9);
     this.notional = this.margin * this.leverage;
 
-    this.baseTpPercent = Number(config.takeProfitPercent) || 3;
-    this.stopLossPercent = Number(config.stopLossPercent) || 5;
-    this.maxAccumulatedSlPercent = Number(config.maxAccumulatedSlPercent) || 30;
+    this.takeProfitPercent = Number(config.takeProfitPercent) || 1;
+    this.stopLossPercent = Number(config.stopLossPercent) || 10;
 
-    // Flip tracking
-    this.direction = "SHORT";       // current position direction
-    this.accumulatedSlPercent = 0;   // total SL% accumulated across flips
-    this.flipCount = 0;             // number of flips so far
-
-    this.entryPrice = 0;
-    this.quantity = 0;
-    this.tpPrice = 0;
-    this.slPrice = 0;
+    // Dual-position state
+    this.long = { active: false, entryPrice: 0, quantity: 0, tpPrice: 0, slPrice: 0 };
+    this.short = { active: false, entryPrice: 0, quantity: 0, tpPrice: 0, slPrice: 0 };
 
     this.realizedPnl = 0;
     this.feesPaid = 0;
@@ -62,16 +55,13 @@ class DCATrader {
 
   get _feeRate() { return config.feeRate != null ? Number(config.feeRate) : 0.0004; }
 
-  /** TP%: dynamic (accSL + base) when config.dynamicTp is true, otherwise fixed base */
-  get takeProfitPercent() { return config.dynamicTp ? this.accumulatedSlPercent + this.baseTpPercent : this.baseTpPercent; }
-
-  // ── Lifecycle ───────────────────────────────────────────────
+  // â”€â”€ Lifecycle â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   async start() {
     this.startPrice = await this.api.getMarkPrice(this.symbol);
     this.lastPrice = this.startPrice;
 
-    await this._openPosition("SHORT");
+    await this._openBothPositions();
 
     this.api.on("markPrice", this._onMarkPrice);
     this.api.on("bookTicker", this._onBookTicker);
@@ -79,42 +69,39 @@ class DCATrader {
     this._updateStore();
   }
 
-  async _openPosition(direction) {
-    this.direction = direction;
-    const side = direction === "SHORT" ? "SELL" : "BUY";
+  async _openBothPositions() {
     const price = this.lastPrice || this.startPrice;
     const rawQty = Number((this.notional / price).toFixed(4));
 
-    const result = await this.api.placeMarketOrder({
-      symbol: this.symbol,
-      side,
-      quantity: rawQty
+    // Open LONG
+    const longResult = await this.api.placeMarketOrder({
+      symbol: this.symbol, side: "BUY", quantity: rawQty
     });
+    this.long.entryPrice = Number(longResult.price) || price;
+    this.long.quantity = Number(longResult.quantity) || rawQty;
+    this.long.tpPrice = parseFloat((this.long.entryPrice * (1 + this.takeProfitPercent / 100)).toFixed(8));
+    this.long.slPrice = parseFloat((this.long.entryPrice * (1 - this.stopLossPercent / 100)).toFixed(8));
+    this.long.active = true;
+    this.feesPaid += this.long.entryPrice * this.long.quantity * this._feeRate;
 
-    this.entryPrice = Number(result.price) || price;
-    this.quantity = Number(result.quantity) || rawQty;
-    const entryFee = this.entryPrice * this.quantity * this._feeRate;
-    this.feesPaid += entryFee;
-
-    this._setExitPrices();
+    // Open SHORT
+    const shortResult = await this.api.placeMarketOrder({
+      symbol: this.symbol, side: "SELL", quantity: rawQty
+    });
+    this.short.entryPrice = Number(shortResult.price) || price;
+    this.short.quantity = Number(shortResult.quantity) || rawQty;
+    this.short.tpPrice = parseFloat((this.short.entryPrice * (1 - this.takeProfitPercent / 100)).toFixed(8));
+    this.short.slPrice = parseFloat((this.short.entryPrice * (1 + this.stopLossPercent / 100)).toFixed(8));
+    this.short.active = true;
+    this.feesPaid += this.short.entryPrice * this.short.quantity * this._feeRate;
 
     log(`DCA ${this.symbol}`,
-      `${direction} @ ${fmt(this.entryPrice, 6)} | qty=${this.quantity} ` +
-      `flip#${this.flipCount} accSL=${this.accumulatedSlPercent}% TP%=${this.takeProfitPercent} ` +
-      `TP=${fmt(this.tpPrice, 6)} SL=${fmt(this.slPrice, 6)}`);
+      `LONG @ ${fmt(this.long.entryPrice, 6)} TP=${fmt(this.long.tpPrice, 6)} SL=${fmt(this.long.slPrice, 6)} | ` +
+      `SHORT @ ${fmt(this.short.entryPrice, 6)} TP=${fmt(this.short.tpPrice, 6)} SL=${fmt(this.short.slPrice, 6)} | ` +
+      `qty=${rawQty}`);
   }
 
-  _setExitPrices() {
-    if (this.direction === "SHORT") {
-      this.tpPrice = this.entryPrice * (1 - this.takeProfitPercent / 100);
-      this.slPrice = this.entryPrice * (1 + this.stopLossPercent / 100);
-    } else {
-      this.tpPrice = this.entryPrice * (1 + this.takeProfitPercent / 100);
-      this.slPrice = this.entryPrice * (1 - this.stopLossPercent / 100);
-    }
-  }
-
-  // ── Price feeds ─────────────────────────────────────────────
+  // â”€â”€ Price feeds â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   async _onMarkPrice({ symbol, price }) {
     if (!this.active || symbol !== this.symbol) return;
@@ -139,7 +126,7 @@ class DCATrader {
     this._updateStore();
   }
 
-  // ── TP / SL check ──────────────────────────────────────────
+  // â”€â”€ TP / SL check â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   async _checkExits(price) {
     if (!this.active || this._processing) return;
@@ -153,42 +140,56 @@ class DCATrader {
         return;
       }
 
-      const tpHit = this.direction === "SHORT"
-        ? price <= this.tpPrice
-        : price >= this.tpPrice;
+      // Check LONG SL
+      if (this.long.active && price <= this.long.slPrice) {
+        log(`DCA ${this.symbol}`, `LONG SL hit @ ${fmt(price, 6)}`);
+        await this._closeLeg("long", this.long.slPrice, "stop-loss");
+        await this.destroy("stop-loss");
+        return;
+      }
 
-      const slHit = this.direction === "SHORT"
-        ? price >= this.slPrice
-        : price <= this.slPrice;
+      // Check SHORT SL
+      if (this.short.active && price >= this.short.slPrice) {
+        log(`DCA ${this.symbol}`, `SHORT SL hit @ ${fmt(price, 6)}`);
+        await this._closeLeg("short", this.short.slPrice, "stop-loss");
+        await this.destroy("stop-loss");
+        return;
+      }
 
-      if (tpHit) {
-        log(`DCA ${this.symbol}`, `TP hit @ ${fmt(price, 6)} (${this.direction})`);
+      // Check LONG TP
+      if (this.long.active && price >= this.long.tpPrice) {
+        log(`DCA ${this.symbol}`, `LONG TP hit @ ${fmt(price, 6)}`);
+        await this._closeLeg("long", this.long.tpPrice, "take-profit");
+      }
+
+      // Check SHORT TP
+      if (this.short.active && price <= this.short.tpPrice) {
+        log(`DCA ${this.symbol}`, `SHORT TP hit @ ${fmt(price, 6)}`);
+        await this._closeLeg("short", this.short.tpPrice, "take-profit");
+      }
+
+      // Both TPs hit â†’ done
+      if (!this.long.active && !this.short.active) {
         await this.destroy("take-profit");
-      } else if (slHit) {
-        await this._handleStopLoss(price);
       }
     } finally {
       this._processing = false;
     }
   }
 
-  async _handleStopLoss(price) {
-    this.accumulatedSlPercent += this.stopLossPercent;
-    log(`DCA ${this.symbol}`,
-      `SL hit @ ${fmt(price, 6)} (${this.direction}) | accSL=${this.accumulatedSlPercent}%`);
+  async _closeLeg(side, exitPrice, reason) {
+    const leg = side === "long" ? this.long : this.short;
+    if (!leg.active) return;
+    leg.active = false;
 
-    // Close current position
-    const exitPrice = this.slPrice;
-    const closeSide = this.direction === "SHORT" ? "BUY" : "SELL";
-    const grossPnl = this.direction === "SHORT"
-      ? (this.entryPrice - exitPrice) * this.quantity
-      : (exitPrice - this.entryPrice) * this.quantity;
-    const closeFee = exitPrice * this.quantity * this._feeRate;
+    const closeSide = side === "long" ? "SELL" : "BUY";
+    const grossPnl = side === "long"
+      ? (exitPrice - leg.entryPrice) * leg.quantity
+      : (leg.entryPrice - exitPrice) * leg.quantity;
+    const closeFee = exitPrice * leg.quantity * this._feeRate;
 
     await this.api.placeMarketOrder({
-      symbol: this.symbol,
-      side: closeSide,
-      quantity: this.quantity
+      symbol: this.symbol, side: closeSide, quantity: leg.quantity
     });
 
     this.feesPaid += closeFee;
@@ -196,37 +197,21 @@ class DCATrader {
     this.totalTrades += 1;
 
     this.tradeHistory.push({
-      direction: this.direction,
-      entry: this.entryPrice,
+      direction: side === "long" ? "LONG" : "SHORT",
+      entry: leg.entryPrice,
       exit: exitPrice,
-      quantity: this.quantity,
+      quantity: leg.quantity,
       grossPnl,
       fees: closeFee,
       netPnl: grossPnl - closeFee,
-      reason: "stop-loss",
+      reason,
       closedAt: new Date().toISOString()
     });
 
     store.recordTrade({ pnl: grossPnl, fees: closeFee });
-
-    // Check if accumulated SL >= cap → destroy
-    const maxSl = config.dynamicTp ? this.maxAccumulatedSlPercent : this.baseTpPercent;
-    if (this.accumulatedSlPercent >= maxSl) {
-      log(`DCA ${this.symbol}`,
-        `Accumulated SL ${this.accumulatedSlPercent}% >= max ${maxSl}% — destroying`);
-      await this.destroy("max-loss");
-      return;
-    }
-
-    // Flip direction
-    const nextDir = this.direction === "SHORT" ? "LONG" : "SHORT";
-    this.flipCount += 1;
-    log(`DCA ${this.symbol}`, `Flipping to ${nextDir} (flip #${this.flipCount})`);
-    await this._openPosition(nextDir);
-    this._updateStore();
   }
 
-  // ── Destroy ─────────────────────────────────────────────────
+  // â”€â”€ Destroy â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   async destroy(reason) {
     if (!this.active) return;
@@ -237,75 +222,45 @@ class DCATrader {
 
     await this.api.cancelAllOpenOrders(this.symbol);
 
-    // Close position if not already closed by _handleStopLoss
-    if (reason !== "max-loss") {
-      let exitPrice = this.lastPrice || this.startPrice;
-      if (reason === "take-profit") exitPrice = this.tpPrice;
-
-      const closeSide = this.direction === "SHORT" ? "BUY" : "SELL";
-      const grossPnl = this.direction === "SHORT"
-        ? (this.entryPrice - exitPrice) * this.quantity
-        : (exitPrice - this.entryPrice) * this.quantity;
-      const closeFee = exitPrice * this.quantity * this._feeRate;
-
-      await this.api.placeMarketOrder({
-        symbol: this.symbol,
-        side: closeSide,
-        quantity: this.quantity
-      });
-
-      this.feesPaid += closeFee;
-      this.realizedPnl += grossPnl - closeFee;
-      this.totalTrades += 1;
-
-      this.tradeHistory.push({
-        direction: this.direction,
-        entry: this.entryPrice,
-        exit: exitPrice,
-        quantity: this.quantity,
-        grossPnl,
-        fees: closeFee,
-        netPnl: grossPnl - closeFee,
-        reason,
-        closedAt: new Date().toISOString()
-      });
-
-      store.recordTrade({ pnl: grossPnl, fees: closeFee });
+    // Close any remaining open legs (e.g. on SL, the other leg is still open)
+    if (this.long.active) {
+      const exitPrice = this.lastPrice || this.startPrice;
+      await this._closeLeg("long", exitPrice, reason);
+    }
+    if (this.short.active) {
+      const exitPrice = this.lastPrice || this.startPrice;
+      await this._closeLeg("short", exitPrice, reason);
     }
 
-    const isLoss = reason === "max-loss" || reason === "expired" || reason === "manual";
+    const destroyReason = reason === "stop-loss" ? "max-loss" : reason;
 
     store.removeTrader(this.id, {
       id: this.id,
       symbol: this.symbol,
       changePercent: this.changePercent,
-      direction: this.direction,
-      flipCount: this.flipCount,
-      accumulatedSlPercent: this.accumulatedSlPercent,
       realizedPnl: this.realizedPnl,
       feesPaid: this.feesPaid,
       totalTrades: this.totalTrades,
       highestNetProfit: this.highestNetProfit,
       createdAt: this.createdAt,
       closedAt: new Date().toISOString(),
-      reason,
+      reason: destroyReason,
       startPrice: this.startPrice,
-      endPrice: this.lastPrice,
-      entryPrice: this.entryPrice
+      endPrice: this.lastPrice
     });
 
     log(`DCA ${this.symbol}`,
-      `Destroyed (${reason}) | PnL $${fmt(this.realizedPnl)} | flips=${this.flipCount} accSL=${this.accumulatedSlPercent}%`);
-    if (this.onDestroy) this.onDestroy(this.symbol, this.realizedPnl, reason);
+      `Destroyed (${destroyReason}) | PnL $${fmt(this.realizedPnl)}`);
+    if (this.onDestroy) this.onDestroy(this.symbol, this.realizedPnl, destroyReason);
   }
 
-  // ── PnL helpers ─────────────────────────────────────────────
+  // â”€â”€ PnL helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   _calcUnrealizedPnl(price) {
-    if (this.direction === "SHORT") {
-      return (this.entryPrice - price) * this.quantity;
-    }
-    return (price - this.entryPrice) * this.quantity;
+    let pnl = 0;
+    if (this.long.active) pnl += (price - this.long.entryPrice) * this.long.quantity;
+    if (this.short.active) pnl += (this.short.entryPrice - price) * this.short.quantity;
+    return pnl;
   }
 
   _trackHighestProfit() {
@@ -315,7 +270,7 @@ class DCATrader {
     if (totalNet > this.highestNetProfit) this.highestNetProfit = totalNet;
   }
 
-  // ── Store sync ──────────────────────────────────────────────
+  // â”€â”€ Store sync â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   _updateStore() {
     if (!this.active) return;
@@ -326,21 +281,23 @@ class DCATrader {
     store.upsertTrader({
       id: this.id,
       symbol: this.symbol,
-      traderType: "FLIP",
-      direction: this.direction,
-      flipCount: this.flipCount,
-      accumulatedSlPercent: this.accumulatedSlPercent,
+      traderType: "HEDGE",
+      longActive: this.long.active,
+      shortActive: this.short.active,
+      longEntry: this.long.entryPrice,
+      shortEntry: this.short.entryPrice,
+      longTp: this.long.tpPrice,
+      shortTp: this.short.tpPrice,
+      longSl: this.long.slPrice,
+      shortSl: this.short.slPrice,
       lastPrice: price,
       startPrice: this.startPrice,
-      entryPrice: this.entryPrice,
       leverage: this.leverage,
       notional: this.notional,
       margin: this.margin,
       takeProfitPercent: this.takeProfitPercent,
       stopLossPercent: this.stopLossPercent,
-      quantity: this.quantity,
-      tpPrice: this.tpPrice,
-      slPrice: this.slPrice,
+      quantity: this.long.quantity,
       totalTrades: this.totalTrades,
       realizedPnl: this.realizedPnl,
       unrealizedPnl: unrealized,
