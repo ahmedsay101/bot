@@ -10,7 +10,7 @@ const config = {
   equityFraction: 0.9,
   leverage: 5,
   dynamicTp: false,
-  takeProfitPercent: 3,
+  takeProfitPercent: 10,
   stopLossPercent: 1,
   maxAccumulatedSlPercent: 10,
   startingBalanceUSDT: 500,
