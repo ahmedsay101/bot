@@ -29,8 +29,8 @@ class DCATrader {
 
     this.leverage = Number(config.leverage) || 2;
     const eq = Number(equity) || Number(config.startingBalanceUSDT);
-    const fixedNotional = Number(config.fixedNotional) || 200;
-    this.margin = eq >= fixedNotional ? fixedNotional : eq * (Number(config.equityFraction) || 0.9);
+    const fraction = Number(config.equityFraction) || 0.9;
+    this.margin = eq * fraction;
     this.notional = this.margin * this.leverage;
 
     this.baseTpPercent = Number(config.takeProfitPercent) || 3;
