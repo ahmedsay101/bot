@@ -69,6 +69,7 @@ class DCATrader {
     this.startPrice = await this.api.getMarkPrice(this.symbol);
     this.lastPrice = this.startPrice;
 
+    this._recalcMargin();          // lock margin once for the entire flip sequence
     await this._openPosition("SHORT");
 
     this.api.on("markPrice", this._onMarkPrice);
@@ -85,7 +86,6 @@ class DCATrader {
   }
 
   async _openPosition(direction) {
-    this._recalcMargin();
     this.direction = direction;
     const side = direction === "SHORT" ? "SELL" : "BUY";
     const price = this.lastPrice || this.startPrice;

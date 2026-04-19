@@ -13,6 +13,7 @@ const config = {
   takeProfitPercent: 10,
   stopLossPercent: 1,
   maxAccumulatedSlPercent: 10,
+  minAvgTopGainerPercent: 70,
   startingBalanceUSDT: 500,
   scannerIntervalMs: 1 * 60 * 1000,
   maxLifetimeMs: 24 * 60 * 60 * 1000,
