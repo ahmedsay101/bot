@@ -215,6 +215,12 @@ function TraderCard({ trader, onDestroy }) {
               <span className={`rounded-full bg-white/5 border border-white/10 px-2.5 py-1 ${pnlColor(netPnl)}`}>
                 Net ${fmt(netPnl)}
               </span>
+              <span className="rounded-full bg-white/5 border border-white/10 px-2.5 py-1 text-slate-300">
+                Notional ${fmt(trader.notional)}
+              </span>
+              <span className="rounded-full bg-white/5 border border-white/10 px-2.5 py-1 text-slate-300">
+                Margin ${fmt(trader.margin)}
+              </span>
             </div>
             <button
               type="button"

@@ -7,7 +7,7 @@ const config = {
   maxTraders: 1,
   feeRate: 0.0004,
   fixedNotional: 500,
-  equityFraction: 0.9,
+  equityFraction: 0.8,
   leverage: 5,
   dynamicTp: false,
   takeProfitPercent: 10,
