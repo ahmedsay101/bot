@@ -28,10 +28,8 @@ class DCATrader {
     this.lastPrice = null;
 
     this.leverage = Number(config.leverage) || 2;
-    const eq = Number(equity) || Number(config.startingBalanceUSDT);
-    const fraction = Number(config.equityFraction) || 0.9;
-    this.margin = eq * fraction;
-    this.notional = this.margin * this.leverage;
+    this.margin = 0;
+    this.notional = 0;
 
     this.baseTpPercent = Number(config.takeProfitPercent) || 3;
     this.stopLossPercent = Number(config.stopLossPercent) || 5;
@@ -79,7 +77,15 @@ class DCATrader {
     this._updateStore();
   }
 
+  _recalcMargin() {
+    const eq = Number(store.getStatus().equity) || Number(config.startingBalanceUSDT);
+    const fraction = Number(config.equityFraction) || 0.9;
+    this.margin = eq * fraction;
+    this.notional = this.margin * this.leverage;
+  }
+
   async _openPosition(direction) {
+    this._recalcMargin();
     this.direction = direction;
     const side = direction === "SHORT" ? "SELL" : "BUY";
     const price = this.lastPrice || this.startPrice;

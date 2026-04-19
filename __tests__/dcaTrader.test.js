@@ -8,7 +8,8 @@ jest.mock("../src/state/store", () => ({
   upsertTrader: jest.fn(),
   removeTrader: jest.fn(),
   recordTrade: jest.fn(),
-  getPerformance: jest.fn(() => ({ netProfit: 0 }))
+  getPerformance: jest.fn(() => ({ netProfit: 0 })),
+  getStatus: jest.fn(() => ({ equity: 1000 }))
 }));
 
 const DCATrader = require("../src/core/dcaTrader");
@@ -42,7 +43,7 @@ describe("DCATrader (Flip Strategy)", () => {
       mode: "test",
       leverage: 2,
       fixedNotional: 50,
-      equityFraction: 0.9,
+      equityFraction: 0.05,
       feeRate: 0,
       startingBalanceUSDT: 1000,
       dynamicTp: true,
@@ -429,18 +430,19 @@ describe("DCATrader (Flip Strategy)", () => {
     expect(onDestroy).toHaveBeenCalledWith("TESTUSDT", expect.any(Number), "expired");
   });
 
-  test("quantity formula: fixedNotional vs equity fraction", async () => {
-    config.fixedNotional = 100;
+  test("quantity formula: equity fraction from store", async () => {
     config.leverage = 5;
+    config.equityFraction = 0.1;
+    // store equity=1000, margin=1000*0.1=100, notional=500, qty=500/200=2.5
     const api = new FakeApi({ price: 200 });
-    const t1 = new DCATrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn(), changePercent: 60, equity: 1000 });
+    const t1 = new DCATrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn(), changePercent: 60 });
     await t1.start();
     expect(t1.margin).toBeCloseTo(100, 4);
-    expect(t1.quantity).toBe(2.5); // 100*5/200
+    expect(t1.quantity).toBe(2.5);
 
-    config.fixedNotional = 200;
     config.equityFraction = 0.5;
-    const t2 = new DCATrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn(), changePercent: 60, equity: 150 });
+    store.getStatus.mockReturnValueOnce({ equity: 150 });
+    const t2 = new DCATrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn(), changePercent: 60 });
     await t2.start();
     expect(t2.margin).toBeCloseTo(75, 4);
     expect(t2.quantity).toBe(1.875); // 75*5/200
