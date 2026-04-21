@@ -9,6 +9,7 @@ class Controller {
     this.scanner = scanner;
     this.traders = new Map();
     this.leverageSet = new Set();
+    this.symbolCooldown = new Map();   // symbol → cooldown-until timestamp (ms)
     this._scanning = false;
   }
 
@@ -86,11 +87,21 @@ class Controller {
       }
     }
 
+    const now = Date.now();
     for (const candidate of candidates) {
       const symbol = candidate.symbol;
       const changePercent = candidate.change;
       if (this.traders.size >= config.maxTraders) break;
       if (this.traders.has(symbol)) continue;
+
+      const cooldownUntil = this.symbolCooldown.get(symbol);
+      if (cooldownUntil && cooldownUntil > now) {
+        const remainMin = Math.ceil((cooldownUntil - now) / 60000);
+        log("CONTROLLER", `${symbol} on cooldown for ${remainMin}m — skipping`);
+        continue;
+      } else if (cooldownUntil) {
+        this.symbolCooldown.delete(symbol);
+      }
 
       if (config.mode === "live" && !this.leverageSet.has(symbol)) {
         try {
@@ -147,6 +158,17 @@ class Controller {
   async _onTraderDestroyed(symbol, pnl, reason) {
     if (!this.traders.has(symbol)) return;
     this.traders.delete(symbol);
+
+    // Apply per-symbol cooldown after a loss (max-loss / expired)
+    if (reason === "max-loss" || reason === "expired") {
+      const cooldownMs = Number(config.lossCooldownMs) || 0;
+      if (cooldownMs > 0) {
+        const until = Date.now() + cooldownMs;
+        this.symbolCooldown.set(symbol, until);
+        log("CONTROLLER", `${symbol} cooldown set for ${Math.round(cooldownMs / 60000)}m (until ${new Date(until).toISOString()})`);
+      }
+    }
+
     log("CONTROLLER", `Trader ${symbol} destroyed (${reason})`);
     await this._refreshMarketStreams();
   }

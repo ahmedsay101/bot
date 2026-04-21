@@ -216,7 +216,7 @@ class DCATrader {
     store.recordTrade({ pnl: grossPnl, fees: closeFee });
 
     // Check if accumulated SL >= cap → destroy
-    const maxSl = config.dynamicTp ? this.maxAccumulatedSlPercent : this.baseTpPercent;
+    const maxSl = this.maxAccumulatedSlPercent;
     if (this.accumulatedSlPercent >= maxSl) {
       log(`DCA ${this.symbol}`,
         `Accumulated SL ${this.accumulatedSlPercent}% >= max ${maxSl}% — destroying`);
