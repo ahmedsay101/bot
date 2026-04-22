@@ -421,8 +421,6 @@ function App() {
   });
   const [socketStatus, setSocketStatus] = useState("disconnected");
   const [topGainers, setTopGainers] = useState([]);
-  const [topGainersAvg, setTopGainersAvg] = useState(0);
-  const [minAvgTopGainerPercent, setMinAvgTopGainerPercent] = useState(70);
   const [closedTraders, setClosedTraders] = useState([]);
 
   const activeSymbols = useMemo(
@@ -464,8 +462,6 @@ function App() {
 
       setPerformance((p) => ({ ...p, ...(d.performance || {}) }));
       if (d.topGainers) setTopGainers(d.topGainers);
-      if (d.topGainersAvg != null) setTopGainersAvg(d.topGainersAvg);
-      if (d.minAvgTopGainerPercent != null) setMinAvgTopGainerPercent(d.minAvgTopGainerPercent);
       if (d.closedTraders) setClosedTraders(d.closedTraders);
       setStatus((p) => ({ ...p, ...(d.status || {}), balance: bal, equity: bal + unr }));
     });
@@ -538,27 +534,7 @@ function App() {
           {/* Top Gainers */}
           <div>
             <h2 className="text-lg font-semibold mb-4">Top Gainers (24h)</h2>
-            <div className="glass rounded-2xl p-4 space-y-3">
-              {/* Scanner gate indicator */}
-              <div className={`flex items-center justify-between rounded-xl px-4 py-2.5 ${
-                topGainersAvg >= minAvgTopGainerPercent
-                  ? "bg-emerald-500/10 border border-emerald-500/20"
-                  : "bg-rose-500/10 border border-rose-500/20"
-              }`}>
-                <div className="flex items-center gap-2">
-                  <span className={`inline-block h-2 w-2 rounded-full ${
-                    topGainersAvg >= minAvgTopGainerPercent ? "bg-emerald-400 animate-pulse" : "bg-rose-400"
-                  }`} />
-                  <span className={`text-xs font-semibold ${
-                    topGainersAvg >= minAvgTopGainerPercent ? "text-emerald-400" : "text-rose-400"
-                  }`}>
-                    {topGainersAvg >= minAvgTopGainerPercent ? "Scanner Active" : "Scanner Paused"}
-                  </span>
-                </div>
-                <span className="text-[10px] text-slate-400">
-                  Avg {fmt(topGainersAvg)}% / {fmt(minAvgTopGainerPercent)}%
-                </span>
-              </div>
+            <div className="glass rounded-2xl p-4">
               <TopGainersTable gainers={topGainers} activeSymbols={activeSymbols} />
             </div>
           </div>

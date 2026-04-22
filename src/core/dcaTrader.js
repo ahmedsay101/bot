@@ -82,11 +82,27 @@ class DCATrader {
     const eq = Number(store.getStatus().equity) || Number(config.startingBalanceUSDT);
     const fraction = Number(config.equityFraction) || 0.9;
     this.margin = eq * fraction;
-    this.notional = this.margin * this.leverage;
+    this.baseLeverage = Number(config.leverage) || 2;
+    this.baseNotional = this.margin * this.baseLeverage;
   }
 
   async _openPosition(direction) {
     this.direction = direction;
+
+    // Each flip doubles both leverage and notional (margin stays the same)
+    const multiplier = Math.pow(2, this.flipCount);
+    this.leverage = this.baseLeverage * multiplier;
+    this.notional = this.baseNotional * multiplier;
+
+    if (config.mode === "live" && this.flipCount > 0) {
+      try {
+        await this.api.setLeverage(this.symbol, this.leverage);
+        log(`DCA ${this.symbol}`, `Leverage updated to ${this.leverage}x for flip #${this.flipCount}`);
+      } catch (err) {
+        log(`DCA ${this.symbol}`, `Leverage update failed: ${err.message}`);
+      }
+    }
+
     const side = direction === "SHORT" ? "SELL" : "BUY";
     const price = this.lastPrice || this.startPrice;
     const rawQty = Number((this.notional / price).toFixed(4));

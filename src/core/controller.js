@@ -77,16 +77,6 @@ class Controller {
 
     const candidates = await this.scanner.scan();
 
-    // Gate: skip if avg 24h% of top 5 gainers is below threshold
-    const top5 = candidates.slice(0, 5);
-    if (top5.length > 0) {
-      const avg = top5.reduce((sum, c) => sum + c.change, 0) / top5.length;
-      if (avg < (Number(config.minAvgTopGainerPercent) || 70)) {
-        log("CONTROLLER", `Top-5 avg 24h% = ${avg.toFixed(1)}% < ${Number(config.minAvgTopGainerPercent) || 70}% — skipping`);
-        return;
-      }
-    }
-
     const now = Date.now();
     for (const candidate of candidates) {
       const symbol = candidate.symbol;

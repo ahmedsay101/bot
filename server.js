@@ -33,7 +33,6 @@ const io = new Server(server, {
 });
 
 let topGainers = [];
-let topGainersAvg = 0;
 const tickerCache = new Map();   // symbol → { symbol, percent }
 let topGainersWs = null;
 let priceFeedAttached = false;
@@ -75,9 +74,6 @@ function updateTopGainersFromTickers(tickers) {
     .filter((t) => t.quoteVolume >= 10_000_000)
     .sort((a, b) => b.percent - a.percent)
     .slice(0, 5);
-  topGainersAvg = topGainers.length > 0
-    ? topGainers.reduce((s, g) => s + g.percent, 0) / topGainers.length
-    : 0;
 }
 
 function startTopGainersWs() {
@@ -131,18 +127,14 @@ setInterval(() => {
 io.on("connection", (socket) => {
   socket.emit("dashboardUpdate", {
     ...store.getDashboardUpdate(),
-    topGainers,
-    topGainersAvg,
-    minAvgTopGainerPercent: Number(config.minAvgTopGainerPercent) || 70
+    topGainers
   });
 });
 
 setInterval(() => {
   io.emit("dashboardUpdate", {
     ...store.getDashboardUpdate(),
-    topGainers,
-    topGainersAvg,
-    minAvgTopGainerPercent: Number(config.minAvgTopGainerPercent) || 70
+    topGainers
   });
 }, 2000);
 
