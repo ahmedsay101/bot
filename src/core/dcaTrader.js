@@ -344,6 +344,7 @@ class DCATrader {
       margin: this.margin,
       takeProfitPercent: this.takeProfitPercent,
       stopLossPercent: this.stopLossPercent,
+      maxAccumulatedSlPercent: this.maxAccumulatedSlPercent,
       quantity: this.quantity,
       tpPrice: this.tpPrice,
       slPrice: this.slPrice,

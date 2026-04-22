@@ -19,6 +19,7 @@ router.get("/traders", (req, res) => {
     margin: trader.margin,
     takeProfitPercent: trader.takeProfitPercent,
     stopLossPercent: trader.stopLossPercent,
+    maxAccumulatedSlPercent: trader.maxAccumulatedSlPercent,
     quantity: trader.quantity,
     tpPrice: trader.tpPrice,
     slPrice: trader.slPrice,

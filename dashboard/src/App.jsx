@@ -52,9 +52,9 @@ function StatCard({ label, value, sub, color }) {
 }
 
 /* ── Accumulated SL Progress Bar ────────────────────────────── */
-function AccSlProgress({ accSl, tpPercent }) {
-  const tp = tpPercent || 30;
-  const pct = Math.min(100, (accSl / tp) * 100);
+function AccSlProgress({ accSl, maxSl }) {
+  const max = maxSl || 30;
+  const pct = Math.min(100, (accSl / max) * 100);
   const danger = pct >= 80;
   const warn = pct >= 50;
 
@@ -62,7 +62,7 @@ function AccSlProgress({ accSl, tpPercent }) {
     <div className="space-y-1">
       <div className="flex justify-between text-[10px] text-slate-500">
         <span>Accumulated SL: {fmt(accSl)}%</span>
-        <span>Max: {tp}%</span>
+        <span>Max: {max}%</span>
       </div>
       <div className="relative h-2.5 w-full overflow-hidden rounded-full bg-slate-800">
         <div
@@ -238,7 +238,7 @@ function TraderCard({ trader, onDestroy }) {
 
         {/* Accumulated SL progress */}
         <div className="mt-3">
-          <AccSlProgress accSl={trader.accumulatedSlPercent || 0} tpPercent={trader.takeProfitPercent} />
+          <AccSlProgress accSl={trader.accumulatedSlPercent || 0} maxSl={trader.maxAccumulatedSlPercent} />
         </div>
 
         <div className="mt-2">
@@ -293,11 +293,11 @@ function TraderCard({ trader, onDestroy }) {
               <p className="text-sm font-mono text-slate-400">${fmt(trader.feesPaid, 4)}</p>
             </div>
             <div className="rounded-xl bg-slate-800/40 p-3">
-              <p className="text-[10px] uppercase text-slate-500">Acc. SL / TP</p>
+              <p className="text-[10px] uppercase text-slate-500">Acc. SL / Max</p>
               <p className="text-sm font-mono text-slate-300">
                 <span className="text-rose-400">{fmt(trader.accumulatedSlPercent || 0)}%</span>
                 {" / "}
-                <span className="text-emerald-400">{trader.takeProfitPercent || 30}%</span>
+                <span className="text-emerald-400">{trader.maxAccumulatedSlPercent || 30}%</span>
               </p>
             </div>
             <div className="rounded-xl bg-slate-800/40 p-3">
