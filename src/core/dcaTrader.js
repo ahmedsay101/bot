@@ -69,7 +69,7 @@ class DCATrader {
     this.startPrice = await this.api.getMarkPrice(this.symbol);
     this.lastPrice = this.startPrice;
 
-    this._recalcMargin();          // lock margin once for the entire flip sequence
+    this.baseLeverage = Number(config.leverage) || 2;
     await this._openPosition("SHORT");
 
     this.api.on("markPrice", this._onMarkPrice);
@@ -78,21 +78,20 @@ class DCATrader {
     this._updateStore();
   }
 
-  _recalcMargin() {
-    const eq = Number(store.getStatus().equity) || Number(config.startingBalanceUSDT);
-    const fraction = Number(config.equityFraction) || 0.9;
-    this.margin = eq * fraction;
-    this.baseLeverage = Number(config.leverage) || 2;
-    this.baseNotional = this.margin * this.baseLeverage;
-  }
-
   async _openPosition(direction) {
     this.direction = direction;
 
-    // Each flip doubles both leverage and notional (margin stays the same)
+    // Leverage doubles each flip; notional is always (balance * equityFraction) * leverage
     const multiplier = Math.pow(2, this.flipCount);
     this.leverage = this.baseLeverage * multiplier;
-    this.notional = this.baseNotional * multiplier;
+
+    // Live balance: startingBalance + realized netProfit (reflects losses immediately,
+    // unlike store.balance which only refreshes every 10s via _syncAccount).
+    const perf = store.getPerformance();
+    const liveBalance = Number(config.startingBalanceUSDT) + Number(perf.netProfit || 0);
+    const fraction = Number(config.equityFraction) || 0.9;
+    this.margin = liveBalance * fraction;
+    this.notional = this.margin * this.leverage;
 
     if (config.mode === "live" && this.flipCount > 0) {
       try {

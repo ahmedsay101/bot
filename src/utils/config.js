@@ -12,7 +12,7 @@ const config = {
   dynamicTp: false,
   takeProfitPercent: 5,
   stopLossPercent: 5,
-  maxAccumulatedSlPercent: 30,
+  maxAccumulatedSlPercent: 35,
   minChangePercent: 60,
   startingBalanceUSDT: 500,
   scannerIntervalMs: 1 * 60 * 1000,

@@ -9,7 +9,7 @@ jest.mock("../src/state/store", () => ({
   removeTrader: jest.fn(),
   recordTrade: jest.fn(),
   getPerformance: jest.fn(() => ({ netProfit: 0 })),
-  getStatus: jest.fn(() => ({ equity: 1000 }))
+  getStatus: jest.fn(() => ({ equity: 1000, balance: 1000 }))
 }));
 
 const DCATrader = require("../src/core/dcaTrader");
@@ -443,7 +443,8 @@ describe("DCATrader (Flip Strategy)", () => {
   test("quantity formula: equity fraction from store", async () => {
     config.leverage = 5;
     config.equityFraction = 0.1;
-    // store equity=1000, margin=1000*0.1=100, notional=500, qty=500/200=2.5
+    config.startingBalanceUSDT = 1000;
+    // liveBalance = 1000 + 0 = 1000, margin=1000*0.1=100, notional=500, qty=500/200=2.5
     const api = new FakeApi({ price: 200 });
     const t1 = new DCATrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn(), changePercent: 60 });
     await t1.start();
@@ -451,7 +452,8 @@ describe("DCATrader (Flip Strategy)", () => {
     expect(t1.quantity).toBe(2.5);
 
     config.equityFraction = 0.5;
-    store.getStatus.mockReturnValueOnce({ equity: 150 });
+    // simulate prior loss of 850 → liveBalance = 1000 - 850 = 150
+    store.getPerformance.mockReturnValueOnce({ netProfit: -850 });
     const t2 = new DCATrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn(), changePercent: 60 });
     await t2.start();
     expect(t2.margin).toBeCloseTo(75, 4);
