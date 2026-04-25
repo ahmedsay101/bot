@@ -60,14 +60,9 @@ router.get("/performance", (req, res) => {
   res.json(store.getPerformance());
 });
 
-router.get("/top-gainers", async (req, res) => {
-  try {
-    res.json({
-      error: "Top gainers are now streamed via websocket; use /api/dashboard updates."
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+router.get("/top-gainers", (req, res) => {
+  const getter = req.app.get("getTopGainers");
+  res.json(typeof getter === "function" ? getter() : []);
 });
 
 router.delete("/traders/:symbol", async (req, res) => {

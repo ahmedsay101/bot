@@ -37,6 +37,8 @@ const tickerCache = new Map();   // symbol → { symbol, percent }
 let topGainersWs = null;
 let priceFeedAttached = false;
 
+app.set("getTopGainers", () => topGainers);
+
 function fetchJson(url) {
   return new Promise((resolve, reject) => {
     https

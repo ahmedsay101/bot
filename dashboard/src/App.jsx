@@ -432,11 +432,13 @@ function App() {
     Promise.all([
       axios.get(`${API_URL}/api/status`),
       axios.get(`${API_URL}/api/traders`),
-      axios.get(`${API_URL}/api/performance`)
-    ]).then(([sRes, tRes, pRes]) => {
+      axios.get(`${API_URL}/api/performance`),
+      axios.get(`${API_URL}/api/top-gainers`)
+    ]).then(([sRes, tRes, pRes, gRes]) => {
       setStatus(sRes.data);
       setTraders(tRes.data);
       setPerformance((p) => ({ ...p, ...(pRes.data || {}) }));
+      if (Array.isArray(gRes.data)) setTopGainers(gRes.data);
     }).catch(() => setSocketStatus("error"));
   }, []);
 
