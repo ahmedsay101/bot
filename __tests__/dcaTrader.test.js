@@ -8,6 +8,7 @@ jest.mock("../src/state/store", () => ({
   upsertTrader: jest.fn(),
   removeTrader: jest.fn(),
   recordTrade: jest.fn(),
+  recordFee: jest.fn(),
   getPerformance: jest.fn(() => ({ netProfit: 0 })),
   getStatus: jest.fn(() => ({ equity: 1000, balance: 1000 }))
 }));
@@ -397,33 +398,33 @@ describe("DCATrader (Flip Strategy)", () => {
     );
   });
 
-  test("TP exit uses tpPrice, not gapped lastPrice", async () => {
+  test("TP exit uses actual market fill price (mimics live market-order close)", async () => {
     const api = new FakeApi({ price: 100 });
     const trader = new DCATrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn(), changePercent: 60 });
     await trader.start();
 
-    // TP=97, but price gaps to 50
+    // TP=97, but price gaps to 50 — live market close fills at 50, not 97
     trader.lastPrice = 50;
     await trader._checkExits(50);
 
-    expect(trader.tradeHistory[0].exit).toBe(97);
-    // PnL = (100 - 97) * 1 = 3, not (100 - 50) = 50
-    expect(trader.realizedPnl).toBeCloseTo(3, 2);
+    expect(trader.tradeHistory[0].exit).toBe(50);
+    // PnL = (100 - 50) * 1 = 50
+    expect(trader.tradeHistory[0].grossPnl).toBeCloseTo(50, 2);
   });
 
-  test("SL exit uses slPrice, not gapped lastPrice", async () => {
+  test("SL exit uses actual market fill price (mimics live market-order close)", async () => {
     const api = new FakeApi({ price: 100 });
     const trader = new DCATrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn(), changePercent: 60 });
     await trader.start();
 
-    // SL=105, but price gaps to 120
+    // SL=105, but price gaps to 120 — live market close fills at 120, not 105
     api.price = 120;
     trader.lastPrice = 120;
     await trader._checkExits(120);
 
-    expect(trader.tradeHistory[0].exit).toBe(105);
-    // PnL = (100 - 105) * 1 = -5, not (100 - 120) = -20
-    expect(trader.tradeHistory[0].grossPnl).toBeCloseTo(-5, 2);
+    expect(trader.tradeHistory[0].exit).toBe(120);
+    // PnL = (100 - 120) * 1 = -20
+    expect(trader.tradeHistory[0].grossPnl).toBeCloseTo(-20, 2);
   });
 
   test("trader is destroyed when max lifetime is reached", async () => {

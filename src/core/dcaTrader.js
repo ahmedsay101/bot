@@ -116,6 +116,7 @@ class DCATrader {
     this.quantity = Number(result.quantity) || rawQty;
     const entryFee = this.entryPrice * this.quantity * this._feeRate;
     this.feesPaid += entryFee;
+    store.recordFee(entryFee);
 
     this._setExitPrices();
 
@@ -198,8 +199,8 @@ class DCATrader {
     log(`DCA ${this.symbol}`,
       `SL hit @ ${fmt(price, 6)} (${this.direction}) | accSL=${this.accumulatedSlPercent}%`);
 
-    // Close current position
-    const exitPrice = this.slPrice;
+    // Close current position at the actual triggering price (market fill, not the SL line)
+    const exitPrice = Number(price) || this.slPrice;
     const closeSide = this.direction === "SHORT" ? "BUY" : "SELL";
     const grossPnl = this.direction === "SHORT"
       ? (this.entryPrice - exitPrice) * this.quantity
@@ -260,8 +261,10 @@ class DCATrader {
 
     // Close position if not already closed by _handleStopLoss
     if (reason !== "max-loss") {
-      let exitPrice = this.lastPrice || this.startPrice;
-      if (reason === "take-profit") exitPrice = this.tpPrice;
+      // Use the actual last market price (mimics live market-order fill).
+      // Fall back to tpPrice only if lastPrice is unavailable.
+      const exitPrice = Number(this.lastPrice)
+        || (reason === "take-profit" ? this.tpPrice : this.startPrice);
 
       const closeSide = this.direction === "SHORT" ? "BUY" : "SELL";
       const grossPnl = this.direction === "SHORT"

@@ -85,7 +85,17 @@ function startTopGainersWs() {
   topGainersWs = new WebSocket(url);
 
   topGainersWs.on("open", () => {
+    topGainersWs._lastMessage = Date.now();
     log("API", "Top gainers WS connected");
+  });
+
+  // Binance sends a ping every ~3min and expects a pong within 10min, otherwise it disconnects.
+  topGainersWs.on("ping", (data) => {
+    try { topGainersWs.pong(data); } catch (_) {}
+    topGainersWs._lastMessage = Date.now();
+  });
+  topGainersWs.on("pong", () => {
+    topGainersWs._lastMessage = Date.now();
   });
 
   topGainersWs.on("message", (raw) => {
@@ -118,9 +128,14 @@ function startTopGainersWs() {
 
 // Watchdog: restart top gainers WS if no message received in 60s
 setInterval(() => {
-  if (topGainersWs && topGainersWs._lastMessage && Date.now() - topGainersWs._lastMessage > 60000) {
+  if (!topGainersWs) return;
+  const last = topGainersWs._lastMessage || 0;
+  if (last && Date.now() - last > 60000) {
     log("API", "Top gainers WS stale (no data 60s) — reconnecting");
     startTopGainersWs();
+  } else if (!last) {
+    // No messages ever received: send a ping; if no pong, the socket will fail and reconnect.
+    try { topGainersWs.ping(); } catch (_) {}
   }
 }, 30000);
 

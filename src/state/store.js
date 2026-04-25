@@ -84,6 +84,16 @@ function recordTrade({ pnl, fees }) {
   state.pnlToday += gross - fee;
 }
 
+/** Record a fee that is not tied to a trade close (e.g. an entry fee). */
+function recordFee(fee) {
+  const f = Number(fee) || 0;
+  if (!f) return;
+  state.performance.feesPaid += f;
+  state.performance.netProfit =
+    state.performance.grossProfit - state.performance.grossLoss - state.performance.feesPaid;
+  state.pnlToday -= f;
+}
+
 function getStatus() {
   return {
     mode: state.mode,
@@ -156,6 +166,7 @@ module.exports = {
   upsertTrader,
   removeTrader,
   recordTrade,
+  recordFee,
   getStatus,
   getTraders,
   getTrader,
