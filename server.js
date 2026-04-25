@@ -141,6 +141,21 @@ setInterval(() => {
   }
 }, 30000);
 
+// REST fallback: Binance ws !ticker@arr is sometimes silent for long periods.
+// Poll the REST endpoint every 30s as a backstop so the dashboard always has data.
+async function refreshTopGainersFromRest() {
+  try {
+    const tickers = await fetchJson(`${config.baseRestUrl}/fapi/v1/ticker/24hr`);
+    if (Array.isArray(tickers)) {
+      updateTopGainersFromTickers(tickers);
+    }
+  } catch (err) {
+    log("API", `Top gainers REST fallback error: ${err.message}`);
+  }
+}
+refreshTopGainersFromRest();
+setInterval(refreshTopGainersFromRest, 30000);
+
 io.on("connection", (socket) => {
   socket.emit("dashboardUpdate", {
     ...store.getDashboardUpdate(),
