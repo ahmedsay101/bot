@@ -442,12 +442,31 @@ function App() {
     }).catch(() => setSocketStatus("error"));
   }, []);
 
+  // REST poll for top gainers as a fallback when socket pushes are slow/silent.
+  // Runs alongside the socket "dashboardUpdate" handler.
+  useEffect(() => {
+    const tick = () => {
+      axios.get(`${API_URL}/api/top-gainers`)
+        .then((res) => { if (Array.isArray(res.data)) setTopGainers(res.data); })
+        .catch(() => {});
+    };
+    const id = setInterval(tick, 5000);
+    return () => clearInterval(id);
+  }, []);
+
   useEffect(() => {
     const socket = io(API_URL, { path: "/api/socket.io", transports: ["websocket"] });
-    socket.on("connect", () => setSocketStatus("connected"));
-    socket.on("disconnect", () => setSocketStatus("disconnected"));
+    socket.on("connect", () => {
+      setSocketStatus("connected");
+      console.log("[socket] connected");
+    });
+    socket.on("disconnect", () => {
+      setSocketStatus("disconnected");
+      console.log("[socket] disconnected");
+    });
 
     socket.on("dashboardUpdate", (d) => {
+      console.log("[socket] dashboardUpdate", d.topGainers);
       const next = d.traders || [];
       const bal = Number(d.balance || 0);
       const unr = next.reduce((s, t) => s + Number(t.unrealizedPnl || 0), 0);
@@ -473,6 +492,13 @@ function App() {
       setTraders((prev) =>
         prev.map((t) => (t.symbol === symbol ? { ...t, lastPrice: Number(price) } : t))
       );
+    });
+
+    socket.on("connect_error", (err) => {
+      console.error("[socket] connect_error", err);
+    });
+    socket.on("error", (err) => {
+      console.error("[socket] error", err);
     });
 
     return () => socket.disconnect();

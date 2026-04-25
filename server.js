@@ -154,7 +154,7 @@ async function refreshTopGainersFromRest() {
   }
 }
 refreshTopGainersFromRest();
-setInterval(refreshTopGainersFromRest, 30000);
+setInterval(refreshTopGainersFromRest, 5000);
 
 io.on("connection", (socket) => {
   socket.emit("dashboardUpdate", {

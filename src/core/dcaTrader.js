@@ -80,13 +80,27 @@ class DCATrader {
   async _openPosition(direction) {
     this.direction = direction;
 
-    this.leverage = Number(config.leverage) || 2;
+    // Doubling flow:
+    //   flip 0: ef=0.1, lev=1
+    //   flip 1: ef=0.2, lev=1
+    //   flip 2: ef=0.4, lev=1
+    //   flip 3: ef=0.8, lev=1
+    //   flip 4: ef=0.8, lev=2
+    //   flip 5: ef=0.8, lev=4
+    //   flip 6: ef=0.8, lev=8
+    //   flip 7: ef=0.8, lev=16
+    // Destroy at flip 8 (max doubles reached).
+    const baseFraction = Number(config.equityFraction) || 0.8;
+    const startFraction = baseFraction / 8;            // 0.1 when base=0.8
+    const fraction = Math.min(startFraction * Math.pow(2, this.flipCount), baseFraction);
+    const baseLeverage = Number(config.leverage) || 1;
+    const levExponent = Math.max(0, this.flipCount - 3);
+    this.leverage = baseLeverage * Math.pow(2, levExponent);
 
     // Live balance: startingBalance + realized netProfit (reflects losses immediately,
     // unlike store.balance which only refreshes every 10s via _syncAccount).
     const perf = store.getPerformance();
     const liveBalance = Number(config.startingBalanceUSDT) + Number(perf.netProfit || 0);
-    const fraction = Number(config.equityFraction) || 0.9;
     this.margin = liveBalance * fraction;
     this.notional = this.margin * this.leverage;
 
@@ -110,7 +124,8 @@ class DCATrader {
 
     log(`DCA ${this.symbol}`,
       `${direction} @ ${fmt(this.entryPrice, 6)} | qty=${this.quantity} ` +
-      `flip#${this.flipCount} accSL=${this.accumulatedSlPercent}% TP%=${this.takeProfitPercent} ` +
+      `flip#${this.flipCount} ef=${fraction.toFixed(2)} lev=${this.leverage}x ` +
+      `accSL=${this.accumulatedSlPercent}% TP%=${this.takeProfitPercent} ` +
       `TP=${fmt(this.tpPrice, 6)} SL=${fmt(this.slPrice, 6)}`);
   }
 
@@ -219,12 +234,13 @@ class DCATrader {
 
     store.recordTrade({ pnl: grossPnl, fees: closeFee });
 
-    // Check if accumulated SL >= cap → destroy
-    const maxSl = this.maxAccumulatedSlPercent;
-    if (this.accumulatedSlPercent >= maxSl) {
+    // Destroy when we've used up all doublings (flip 7 was the final lev=16 attempt;
+    // a further flip would exceed the 16x cap).
+    const maxFlips = 7;
+    if (this.flipCount >= maxFlips) {
       log(`DCA ${this.symbol}`,
-        `Accumulated SL ${this.accumulatedSlPercent}% >= max ${maxSl}% — destroying`);
-      await this.destroy("max-loss");
+        `Max doubles reached (flip #${this.flipCount}, lev=${this.leverage}x) — destroying`);
+      await this.destroy("max-doubles");
       return;
     }
 
@@ -248,7 +264,7 @@ class DCATrader {
     await this.api.cancelAllOpenOrders(this.symbol);
 
     // Close position if not already closed by _handleStopLoss
-    if (reason !== "max-loss") {
+    if (reason !== "max-loss" && reason !== "max-doubles") {
       // Use the actual last market price (mimics live market-order fill).
       // Fall back to tpPrice only if lastPrice is unavailable.
       const exitPrice = Number(this.lastPrice)
@@ -285,7 +301,7 @@ class DCATrader {
       store.recordTrade({ pnl: grossPnl, fees: closeFee });
     }
 
-    const isLoss = reason === "max-loss" || reason === "expired" || reason === "manual";
+    const isLoss = reason === "max-loss" || reason === "max-doubles" || reason === "expired" || reason === "manual";
 
     store.removeTrader(this.id, {
       id: this.id,

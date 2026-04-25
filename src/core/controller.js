@@ -149,8 +149,8 @@ class Controller {
     if (!this.traders.has(symbol)) return;
     this.traders.delete(symbol);
 
-    // Apply per-symbol cooldown after a max-loss
-    if (reason === "max-loss") {
+    // Apply per-symbol cooldown after the doubling sequence is exhausted
+    if (reason === "max-doubles") {
       const cooldownMs = Number(config.lossCooldownMs) || 0;
       if (cooldownMs > 0) {
         const until = Date.now() + cooldownMs;
