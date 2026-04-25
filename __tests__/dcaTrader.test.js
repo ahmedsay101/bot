@@ -284,7 +284,7 @@ describe("DCATrader (Flip Strategy)", () => {
     trader.lastPrice = 105;
     await trader._checkExits(105);
 
-    // Notional doubles on flip → qty = 200/105 ≈ 1.9048
+    // Notional unchanged on flip → qty = 100/105 ≈ 0.9524
     const qty = trader.quantity;
     expect(trader._calcUnrealizedPnl(110)).toBeCloseTo((110 - 105) * qty, 2);
     expect(trader._calcUnrealizedPnl(100)).toBeCloseTo((100 - 105) * qty, 2);
@@ -305,8 +305,8 @@ describe("DCATrader (Flip Strategy)", () => {
     await trader._checkExits(105);
 
     // Close fee: 105*1*0.001=0.105
-    // New open fee: 105*newQty*0.001 where newQty = (200/105).toFixed(4)
-    const newQty = Number((200 / 105).toFixed(4));
+    // New open fee: 105*newQty*0.001 where newQty = (100/105).toFixed(4)
+    const newQty = Number((100 / 105).toFixed(4));
     const expectedFees = 0.1 + 0.105 + 105 * newQty * 0.001;
     expect(trader.feesPaid).toBeCloseTo(expectedFees, 3);
   });

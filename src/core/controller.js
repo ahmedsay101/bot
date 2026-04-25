@@ -149,8 +149,8 @@ class Controller {
     if (!this.traders.has(symbol)) return;
     this.traders.delete(symbol);
 
-    // Apply per-symbol cooldown after a loss (max-loss / expired)
-    if (reason === "max-loss" || reason === "expired") {
+    // Apply per-symbol cooldown after a max-loss
+    if (reason === "max-loss") {
       const cooldownMs = Number(config.lossCooldownMs) || 0;
       if (cooldownMs > 0) {
         const until = Date.now() + cooldownMs;

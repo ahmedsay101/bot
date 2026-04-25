@@ -69,7 +69,6 @@ class DCATrader {
     this.startPrice = await this.api.getMarkPrice(this.symbol);
     this.lastPrice = this.startPrice;
 
-    this.baseLeverage = Number(config.leverage) || 2;
     await this._openPosition("SHORT");
 
     this.api.on("markPrice", this._onMarkPrice);
@@ -81,9 +80,7 @@ class DCATrader {
   async _openPosition(direction) {
     this.direction = direction;
 
-    // Leverage doubles each flip; notional is always (balance * equityFraction) * leverage
-    const multiplier = Math.pow(2, this.flipCount);
-    this.leverage = this.baseLeverage * multiplier;
+    this.leverage = Number(config.leverage) || 2;
 
     // Live balance: startingBalance + realized netProfit (reflects losses immediately,
     // unlike store.balance which only refreshes every 10s via _syncAccount).
@@ -92,15 +89,6 @@ class DCATrader {
     const fraction = Number(config.equityFraction) || 0.9;
     this.margin = liveBalance * fraction;
     this.notional = this.margin * this.leverage;
-
-    if (config.mode === "live" && this.flipCount > 0) {
-      try {
-        await this.api.setLeverage(this.symbol, this.leverage);
-        log(`DCA ${this.symbol}`, `Leverage updated to ${this.leverage}x for flip #${this.flipCount}`);
-      } catch (err) {
-        log(`DCA ${this.symbol}`, `Leverage update failed: ${err.message}`);
-      }
-    }
 
     const side = direction === "SHORT" ? "SELL" : "BUY";
     const price = this.lastPrice || this.startPrice;
