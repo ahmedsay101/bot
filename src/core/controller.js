@@ -110,7 +110,7 @@ class Controller {
         api: this.api,
         changePercent,
         equity,
-        onDestroy: (sym, pnl, reason) => this._onTraderDestroyed(sym, pnl, reason)
+        onDestroy: (sym, pnl, reason, flipCount) => this._onTraderDestroyed(sym, pnl, reason, flipCount)
       });
       this.traders.set(symbol, trader);
       try {
@@ -145,21 +145,22 @@ class Controller {
     await this.api.updateSymbols(symbols);
   }
 
-  async _onTraderDestroyed(symbol, pnl, reason) {
+  async _onTraderDestroyed(symbol, pnl, reason, flipCount = 0) {
     if (!this.traders.has(symbol)) return;
     this.traders.delete(symbol);
 
-    // Apply per-symbol cooldown after the doubling sequence is exhausted
-    if (reason === "max-doubles") {
+    // Apply per-symbol cooldown when the trader was destroyed past the two
+    // leveraged shots (flip 2+) — treat as a loss the recovery couldn't fix.
+    if (flipCount >= 2) {
       const cooldownMs = Number(config.lossCooldownMs) || 0;
       if (cooldownMs > 0) {
         const until = Date.now() + cooldownMs;
         this.symbolCooldown.set(symbol, until);
-        log("CONTROLLER", `${symbol} cooldown set for ${Math.round(cooldownMs / 60000)}m (until ${new Date(until).toISOString()})`);
+        log("CONTROLLER", `${symbol} cooldown set for ${Math.round(cooldownMs / 60000)}m (until ${new Date(until).toISOString()}) — destroyed at flip ${flipCount} (${reason})`);
       }
     }
 
-    log("CONTROLLER", `Trader ${symbol} destroyed (${reason})`);
+    log("CONTROLLER", `Trader ${symbol} destroyed (${reason}) at flip ${flipCount}`);
     await this._refreshMarketStreams();
   }
 

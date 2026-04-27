@@ -315,7 +315,7 @@ class DCATrader {
 
     log(`DCA ${this.symbol}`,
       `Destroyed (${reason}) | PnL $${fmt(this.realizedPnl)} | flips=${this.flipCount} accSL=${this.accumulatedSlPercent}%`);
-    if (this.onDestroy) this.onDestroy(this.symbol, this.realizedPnl, reason);
+    if (this.onDestroy) this.onDestroy(this.symbol, this.realizedPnl, reason, this.flipCount);
   }
 
   // ── PnL helpers ─────────────────────────────────────────────

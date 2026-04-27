@@ -99,7 +99,7 @@ describe("DCATrader (Flip Strategy)", () => {
     await trader._checkExits(97);
 
     expect(trader.active).toBe(false);
-    expect(onDestroy).toHaveBeenCalledWith("TESTUSDT", expect.any(Number), "take-profit");
+    expect(onDestroy).toHaveBeenCalledWith("TESTUSDT", expect.any(Number), "take-profit", expect.any(Number));
   });
 
   test("flips direction on first SL hit (accSL=5 < maxAccSL=30)", async () => {
@@ -303,7 +303,7 @@ describe("DCATrader (Flip Strategy)", () => {
 
     expect(trader.active).toBe(false);
     expect(store.removeTrader).toHaveBeenCalled();
-    expect(onDestroy).toHaveBeenCalledWith("TESTUSDT", expect.any(Number), "manual");
+    expect(onDestroy).toHaveBeenCalledWith("TESTUSDT", expect.any(Number), "manual", expect.any(Number));
   });
 
   test("trader keeps flipping on losses — only TP / lifetime / manual destroy", async () => {
@@ -336,7 +336,7 @@ describe("DCATrader (Flip Strategy)", () => {
     await trader._onMarkPrice({ symbol: "TESTUSDT", price: 97 });
 
     expect(trader.active).toBe(false);
-    expect(onDestroy).toHaveBeenCalledWith("TESTUSDT", expect.any(Number), "take-profit");
+    expect(onDestroy).toHaveBeenCalledWith("TESTUSDT", expect.any(Number), "take-profit", expect.any(Number));
   });
 
   test("bookTicker event triggers exit check", async () => {
@@ -418,7 +418,7 @@ describe("DCATrader (Flip Strategy)", () => {
     await trader._checkExits(98);
 
     expect(trader.active).toBe(false);
-    expect(onDestroy).toHaveBeenCalledWith("TESTUSDT", expect.any(Number), "expired");
+    expect(onDestroy).toHaveBeenCalledWith("TESTUSDT", expect.any(Number), "expired", expect.any(Number));
   });
 
   test("quantity formula: equity fraction & leverage on flip 0", async () => {
