@@ -8,7 +8,7 @@ const config = {
   feeRate: 0.0004,
   fixedNotional: 500,
   equityFraction: 0.8,
-  leverage: 1,
+  leverage: 4,
   dynamicTp: false,
   takeProfitPercent: 5,
   stopLossPercent: 5,

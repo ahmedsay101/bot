@@ -80,22 +80,23 @@ class DCATrader {
   async _openPosition(direction) {
     this.direction = direction;
 
-    // Doubling flow:
-    //   flip 0: ef=0.1, lev=1
-    //   flip 1: ef=0.2, lev=1
-    //   flip 2: ef=0.4, lev=1
-    //   flip 3: ef=0.8, lev=1
-    //   flip 4: ef=0.8, lev=2
-    //   flip 5: ef=0.8, lev=4
-    //   flip 6: ef=0.8, lev=8
-    //   flip 7: ef=0.8, lev=16
-    // Destroy at flip 8 (max doubles reached).
+    // Sizing flow:
+    //   flip 0: ef = config.equityFraction, lev = config.leverage          (e.g. 0.8 / 2x)
+    //   flip 1: ef = config.equityFraction, lev = config.leverage * 2      (e.g. 0.8 / 4x)
+    //   flip 2+: ef = 0.1, lev = 1                                          (small recovery bets)
     const baseFraction = Number(config.equityFraction) || 0.8;
-    const startFraction = baseFraction / 8;            // 0.1 when base=0.8
-    const fraction = Math.min(startFraction * Math.pow(2, this.flipCount), baseFraction);
     const baseLeverage = Number(config.leverage) || 1;
-    const levExponent = Math.max(0, this.flipCount - 3);
-    this.leverage = baseLeverage * Math.pow(2, levExponent);
+    let fraction;
+    if (this.flipCount === 0) {
+      fraction = baseFraction;
+      this.leverage = baseLeverage;
+    } else if (this.flipCount === 1) {
+      fraction = baseFraction;
+      this.leverage = baseLeverage * 2;
+    } else {
+      fraction = 0.1;
+      this.leverage = 1;
+    }
 
     // Live balance: startingBalance + realized netProfit (reflects losses immediately,
     // unlike store.balance which only refreshes every 10s via _syncAccount).
@@ -234,17 +235,7 @@ class DCATrader {
 
     store.recordTrade({ pnl: grossPnl, fees: closeFee });
 
-    // Destroy when we've used up all doublings (flip 7 was the final lev=16 attempt;
-    // a further flip would exceed the 16x cap).
-    const maxFlips = 7;
-    if (this.flipCount >= maxFlips) {
-      log(`DCA ${this.symbol}`,
-        `Max doubles reached (flip #${this.flipCount}, lev=${this.leverage}x) — destroying`);
-      await this.destroy("max-doubles");
-      return;
-    }
-
-    // Flip direction
+    // No loss-based destroy: keep flipping until TP (or lifetime / manual destroy).
     const nextDir = this.direction === "SHORT" ? "LONG" : "SHORT";
     this.flipCount += 1;
     log(`DCA ${this.symbol}`, `Flipping to ${nextDir} (flip #${this.flipCount})`);

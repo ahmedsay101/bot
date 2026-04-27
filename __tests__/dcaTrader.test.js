@@ -44,8 +44,8 @@ describe("DCATrader (Flip Strategy)", () => {
       mode: "test",
       leverage: 1,
       fixedNotional: 50,
-      // base equity fraction; trader starts at base/8 (=0.1) and doubles each flip up to base.
-      equityFraction: 0.8,
+      // sizing: flip0 → (ef, lev), flip1 → (ef, lev*2), flip2+ → (0.1, 1)
+      equityFraction: 0.1,
       feeRate: 0,
       startingBalanceUSDT: 1000,
       dynamicTp: true,
@@ -141,52 +141,46 @@ describe("DCATrader (Flip Strategy)", () => {
     expect(trader.slPrice).toBe(99.75);
   });
 
-  test("destroys with max-doubles after the 7th flip (lev=16 exhausted)", async () => {
+  test("sizing progression: flip0 (ef, lev) → flip1 (ef, lev*2) → flip2+ (0.1, 1)", async () => {
     config.takeProfitPercent = 3;
     config.stopLossPercent = 5;
-    const api = new FakeApi({ price: 100 });
-    const onDestroy = jest.fn();
-    const trader = new DCATrader({ symbol: "TESTUSDT", api, onDestroy, changePercent: 60 });
-    await trader.start();
-
-    // Trigger 8 SL hits in a row: the first 7 should flip; the 8th must destroy.
-    for (let i = 0; i < 8; i++) {
-      const sl = trader.slPrice;
-      api.price = sl;
-      trader.lastPrice = sl;
-      await trader._checkExits(sl);
-    }
-
-    expect(trader.active).toBe(false);
-    expect(trader.flipCount).toBe(7);
-    expect(onDestroy).toHaveBeenCalledWith("TESTUSDT", expect.any(Number), "max-doubles");
-  });
-
-  test("leverage and equity-fraction doubling progression", async () => {
-    config.takeProfitPercent = 3;
-    config.stopLossPercent = 5;
+    config.equityFraction = 0.8;
+    config.leverage = 2;
     const api = new FakeApi({ price: 100 });
     const trader = new DCATrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn(), changePercent: 60 });
     await trader.start();
 
-    // Expected (ef, lev) per flip count
-    const expected = [
-      [0.1, 1], [0.2, 1], [0.4, 1], [0.8, 1],
-      [0.8, 2], [0.8, 4], [0.8, 8], [0.8, 16]
-    ];
-    expect(trader.leverage).toBe(expected[0][1]);
-    expect(trader.margin / 1000).toBeCloseTo(expected[0][0], 6);
+    // flip 0: ef=0.8, lev=2 → margin=800, notional=1600
+    expect(trader.leverage).toBe(2);
+    expect(trader.margin).toBeCloseTo(800, 4);
+    expect(trader.notional).toBeCloseTo(1600, 4);
 
-    for (let i = 1; i < expected.length; i++) {
-      const sl = trader.slPrice;
-      api.price = sl;
-      trader.lastPrice = sl;
-      await trader._checkExits(sl);
-      // store mock returns netProfit=0 → liveBalance always = startingBalance
-      const liveBalance = 1000;
-      expect(trader.leverage).toBe(expected[i][1]);
-      expect(trader.margin / liveBalance).toBeCloseTo(expected[i][0], 6);
-    }
+    // First SL → flip 1: ef=0.8, lev=4 → margin=800, notional=3200
+    let sl = trader.slPrice; api.price = sl; trader.lastPrice = sl;
+    await trader._checkExits(sl);
+    expect(trader.flipCount).toBe(1);
+    expect(trader.leverage).toBe(4);
+    expect(trader.margin).toBeCloseTo(800, 4);
+    expect(trader.notional).toBeCloseTo(3200, 4);
+
+    // Second SL → flip 2: ef=0.1, lev=1 → margin=100, notional=100
+    sl = trader.slPrice; api.price = sl; trader.lastPrice = sl;
+    await trader._checkExits(sl);
+    expect(trader.flipCount).toBe(2);
+    expect(trader.leverage).toBe(1);
+    expect(trader.margin).toBeCloseTo(100, 4);
+    expect(trader.notional).toBeCloseTo(100, 4);
+
+    // Third SL → flip 3: still ef=0.1, lev=1
+    sl = trader.slPrice; api.price = sl; trader.lastPrice = sl;
+    await trader._checkExits(sl);
+    expect(trader.flipCount).toBe(3);
+    expect(trader.leverage).toBe(1);
+    expect(trader.margin).toBeCloseTo(100, 4);
+    expect(trader.notional).toBeCloseTo(100, 4);
+
+    // Trader stays active — no max-doubles destroy any more
+    expect(trader.active).toBe(true);
   });
 
   test("multiple flips SHORT→LONG→SHORT→...", async () => {
@@ -284,16 +278,15 @@ describe("DCATrader (Flip Strategy)", () => {
     const trader = new DCATrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn(), changePercent: 60 });
     await trader.start();
 
-    // Entry fee: 100 * 1 * 0.001 = 0.1
+    // Entry fee (flip 0): 100 * 1 * 0.001 = 0.1
     expect(trader.feesPaid).toBeCloseTo(0.1, 6);
 
-    // SL hit → close + open new position with DOUBLED equity fraction (0.1 → 0.2)
+    // SL hit → close (flip 0) + open flip 1 with DOUBLED leverage (lev: 1→2).
     api.price = 105;
     trader.lastPrice = 105;
     await trader._checkExits(105);
 
-    // After SL: store mock keeps netProfit=0 → liveBalance=1000, ef=0.2, lev=1 → notional=200
-    // qty = (200 / 105).toFixed(4)
+    // After SL: liveBalance=1000, ef=0.1, lev=2 → notional=200, qty=(200/105).toFixed(4)
     const newQty = Number((200 / 105).toFixed(4));
     // Close fee: 105*1*0.001=0.105; new open fee: 105*newQty*0.001
     const expectedFees = 0.1 + 0.105 + 105 * newQty * 0.001;
@@ -313,30 +306,25 @@ describe("DCATrader (Flip Strategy)", () => {
     expect(onDestroy).toHaveBeenCalledWith("TESTUSDT", expect.any(Number), "manual");
   });
 
-  test("max-doubles destroy does not try to close position again", async () => {
+  test("trader keeps flipping on losses — only TP / lifetime / manual destroy", async () => {
     config.takeProfitPercent = 3;
     config.stopLossPercent = 5;
     const api = new FakeApi({ price: 100 });
-    const placeOrder = jest.spyOn(api, "placeMarketOrder");
     const onDestroy = jest.fn();
     const trader = new DCATrader({ symbol: "TESTUSDT", api, onDestroy, changePercent: 60 });
     await trader.start();
 
-    // 1 call for opening SHORT (flip 0)
-    expect(placeOrder).toHaveBeenCalledTimes(1);
-
-    // Trigger 8 SL hits: flips 0–6 each close+open (2 calls each = 14), flip 7 closes once
-    // and destroys without re-opening.
-    for (let i = 0; i < 8; i++) {
+    // Trigger 12 SL hits: trader must keep flipping, never destroy itself.
+    for (let i = 0; i < 12; i++) {
       const sl = trader.slPrice;
       api.price = sl;
       trader.lastPrice = sl;
       await trader._checkExits(sl);
     }
 
-    // 1 (initial open) + 7 flips * 2 (close+open) + 1 (final close) = 16
-    expect(placeOrder).toHaveBeenCalledTimes(16);
-    expect(onDestroy).toHaveBeenCalledWith("TESTUSDT", expect.any(Number), "max-doubles");
+    expect(trader.active).toBe(true);
+    expect(trader.flipCount).toBe(12);
+    expect(onDestroy).not.toHaveBeenCalled();
   });
 
   test("markPrice event triggers exit check", async () => {
@@ -433,24 +421,24 @@ describe("DCATrader (Flip Strategy)", () => {
     expect(onDestroy).toHaveBeenCalledWith("TESTUSDT", expect.any(Number), "expired");
   });
 
-  test("quantity formula: equity fraction from store (flip 0 = base/8)", async () => {
+  test("quantity formula: equity fraction & leverage on flip 0", async () => {
     config.leverage = 5;
-    config.equityFraction = 0.8;
+    config.equityFraction = 0.1;
     config.startingBalanceUSDT = 1000;
-    // flip 0: ef=0.8/8=0.1, liveBalance=1000, margin=100, notional=500, qty=500/200=2.5
+    // flip 0: ef=0.1, lev=5, margin=100, notional=500, qty=500/200=2.5
     const api = new FakeApi({ price: 200 });
     const t1 = new DCATrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn(), changePercent: 60 });
     await t1.start();
     expect(t1.margin).toBeCloseTo(100, 4);
     expect(t1.quantity).toBe(2.5);
 
-    config.equityFraction = 0.4;
-    // flip 0 ef = 0.4/8 = 0.05; simulate prior loss of 850 → liveBalance = 150
+    config.equityFraction = 0.5;
+    // simulate prior loss of 850 → liveBalance = 150, margin=75, notional=375, qty=375/200=1.875
     store.getPerformance.mockReturnValueOnce({ netProfit: -850 });
     const t2 = new DCATrader({ symbol: "TESTUSDT", api, onDestroy: jest.fn(), changePercent: 60 });
     await t2.start();
-    expect(t2.margin).toBeCloseTo(7.5, 4);   // 150 * 0.05
-    expect(t2.quantity).toBe(0.1875);        // 7.5*5/200 = 0.1875
+    expect(t2.margin).toBeCloseTo(75, 4);
+    expect(t2.quantity).toBe(1.875);
   });
 
   test("highestNetProfit tracks peak unrealized profit", async () => {

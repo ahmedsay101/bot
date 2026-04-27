@@ -14,6 +14,18 @@ const config = require("./src/utils/config");
 
 const path = require("path");
 
+// ── Crash safety: log unhandled errors instead of letting the process die silently ──
+process.on("uncaughtException", (err) => {
+  log("FATAL", `uncaughtException: ${err && err.stack ? err.stack : err}`);
+});
+process.on("unhandledRejection", (reason) => {
+  const msg = reason instanceof Error ? (reason.stack || reason.message) : String(reason);
+  log("FATAL", `unhandledRejection: ${msg}`);
+});
+process.on("SIGTERM", () => log("API", "Received SIGTERM"));
+process.on("SIGINT", () => log("API", "Received SIGINT"));
+process.on("exit", (code) => log("API", `Process exiting with code ${code}`));
+
 const app = express();
 app.use(cors());
 app.use(express.json());
