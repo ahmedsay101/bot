@@ -141,7 +141,7 @@ describe("DCATrader (Flip Strategy)", () => {
     expect(trader.slPrice).toBe(99.75);
   });
 
-  test("sizing progression: flip0 (ef, lev) → flip1 (ef, lev*2) → flip2+ (0.1, 1)", async () => {
+  test("sizing progression: flip0..3 (ef, lev*2^n) → flip4+ (0.1, 1)", async () => {
     config.takeProfitPercent = 3;
     config.stopLossPercent = 5;
     config.equityFraction = 0.8;
@@ -155,7 +155,7 @@ describe("DCATrader (Flip Strategy)", () => {
     expect(trader.margin).toBeCloseTo(800, 4);
     expect(trader.notional).toBeCloseTo(1600, 4);
 
-    // First SL → flip 1: ef=0.8, lev=4 → margin=800, notional=3200
+    // flip 1: ef=0.8, lev=4 → notional=3200
     let sl = trader.slPrice; api.price = sl; trader.lastPrice = sl;
     await trader._checkExits(sl);
     expect(trader.flipCount).toBe(1);
@@ -163,23 +163,36 @@ describe("DCATrader (Flip Strategy)", () => {
     expect(trader.margin).toBeCloseTo(800, 4);
     expect(trader.notional).toBeCloseTo(3200, 4);
 
-    // Second SL → flip 2: ef=0.1, lev=1 → margin=100, notional=100
+    // flip 2: ef=0.8, lev=8 → notional=6400
     sl = trader.slPrice; api.price = sl; trader.lastPrice = sl;
     await trader._checkExits(sl);
     expect(trader.flipCount).toBe(2);
-    expect(trader.leverage).toBe(1);
-    expect(trader.margin).toBeCloseTo(100, 4);
-    expect(trader.notional).toBeCloseTo(100, 4);
+    expect(trader.leverage).toBe(8);
+    expect(trader.margin).toBeCloseTo(800, 4);
+    expect(trader.notional).toBeCloseTo(6400, 4);
 
-    // Third SL → flip 3: still ef=0.1, lev=1
+    // flip 3: ef=0.8, lev=16 → notional=12800
     sl = trader.slPrice; api.price = sl; trader.lastPrice = sl;
     await trader._checkExits(sl);
     expect(trader.flipCount).toBe(3);
+    expect(trader.leverage).toBe(16);
+    expect(trader.margin).toBeCloseTo(800, 4);
+    expect(trader.notional).toBeCloseTo(12800, 4);
+
+    // flip 4: ef=0.1, lev=1 → margin=100, notional=100
+    sl = trader.slPrice; api.price = sl; trader.lastPrice = sl;
+    await trader._checkExits(sl);
+    expect(trader.flipCount).toBe(4);
     expect(trader.leverage).toBe(1);
     expect(trader.margin).toBeCloseTo(100, 4);
     expect(trader.notional).toBeCloseTo(100, 4);
 
-    // Trader stays active — no max-doubles destroy any more
+    // flip 5: still ef=0.1, lev=1
+    sl = trader.slPrice; api.price = sl; trader.lastPrice = sl;
+    await trader._checkExits(sl);
+    expect(trader.flipCount).toBe(5);
+    expect(trader.leverage).toBe(1);
+
     expect(trader.active).toBe(true);
   });
 
@@ -266,7 +279,7 @@ describe("DCATrader (Flip Strategy)", () => {
     trader.lastPrice = 105;
     await trader._checkExits(105);
 
-    // After flip 1: ef doubles to 0.2, liveBalance ≈ 995, qty = (995*0.2)/105
+    // After flip 1: lev doubles to 2, ef stays at 0.1, qty = (1000*0.1*2)/105
     const qty = trader.quantity;
     expect(trader._calcUnrealizedPnl(110)).toBeCloseTo((110 - 105) * qty, 2);
     expect(trader._calcUnrealizedPnl(100)).toBeCloseTo((100 - 105) * qty, 2);

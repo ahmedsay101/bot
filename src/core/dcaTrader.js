@@ -81,18 +81,17 @@ class DCATrader {
     this.direction = direction;
 
     // Sizing flow:
-    //   flip 0: ef = config.equityFraction, lev = config.leverage          (e.g. 0.8 / 2x)
-    //   flip 1: ef = config.equityFraction, lev = config.leverage * 2      (e.g. 0.8 / 4x)
-    //   flip 2+: ef = 0.1, lev = 1                                          (small recovery bets)
+    //   flip 0: ef = config.equityFraction, lev = config.leverage           (e.g. 0.8 /  2x)
+    //   flip 1: ef = config.equityFraction, lev = config.leverage *  2      (e.g. 0.8 /  4x)
+    //   flip 2: ef = config.equityFraction, lev = config.leverage *  4      (e.g. 0.8 /  8x)
+    //   flip 3: ef = config.equityFraction, lev = config.leverage *  8      (e.g. 0.8 / 16x)
+    //   flip 4+: ef = 0.1, lev = 1                                           (small recovery bets)
     const baseFraction = Number(config.equityFraction) || 0.8;
     const baseLeverage = Number(config.leverage) || 1;
     let fraction;
-    if (this.flipCount === 0) {
+    if (this.flipCount <= 3) {
       fraction = baseFraction;
-      this.leverage = baseLeverage;
-    } else if (this.flipCount === 1) {
-      fraction = baseFraction;
-      this.leverage = baseLeverage * 2;
+      this.leverage = baseLeverage * Math.pow(2, this.flipCount);
     } else {
       fraction = 0.1;
       this.leverage = 1;

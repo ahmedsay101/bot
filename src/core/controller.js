@@ -149,9 +149,9 @@ class Controller {
     if (!this.traders.has(symbol)) return;
     this.traders.delete(symbol);
 
-    // Apply per-symbol cooldown when the trader was destroyed past the two
-    // leveraged shots (flip 2+) — treat as a loss the recovery couldn't fix.
-    if (flipCount >= 2) {
+    // Apply per-symbol cooldown when the trader was destroyed past the four
+    // leveraged shots (flip 4+) — treat as a loss the recovery couldn't fix.
+    if (flipCount >= 4) {
       const cooldownMs = Number(config.lossCooldownMs) || 0;
       if (cooldownMs > 0) {
         const until = Date.now() + cooldownMs;
