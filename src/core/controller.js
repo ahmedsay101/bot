@@ -1,4 +1,4 @@
-const DCATrader = require("./dcaTrader");
+const Trader = require("./trader");
 const { log } = require("../utils/logger");
 const config = require("../utils/config");
 const store = require("../state/store");
@@ -9,7 +9,6 @@ class Controller {
     this.scanner = scanner;
     this.traders = new Map();
     this.leverageSet = new Set();
-    this.symbolCooldown = new Map();   // symbol → cooldown-until timestamp (ms)
     this._scanning = false;
   }
 
@@ -77,21 +76,11 @@ class Controller {
 
     const candidates = await this.scanner.scan();
 
-    const now = Date.now();
     for (const candidate of candidates) {
       const symbol = candidate.symbol;
       const changePercent = candidate.change;
       if (this.traders.size >= config.maxTraders) break;
       if (this.traders.has(symbol)) continue;
-
-      const cooldownUntil = this.symbolCooldown.get(symbol);
-      if (cooldownUntil && cooldownUntil > now) {
-        const remainMin = Math.ceil((cooldownUntil - now) / 60000);
-        log("CONTROLLER", `${symbol} on cooldown for ${remainMin}m — skipping`);
-        continue;
-      } else if (cooldownUntil) {
-        this.symbolCooldown.delete(symbol);
-      }
 
       if (config.mode === "live" && !this.leverageSet.has(symbol)) {
         try {
@@ -104,18 +93,16 @@ class Controller {
         }
       }
 
-      const equity = store.getStatus().equity || Number(config.startingBalanceUSDT);
-      const trader = new DCATrader({
+      const trader = new Trader({
         symbol,
         api: this.api,
         changePercent,
-        equity,
-        onDestroy: (sym, pnl, reason, flipCount) => this._onTraderDestroyed(sym, pnl, reason, flipCount)
+        onDestroy: (sym, pnl, reason) => this._onTraderDestroyed(sym, pnl, reason)
       });
       this.traders.set(symbol, trader);
       try {
         await trader.start();
-        log("CONTROLLER", `Launched trader for ${symbol} (24h +${changePercent.toFixed(1)}%)`);
+        log("CONTROLLER", `Launched trader for ${symbol} (24h ${changePercent >= 0 ? "+" : ""}${changePercent.toFixed(2)}%)`);
       } catch (err) {
         log("CONTROLLER", `Trader ${symbol} failed to start: ${err.message}`);
         this.traders.delete(symbol);
@@ -145,22 +132,10 @@ class Controller {
     await this.api.updateSymbols(symbols);
   }
 
-  async _onTraderDestroyed(symbol, pnl, reason, flipCount = 0) {
+  async _onTraderDestroyed(symbol, pnl, reason) {
     if (!this.traders.has(symbol)) return;
     this.traders.delete(symbol);
-
-    // Apply per-symbol cooldown when the trader was destroyed past the four
-    // leveraged shots (flip 4+) — treat as a loss the recovery couldn't fix.
-    if (flipCount >= 4) {
-      const cooldownMs = Number(config.lossCooldownMs) || 0;
-      if (cooldownMs > 0) {
-        const until = Date.now() + cooldownMs;
-        this.symbolCooldown.set(symbol, until);
-        log("CONTROLLER", `${symbol} cooldown set for ${Math.round(cooldownMs / 60000)}m (until ${new Date(until).toISOString()}) — destroyed at flip ${flipCount} (${reason})`);
-      }
-    }
-
-    log("CONTROLLER", `Trader ${symbol} destroyed (${reason}) at flip ${flipCount}`);
+    log("CONTROLLER", `Trader ${symbol} destroyed (${reason}) | PnL $${Number(pnl).toFixed(2)}`);
     await this._refreshMarketStreams();
   }
 

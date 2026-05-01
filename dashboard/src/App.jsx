@@ -191,9 +191,9 @@ function TraderCard({ trader, onDestroy }) {
             <span className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider border ${dirBg(dir)}`}>
               {dir} {trader.leverage || 2}x
             </span>
-            {(trader.flipCount || 0) > 0 && (
+            {(trader.transactionCount || 0) > 1 && (
               <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-bold text-amber-400 border border-amber-500/20">
-                Flip #{trader.flipCount}
+                Tx #{trader.transactionCount}
               </span>
             )}
             <span className="text-[10px] text-slate-500">
@@ -236,9 +236,13 @@ function TraderCard({ trader, onDestroy }) {
           </div>
         </div>
 
-        {/* Accumulated SL progress */}
+        {/* Profit-target progress (accTP − accSL vs target%) */}
         <div className="mt-3">
-          <AccSlProgress accSl={trader.accumulatedSlPercent || 0} maxSl={trader.maxAccumulatedSlPercent} />
+          <ProfitTargetProgress
+            accTp={trader.accumulatedTpPercent || 0}
+            accSl={trader.accumulatedSlPercent || 0}
+            target={trader.profitTargetPercent}
+          />
         </div>
 
         <div className="mt-2">
@@ -293,16 +297,16 @@ function TraderCard({ trader, onDestroy }) {
               <p className="text-sm font-mono text-slate-400">${fmt(trader.feesPaid, 4)}</p>
             </div>
             <div className="rounded-xl bg-slate-800/40 p-3">
-              <p className="text-[10px] uppercase text-slate-500">Acc. SL / Max</p>
+              <p className="text-[10px] uppercase text-slate-500">Acc. TP / SL</p>
               <p className="text-sm font-mono text-slate-300">
-                <span className="text-rose-400">{fmt(trader.accumulatedSlPercent || 0)}%</span>
+                <span className="text-emerald-400">{fmt(trader.accumulatedTpPercent || 0)}%</span>
                 {" / "}
-                <span className="text-emerald-400">{trader.maxAccumulatedSlPercent || 30}%</span>
+                <span className="text-rose-400">{fmt(trader.accumulatedSlPercent || 0)}%</span>
               </p>
             </div>
             <div className="rounded-xl bg-slate-800/40 p-3">
-              <p className="text-[10px] uppercase text-slate-500">Flips</p>
-              <p className="text-sm font-mono text-amber-400">{trader.flipCount || 0}</p>
+              <p className="text-[10px] uppercase text-slate-500">Transactions</p>
+              <p className="text-sm font-mono text-amber-400">{trader.transactionCount || 0}</p>
             </div>
           </div>
 
@@ -333,7 +337,8 @@ function TraderHistoryTable({ history }) {
             <th className="py-2 pr-3">Symbol</th>
             <th className="py-2 pr-3">Dir</th>
             <th className="py-2 pr-3">24h %</th>
-            <th className="py-2 pr-3">Flips</th>
+            <th className="py-2 pr-3">Tx</th>
+            <th className="py-2 pr-3">Net %</th>
             <th className="py-2 pr-3 text-right">PnL</th>
             <th className="py-2 pr-3 text-right">Fees</th>
             <th className="py-2 pr-3">Reason</th>
@@ -349,17 +354,20 @@ function TraderHistoryTable({ history }) {
                 <span className={dirColor(h.direction || "SHORT")}>{h.direction || "SHORT"}</span>
               </td>
               <td className="py-1.5 pr-3 text-emerald-400">{fmt(h.changePercent)}%</td>
-              <td className="py-1.5 pr-3 font-mono text-amber-400">{h.flipCount || 0}</td>
+              <td className="py-1.5 pr-3 font-mono text-amber-400">{h.transactionCount || 0}</td>
+              <td className={`py-1.5 pr-3 font-mono ${pnlColor((h.accumulatedTpPercent || 0) - (h.accumulatedSlPercent || 0))}`}>
+                {fmt((h.accumulatedTpPercent || 0) - (h.accumulatedSlPercent || 0))}%
+              </td>
               <td className={`py-1.5 pr-3 text-right font-mono font-bold ${pnlColor(h.realizedPnl)}`}>
                 ${fmt(h.realizedPnl, 4)}
               </td>
               <td className="py-1.5 pr-3 text-right font-mono text-slate-500">${fmt(h.feesPaid, 4)}</td>
               <td className="py-1.5 pr-3">
                 <span className={`rounded-md px-1.5 py-0.5 text-[10px] font-bold uppercase ${
-                  h.reason === "take-profit"
+                  h.reason === "profit-target"
                     ? "bg-emerald-500/15 text-emerald-400"
-                    : h.reason === "max-loss"
-                    ? "bg-rose-500/15 text-rose-400"
+                    : h.reason === "expired"
+                    ? "bg-amber-500/15 text-amber-400"
                     : "bg-slate-700/50 text-slate-400"
                 }`}>
                   {h.reason}
@@ -515,7 +523,7 @@ function App() {
         {/* ── Header ── */}
         <div className="glass rounded-2xl px-6 py-5 flex flex-wrap items-center justify-between gap-4">
           <div>
-            <h1 className="text-2xl font-bold">Flip Trader</h1>
+            <h1 className="text-2xl font-bold">Top-Gainer Trader</h1>
             <p className="text-xs text-slate-500 mt-1">
               Binance Futures · {status.mode}
               <span className="ml-3">{socketStatus === "connected" ? "● Connected" : "○ Disconnected"}</span>

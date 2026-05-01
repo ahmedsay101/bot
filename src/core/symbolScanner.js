@@ -31,11 +31,13 @@ class SymbolScanner {
     return tradable;
   }
 
+  /** Return the top N USDT-perpetual gainers by 24h % change (no min-% filter). */
   async scan() {
     const tickers = await this.api.get24hTickers();
     const tradableSymbols = await this._getTradableSymbols();
     const list = Array.isArray(tickers) ? tickers : [];
 
+    const limit = Math.max(1, Number(config.maxTraders) || 1);
     const candidates = list
       .map((t) => ({
         symbol: t.symbol,
@@ -44,12 +46,12 @@ class SymbolScanner {
       }))
       .filter((t) => typeof t.symbol === "string" && t.symbol.endsWith("USDT"))
       .filter((t) => tradableSymbols.has(t.symbol))
-      .filter((t) => Number.isFinite(t.change) && t.change > (Number(config.minChangePercent) || 60))
+      .filter((t) => Number.isFinite(t.change))
       .sort((a, b) => b.change - a.change)
-      .slice(0, Math.max(10, Number(config.maxTraders) || 1));
+      .slice(0, limit);
 
     for (const c of candidates) {
-      log("SCANNER", `${c.symbol} +${c.change.toFixed(1)}% — candidate`);
+      log("SCANNER", `${c.symbol} ${c.change >= 0 ? "+" : ""}${c.change.toFixed(2)}% — top gainer`);
     }
 
     return candidates;

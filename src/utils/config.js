@@ -6,18 +6,14 @@ const config = {
   baseWsUrl: "wss://fstream.binance.com",
   maxTraders: 1,
   feeRate: 0.0004,
-  fixedNotional: 500,
   equityFraction: 0.8,
   leverage: 2,
-  dynamicTp: false,
-  takeProfitPercent: 5,
-  stopLossPercent: 5,
-  maxAccumulatedSlPercent: 15,
-  minChangePercent: 60,
+  takeProfitPercent: 1,        // single-trade TP %
+  stopLossPercent: 5,          // single-trade SL %
+  profitTargetPercent: 5,      // destroy trader when (accTp - accSl) >= this
   startingBalanceUSDT: 500,
   scannerIntervalMs: 1 * 60 * 1000,
   maxLifetimeMs: 24 * 60 * 60 * 1000,
-  lossCooldownMs: 30 * 60 * 1000,
   recvWindow: 5000
 };
 
