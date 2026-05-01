@@ -51,24 +51,33 @@ function StatCard({ label, value, sub, color }) {
   );
 }
 
-/* ── Accumulated SL Progress Bar ────────────────────────────── */
-function AccSlProgress({ accSl, maxSl }) {
-  const max = maxSl || 30;
-  const pct = Math.min(100, (accSl / max) * 100);
-  const danger = pct >= 80;
-  const warn = pct >= 50;
+/* ── Profit Target Progress Bar ────────────────────────────── */
+function ProfitTargetProgress({ accTp, accSl, target }) {
+  const t = Number(target) || 5;
+  const net = Number(accTp || 0) - Number(accSl || 0);
+  const pct = Math.max(0, Math.min(100, (net / t) * 100));
+  const negative = net < 0;
+  const negPct = negative ? Math.min(100, (Math.abs(net) / t) * 100) : 0;
 
   return (
     <div className="space-y-1">
       <div className="flex justify-between text-[10px] text-slate-500">
-        <span>Accumulated SL: {fmt(accSl)}%</span>
-        <span>Max: {max}%</span>
+        <span>
+          <span className="text-emerald-400">accTP {fmt(accTp)}%</span>
+          <span className="mx-2 text-slate-600">−</span>
+          <span className="text-rose-400">accSL {fmt(accSl)}%</span>
+        </span>
+        <span>
+          Net <span className={pnlColor(net)}>{net >= 0 ? "+" : ""}{fmt(net)}%</span>
+          <span className="text-slate-600"> / target {t}%</span>
+        </span>
       </div>
       <div className="relative h-2.5 w-full overflow-hidden rounded-full bg-slate-800">
-        <div
-          className={`h-full rounded-full transition-all ${danger ? "bg-rose-500" : warn ? "bg-amber-500" : "bg-sky-500"}`}
-          style={{ width: `${pct}%` }}
-        />
+        {negative ? (
+          <div className="h-full rounded-full bg-rose-500/70" style={{ width: `${negPct}%` }} />
+        ) : (
+          <div className="h-full rounded-full bg-emerald-500" style={{ width: `${pct}%` }} />
+        )}
       </div>
     </div>
   );
