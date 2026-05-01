@@ -205,6 +205,11 @@ function TraderCard({ trader, onDestroy }) {
                 Tx #{trader.transactionCount}
               </span>
             )}
+            {(trader.consecutiveSl || 0) > 0 && (
+              <span className="rounded-full bg-rose-500/15 px-2 py-0.5 text-[10px] font-bold text-rose-400 border border-rose-500/20">
+                SL streak {trader.consecutiveSl}/{trader.consecutiveSlFlipCount || 5}
+              </span>
+            )}
             <span className="text-[10px] text-slate-500">
               {trader.createdAt ? new Date(trader.createdAt).toLocaleString() : ""}
               {trader.createdAt ? ` · ${fmtDuration(trader.createdAt)}` : ""}

@@ -12,8 +12,11 @@ function fmt(value, digits = 2) {
  *
  * Lifecycle:
  *   1. Open SHORT.
- *   2. On TP hit  → accumulatedTp += tp%, open another SAME-side position.
- *   3. On SL hit  → accumulatedSl += sl%, open another OPPOSITE-side position.
+ *   2. On SL hit  → accumulatedSl += sl%, open another SAME-side position.
+ *                  After N consecutive SLs (config.consecutiveSlFlipCount),
+ *                  flip to OPPOSITE side instead and reset the streak.
+ *   3. On TP hit  → accumulatedTp += tp%, open OPPOSITE-side position;
+ *                  resets the consecutive-SL streak.
  *   4. After every close, destroy when accumulatedTp - accumulatedSl >= profitTargetPercent.
  *
  * All positions use the SAME sizing: margin = liveBalance × equityFraction; notional = margin × leverage.
@@ -36,14 +39,16 @@ class Trader {
     this.margin = 0;
     this.notional = 0;
 
-    this.takeProfitPercent = Number(config.takeProfitPercent) || 1;
-    this.stopLossPercent = Number(config.stopLossPercent) || 5;
+    this.takeProfitPercent = Number(config.takeProfitPercent) || 5;
+    this.stopLossPercent = Number(config.stopLossPercent) || 1;
     this.profitTargetPercent = Number(config.profitTargetPercent) || 5;
+    this.consecutiveSlFlipCount = Math.max(1, Number(config.consecutiveSlFlipCount) || 5);
 
     this.direction = "SHORT";
     this.transactionCount = 0;            // total positions opened (incl. current)
     this.accumulatedTpPercent = 0;
     this.accumulatedSlPercent = 0;
+    this.consecutiveSl = 0;               // resets on TP or on SL-triggered flip
 
     this.entryPrice = 0;
     this.quantity = 0;
@@ -219,6 +224,7 @@ class Trader {
 
     await this._closeCurrentPosition(exitPrice, "take-profit");
     this.accumulatedTpPercent += this.takeProfitPercent;
+    this.consecutiveSl = 0;
 
     log(`TRADER ${this.symbol}`,
       `accTp=${fmt(this.accumulatedTpPercent)}% accSl=${fmt(this.accumulatedSlPercent)}% ` +
@@ -231,8 +237,9 @@ class Trader {
       return;
     }
 
-    // Open another SAME-side position.
-    await this._openPosition(this.direction);
+    // Open OPPOSITE-side position.
+    const nextDir = this.direction === "SHORT" ? "LONG" : "SHORT";
+    await this._openPosition(nextDir);
     this._updateStore();
   }
 
@@ -243,13 +250,22 @@ class Trader {
 
     await this._closeCurrentPosition(exitPrice, "stop-loss");
     this.accumulatedSlPercent += this.stopLossPercent;
+    this.consecutiveSl += 1;
 
     log(`TRADER ${this.symbol}`,
       `accTp=${fmt(this.accumulatedTpPercent)}% accSl=${fmt(this.accumulatedSlPercent)}% ` +
+      `consecSL=${this.consecutiveSl}/${this.consecutiveSlFlipCount} ` +
       `net=${fmt(this.netProfitPercent)}% (target ${this.profitTargetPercent}%)`);
 
-    // Open OPPOSITE-side position.
-    const nextDir = this.direction === "SHORT" ? "LONG" : "SHORT";
+    let nextDir;
+    if (this.consecutiveSl >= this.consecutiveSlFlipCount) {
+      nextDir = this.direction === "SHORT" ? "LONG" : "SHORT";
+      log(`TRADER ${this.symbol}`,
+        `${this.consecutiveSl} consecutive SLs — flipping to ${nextDir}`);
+      this.consecutiveSl = 0;
+    } else {
+      nextDir = this.direction; // same side
+    }
     await this._openPosition(nextDir);
     this._updateStore();
   }
@@ -284,6 +300,8 @@ class Trader {
       accumulatedSlPercent: this.accumulatedSlPercent,
       netProfitPercent: this.netProfitPercent,
       profitTargetPercent: this.profitTargetPercent,
+      consecutiveSl: this.consecutiveSl,
+      consecutiveSlFlipCount: this.consecutiveSlFlipCount,
       realizedPnl: this.realizedPnl,
       feesPaid: this.feesPaid,
       totalTrades: this.totalTrades,
@@ -333,6 +351,8 @@ class Trader {
       accumulatedSlPercent: this.accumulatedSlPercent,
       netProfitPercent: this.netProfitPercent,
       profitTargetPercent: this.profitTargetPercent,
+      consecutiveSl: this.consecutiveSl,
+      consecutiveSlFlipCount: this.consecutiveSlFlipCount,
       lastPrice: price,
       startPrice: this.startPrice,
       entryPrice: this.entryPrice,

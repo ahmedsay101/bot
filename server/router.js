@@ -16,6 +16,8 @@ router.get("/traders", (req, res) => {
     accumulatedSlPercent: trader.accumulatedSlPercent,
     netProfitPercent: trader.netProfitPercent,
     profitTargetPercent: trader.profitTargetPercent,
+    consecutiveSl: trader.consecutiveSl,
+    consecutiveSlFlipCount: trader.consecutiveSlFlipCount,
     lastPrice: trader.lastPrice,
     startPrice: trader.startPrice,
     entryPrice: trader.entryPrice,
