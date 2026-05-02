@@ -29,6 +29,36 @@ services:
           }
         '
 
+  # One-shot reset: wipes the bot DB and flushes Redis every time the stack
+  # comes up. Gated by the `reset` profile and by `RESET_ON_BOOT=1` so it
+  # only runs when explicitly requested. Use:
+  #   RESET_ON_BOOT=1 docker compose --profile reset up -d --build
+  # or simpler helper script: ./scripts/fresh-up.sh
+  db-reset:
+    image: mongo:7
+    profiles: ["reset"]
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: "no"
+    entrypoint:
+      - bash
+      - -c
+      - |
+        set -e
+        echo "[db-reset] waiting for replica set..."
+        until mongosh --host mongo:27017 --quiet --eval 'rs.status().ok' >/dev/null 2>&1; do
+          sleep 1
+        done
+        echo "[db-reset] dropping mongo db 'bot'..."
+        mongosh --host mongo:27017 --quiet --eval 'db.getSiblingDB("bot").dropDatabase()'
+        echo "[db-reset] flushing redis..."
+        apt-get update -qq && apt-get install -y -qq redis-tools >/dev/null
+        redis-cli -h redis FLUSHALL
+        echo "[db-reset] done."
+
   redis:
     image: redis:7-alpine
     restart: unless-stopped
@@ -52,6 +82,9 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      db-reset:
+        condition: service_completed_successfully
+        required: false
     env_file: .env
     environment:
       MONGO_URI: mongodb://mongo:27017/bot?replicaSet=rs0
