@@ -37,6 +37,11 @@ interface PendingOrder {
 interface InMemoryPosition extends PositionSnapshot {
   openedAt: number;
   entryOrderId: string;
+  /** True once the orchestrator has called attachStops(). Until then SL/TP
+   * are placeholder defaults and MUST NOT trigger — otherwise we get fake
+   * "take_profit" exits at the placeholder price the moment the next tick
+   * arrives. */
+  stopsAttached: boolean;
 }
 
 /**
@@ -91,6 +96,7 @@ export class TestExecutionService extends EventEmitter implements IExecutionServ
         takeProfitPrice: p.takeProfitPrice,
         openedAt: p.openedAt.getTime(),
         entryOrderId: p.entryOrderId,
+        stopsAttached: true,
       });
     }
 
@@ -232,6 +238,31 @@ export class TestExecutionService extends EventEmitter implements IExecutionServ
         (pos.side === Side.SHORT && triggerPrice >= pos.liquidationPrice)
       ) {
         await this.forceClose(pos, pos.liquidationPrice, TradeReason.LIQUIDATION);
+        return;
+      }
+      // SL/TP — only after orchestrator has attached real stops. Without this
+      // guard the placeholder defaults from openOrAddPosition would fire on
+      // the very next tick and produce fake "take_profit" / "stop_loss"
+      // exits at the placeholder price.
+      if (!pos.stopsAttached) return;
+      // Validate stop sanity — a LONG must have SL<entry<TP and a SHORT must
+      // have TP<entry<SL. If state is inconsistent, skip rather than fire a
+      // wrong-direction fill.
+      const slValid =
+        pos.side === Side.LONG
+          ? pos.stopPrice < pos.entryPrice && pos.takeProfitPrice > pos.entryPrice
+          : pos.stopPrice > pos.entryPrice && pos.takeProfitPrice < pos.entryPrice;
+      if (!slValid) {
+        log.error(
+          {
+            symbol,
+            side: pos.side,
+            entry: pos.entryPrice,
+            sl: pos.stopPrice,
+            tp: pos.takeProfitPrice,
+          },
+          'invalid_sl_tp_state — skipping trigger',
+        );
         return;
       }
       // SL
@@ -434,6 +465,8 @@ export class TestExecutionService extends EventEmitter implements IExecutionServ
       takeProfitPrice: tpPrice,
       openedAt: Date.now(),
       entryOrderId: p.req.clientOrderId,
+      // Set true by attachStops(); until then SL/TP triggers are suppressed.
+      stopsAttached: false,
     };
     this.positions.set(symbol, pos);
 
@@ -456,9 +489,26 @@ export class TestExecutionService extends EventEmitter implements IExecutionServ
   async attachStops(symbol: string, stopPrice: number, takeProfitPrice: number): Promise<void> {
     const pos = this.positions.get(symbol);
     if (!pos) return;
+    // Validate before commit — refuse insane values that would instantly
+    // trigger as a wrong-side fill.
+    const ok =
+      pos.side === Side.LONG
+        ? stopPrice < pos.entryPrice && takeProfitPrice > pos.entryPrice
+        : stopPrice > pos.entryPrice && takeProfitPrice < pos.entryPrice;
+    if (!ok) {
+      log.error(
+        { symbol, side: pos.side, entry: pos.entryPrice, stopPrice, takeProfitPrice },
+        'attachStops rejected: invalid SL/TP relative to entry',
+      );
+      throw new Error('invalid_sl_tp');
+    }
     pos.stopPrice = stopPrice;
     pos.takeProfitPrice = takeProfitPrice;
-    await PositionModel.updateOne({ symbol, mode: 'test' }, { $set: { stopPrice, takeProfitPrice } });
+    pos.stopsAttached = true;
+    await PositionModel.updateOne(
+      { symbol, mode: 'test' },
+      { $set: { stopPrice, takeProfitPrice } },
+    );
   }
 
   private async reduceOrClosePosition(p: PendingOrder): Promise<void> {
@@ -481,6 +531,9 @@ export class TestExecutionService extends EventEmitter implements IExecutionServ
       fees: p.fees,
       leverage: pos.leverage,
       reason: TradeReason.MANUAL,
+      stopPrice: pos.stopPrice,
+      takeProfitPrice: pos.takeProfitPrice,
+      intendedExitPrice: null,
       openedAt: new Date(pos.openedAt),
       closedAt: new Date(),
     });
@@ -498,8 +551,28 @@ export class TestExecutionService extends EventEmitter implements IExecutionServ
   /** Forced exit (SL/TP/liquidation) at a known price. */
   private async forceClose(pos: InMemoryPosition, exitPrice: number, reason: string): Promise<void> {
     const direction = pos.side === Side.LONG ? 1 : -1;
+    const grossPnl = (exitPrice - pos.entryPrice) * pos.size * direction;
+
+    // Sanity check — a TP must close in profit, an SL must close at a loss.
+    // If the labels and signs disagree, log loudly and relabel rather than
+    // persist a misleading trade record.
+    let safeReason = reason;
+    if (reason === TradeReason.TP && grossPnl < 0) {
+      log.error(
+        { symbol: pos.symbol, side: pos.side, entry: pos.entryPrice, exitPrice, grossPnl },
+        'TP labeled but pnl<0 — relabeling stop_loss',
+      );
+      safeReason = TradeReason.SL;
+    } else if (reason === TradeReason.SL && grossPnl > 0) {
+      log.error(
+        { symbol: pos.symbol, side: pos.side, entry: pos.entryPrice, exitPrice, grossPnl },
+        'SL labeled but pnl>0 — relabeling take_profit',
+      );
+      safeReason = TradeReason.TP;
+    }
+
     const fee = pos.size * exitPrice * CONFIG().simulator.takerFeeRate;
-    const pnl = (exitPrice - pos.entryPrice) * pos.size * direction - fee;
+    const pnl = grossPnl - fee;
     this.balance += pnl;
     this.feesPaidLifetime += fee;
 
@@ -514,14 +587,20 @@ export class TestExecutionService extends EventEmitter implements IExecutionServ
       pnl,
       fees: fee,
       leverage: pos.leverage,
-      reason,
+      reason: safeReason,
+      stopPrice: pos.stopPrice,
+      takeProfitPrice: pos.takeProfitPrice,
+      intendedExitPrice: exitPrice,
       openedAt: new Date(pos.openedAt),
       closedAt: new Date(),
     });
     this.positions.delete(pos.symbol);
     await PositionModel.deleteOne({ symbol: pos.symbol, mode: 'test' });
-    void publish(Channels.TRADE_CLOSED, { symbol: pos.symbol, pnl, reason, exitPrice });
-    log.info({ symbol: pos.symbol, reason, pnl: pnl.toFixed(4) }, 'forced close');
+    void publish(Channels.TRADE_CLOSED, { symbol: pos.symbol, pnl, reason: safeReason, exitPrice });
+    log.info(
+      { symbol: pos.symbol, reason: safeReason, entry: pos.entryPrice, exit: exitPrice, pnl: pnl.toFixed(6) },
+      'forced close',
+    );
   }
 
   // -----------------------------------------------------------------------

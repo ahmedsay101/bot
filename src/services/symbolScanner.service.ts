@@ -4,6 +4,7 @@ import { atr, rsi, sma, slope as slopeOf } from '../indicators/index.js';
 import { BinanceRestClient, type Ticker24h } from '../api/binance.rest.js';
 import { MarketDataService, type Candle } from './marketData.service.js';
 import { ScanModel } from '../models/index.js';
+import { SetupService } from './setup.service.js';
 import { scoped } from '../utils/logger.js';
 
 const log = scoped('SCANNER');
@@ -33,7 +34,10 @@ export class SymbolScannerService {
   private readonly rest = new BinanceRestClient();
   private last: ScanResult | null = null;
 
-  constructor(private readonly market: MarketDataService) {}
+  constructor(
+    private readonly market: MarketDataService,
+    private readonly setups: SetupService,
+  ) {}
 
   getLast(): ScanResult | null {
     return this.last;
@@ -102,7 +106,22 @@ export class SymbolScannerService {
       if (!Number.isFinite(c.rsi)) return false;
       return c.rsi < cfg.thresholds.rsiOversold || c.rsi > cfg.thresholds.rsiOverbought;
     });
-    const selected = tradeable.slice(0, cfg.trading.maxSymbols).map((c) => c.symbol);
+    const top = tradeable.slice(0, cfg.trading.maxSymbols);
+
+    // Stateful setup engine: each tradeable 15m candidate creates a setup
+    // (LONG if oversold, SHORT if overbought). The 1m trigger engine in the
+    // strategy/orchestrator will fire entries against these setups.
+    for (const c of top) {
+      if (this.setups.isOnCooldown(c.symbol)) continue;
+      const type = c.rsi < cfg.thresholds.rsiOversold ? 'LONG' : 'SHORT';
+      this.setups.create(c.symbol, type, c.rsi);
+    }
+
+    // The orchestrator monitors every symbol with an active setup (these may
+    // outlive a single scan up to setup.expiryMs).
+    const setupSymbols = this.setups.active().map((s) => s.symbol);
+    // Union top-N with active setups, dedupe.
+    const selected = Array.from(new Set([...top.map((c) => c.symbol), ...setupSymbols]));
 
     const result: ScanResult = { ts: new Date(), selected, candidates: sorted };
     this.last = result;

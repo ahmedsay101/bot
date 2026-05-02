@@ -8,6 +8,7 @@ import { SymbolScannerService } from './symbolScanner.service.js';
 import { evaluate } from './strategy.service.js';
 import { RiskManager } from './riskManager.service.js';
 import { PortfolioService } from './portfolio.service.js';
+import { SetupService, sideToSetupType, type Setup } from './setup.service.js';
 import { newClientOrderId, TestExecutionService } from './execution/index.js';
 import type { IExecutionService } from './execution/execution.interface.js';
 
@@ -18,15 +19,25 @@ export interface SymbolEvaluation {
   symbol: string;
   ts: number;
   regime: string;
-  rsi: number;
+  rsi: number;            // 1m RSI
+  rsi15m: number;         // RSI from the setup that created the opportunity
   slope: number;
-  atr: number;
+  atr: number;            // raw ATR (price units)
+  atrPercent: number;     // normalized: ATR / price * 100
   signal: string;          // OPEN | CLOSE | HOLD
   side?: 'LONG' | 'SHORT';
   reason: string;
   hasPosition: boolean;
+  /** Trade-ready: active setup + RSI extreme on 1m. */
+  eligible: boolean;
   status: 'WAITING' | 'SIGNAL' | 'EXECUTED' | 'REJECTED';
   rejectReason?: string;
+  // Setup engine state (15m → 1m sequential signal):
+  setupType: 'LONG' | 'SHORT' | 'NONE';
+  setupAgeMs: number;
+  setupExpiresInMs: number;
+  setupStatus: 'NONE' | 'ACTIVE' | 'EXPIRED' | 'TRIGGERED' | 'COOLDOWN';
+  cooldownRemainingMs: number;
 }
 
 export interface OrchestratorState {
@@ -53,6 +64,7 @@ export class Orchestrator {
     private readonly risk: RiskManager,
     private readonly portfolio: PortfolioService,
     private readonly execution: IExecutionService,
+    private readonly setups: SetupService,
   ) {}
 
   getState(): Readonly<OrchestratorState> {
@@ -62,6 +74,11 @@ export class Orchestrator {
   /** All cached per-symbol evaluations, newest first. */
   getLastEvaluations(): SymbolEvaluation[] {
     return [...this.lastEvaluations.values()].sort((a, b) => b.ts - a.ts);
+  }
+
+  /** Setup + cooldown snapshot for the /debug endpoint. */
+  getSetupSnapshot(): ReturnType<SetupService['snapshot']> {
+    return this.setups.snapshot();
   }
 
   shutdown(): void {
@@ -127,25 +144,56 @@ export class Orchestrator {
     const cfg = CONFIG();
     const candles = await this.market.warmCandles(symbol, cfg.timeframes.strategy, 200);
     const position = await this.execution.getPosition(symbol);
+    const setup: Setup | null = this.setups.getActive(symbol);
+    const cooldownMs = this.setups.cooldownRemaining(symbol);
 
     const evalResult = evaluate({
       candles,
       hasOpenPosition: !!position,
+      setup,
       ...(position && { positionSide: position.side }),
     });
 
     // ----- Decision cache + structured debug log -----
+    const lastClose = candles.length ? (candles[candles.length - 1] as { close: number }).close : NaN;
+    const atrRaw = evalResult.regime.atr;
+    const atrPct =
+      Number.isFinite(atrRaw) && Number.isFinite(lastClose) && lastClose > 0
+        ? (atrRaw / lastClose) * 100
+        : NaN;
+
+    // Eligibility: active setup + 1m RSI in matching trigger band + no position.
+    const rsiTriggered =
+      Number.isFinite(evalResult.rsi) &&
+      setup != null &&
+      ((setup.type === 'LONG' && evalResult.rsi < cfg.thresholds.rsi1mTriggerLong) ||
+        (setup.type === 'SHORT' && evalResult.rsi > cfg.thresholds.rsi1mTriggerShort));
+    const eligible = !position && cooldownMs === 0 && rsiTriggered;
+
+    const now = Date.now();
+    let setupStatus: SymbolEvaluation['setupStatus'] = 'NONE';
+    if (cooldownMs > 0) setupStatus = 'COOLDOWN';
+    else if (setup) setupStatus = rsiTriggered ? 'TRIGGERED' : 'ACTIVE';
+
     const baseEval: SymbolEvaluation = {
       symbol,
-      ts: Date.now(),
+      ts: now,
       regime: evalResult.regime.regime,
       rsi: Number.isFinite(evalResult.rsi) ? Number(evalResult.rsi.toFixed(4)) : NaN,
+      rsi15m: setup ? Number(setup.rsiAtCreate.toFixed(4)) : NaN,
       slope: Number.isFinite(evalResult.regime.slope) ? Number(evalResult.regime.slope.toFixed(6)) : NaN,
-      atr: Number.isFinite(evalResult.regime.atr) ? Number(evalResult.regime.atr.toFixed(6)) : NaN,
+      atr: Number.isFinite(atrRaw) ? Number(atrRaw.toFixed(6)) : NaN,
+      atrPercent: Number.isFinite(atrPct) ? Number(atrPct.toFixed(4)) : NaN,
       signal: evalResult.signal.kind,
       reason: 'reason' in evalResult.signal ? evalResult.signal.reason : '',
       hasPosition: !!position,
+      eligible,
       status: 'WAITING',
+      setupType: setup ? setup.type : 'NONE',
+      setupAgeMs: setup ? now - setup.createdAt : 0,
+      setupExpiresInMs: setup ? Math.max(0, setup.expiresAt - now) : 0,
+      setupStatus,
+      cooldownRemainingMs: cooldownMs,
     };
     if (evalResult.signal.kind === 'OPEN') {
       baseEval.side = evalResult.signal.side === Side.LONG ? 'LONG' : 'SHORT';
@@ -162,8 +210,10 @@ export class Orchestrator {
             regime: merged.regime,
             rsi: merged.rsi,
             slope: merged.slope,
+            atrPct: merged.atrPercent,
             signal: merged.signal,
             side: merged.side,
+            eligible: merged.eligible,
             hasPosition: merged.hasPosition,
             status: merged.status,
             reason: merged.reason,
@@ -192,6 +242,13 @@ export class Orchestrator {
     // OPEN
     if (position) {
       recordAndLog({ status: 'REJECTED', rejectReason: 'already_in_position' });
+      return;
+    }
+    if (cooldownMs > 0) {
+      recordAndLog({
+        status: 'REJECTED',
+        rejectReason: `cooldown_${Math.ceil(cooldownMs / 1000)}s`,
+      });
       return;
     }
     const sizing = this.risk.size({
@@ -225,11 +282,53 @@ export class Orchestrator {
       return;
     }
 
+    // CRITICAL: recompute SL/TP from the *actual* fill price, not signal.price.
+    // The signal price is the previous candle close — for low-priced or
+    // low-ATR symbols (e.g. BSBUSDT at $0.70 with 0.0001 ATR) the gap between
+    // candle close and live book mid can exceed tpAtrMultiple*ATR, which
+    // would put TP BELOW entry for a LONG and trigger an instant fake
+    // "take_profit" loss. Pull the actual entryPrice off the position the
+    // executor just opened and rebuild stops from there.
+    const filledPos = await this.execution.getPosition(symbol);
+    const realEntry = filledPos?.entryPrice ?? evalResult.signal.price;
+    const realStops = this.risk.computeStops(
+      evalResult.signal.side,
+      realEntry,
+      evalResult.signal.atr,
+      this.market.getSymbolInfo(symbol),
+    );
+    if (!realStops) {
+      // Sanity guard: refuse to leave the position with stale/invalid stops.
+      log.error(
+        { symbol, realEntry, atr: evalResult.signal.atr },
+        'invalid stops after fill — flattening immediately',
+      );
+      try {
+        await this.closePosition(symbol, 'invalid_stops');
+      } catch (e) {
+        log.error({ err: (e as Error).message }, 'flatten after invalid_stops failed');
+      }
+      recordAndLog({ status: 'REJECTED', rejectReason: 'invalid_stops_after_fill' });
+      this.setups.consume(symbol);
+      return;
+    }
+    log.info(
+      {
+        symbol,
+        signalPrice: evalResult.signal.price,
+        actualEntry: realEntry,
+        sl: realStops.stopPrice,
+        tp: realStops.takeProfitPrice,
+        atr: evalResult.signal.atr,
+      },
+      'stops_attached',
+    );
+
     // Attach SL/TP — implementation differs:
     //  - test mode: stops are tracked in-memory by the simulator
     //  - live mode: place STOP_MARKET + TAKE_PROFIT_MARKET reduce-only orders
     if (this.execution instanceof TestExecutionService) {
-      await this.execution.attachStops(symbol, sizing.stopPrice, sizing.takeProfitPrice);
+      await this.execution.attachStops(symbol, realStops.stopPrice, realStops.takeProfitPrice);
     } else {
       const closeSide: 'BUY' | 'SELL' = evalResult.signal.side === Side.LONG ? 'SELL' : 'BUY';
       await this.execution.placeOrder({
@@ -239,7 +338,7 @@ export class Orchestrator {
         positionSide: evalResult.signal.side,
         type: OrderType.STOP_MARKET,
         qty: sizing.qty,
-        stopPrice: sizing.stopPrice,
+        stopPrice: realStops.stopPrice,
         reduceOnly: true,
         purpose: 'SL',
       });
@@ -250,11 +349,16 @@ export class Orchestrator {
         positionSide: evalResult.signal.side,
         type: OrderType.TAKE_PROFIT_MARKET,
         qty: sizing.qty,
-        stopPrice: sizing.takeProfitPrice,
+        stopPrice: realStops.takeProfitPrice,
         reduceOnly: true,
         purpose: 'TP',
       });
     }
+
+    // Setup consumed: invalidate + start cooldown so we don't immediately
+    // re-enter on the same setup if RSI stays below the trigger.
+    this.setups.consume(symbol);
+    void sideToSetupType; // imported for type re-export
 
     recordAndLog({ status: 'EXECUTED' });
   }

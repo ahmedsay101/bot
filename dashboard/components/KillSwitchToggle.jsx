@@ -27,18 +27,27 @@ export default function KillSwitchToggle() {
     setConfirming(false);
   };
 
+  const base =
+    'inline-flex items-center gap-1.5 text-[11px] sm:text-xs font-semibold px-2.5 sm:px-3 py-1.5 rounded-md border transition-all';
+
   return (
     <button
       onClick={onClick}
-      className={`text-xs font-semibold px-3 py-1.5 rounded border transition-colors ${
+      title={enabled ? 'Trading halted — click to resume' : 'Halt all new entries'}
+      className={
         enabled
-          ? 'bg-rose-600 border-rose-700 text-white'
+          ? `${base} bg-rose-600 border-rose-500 text-white shadow-[0_0_20px_rgba(244,63,94,0.5)]`
           : confirming
-          ? 'bg-amber-500 border-amber-600 text-black'
-          : 'bg-slate-800 border-slate-700 text-rose-400 hover:bg-rose-900/30'
-      }`}
+          ? `${base} bg-amber-500 border-amber-400 text-black animate-pulse`
+          : `${base} bg-slate-800/60 border-slate-700 text-rose-400 hover:bg-rose-900/30 hover:border-rose-700`
+      }
     >
-      {enabled ? '● KILL ACTIVE' : confirming ? 'Click to confirm' : 'KILL SWITCH'}
+      <span
+        className={`w-1.5 h-1.5 rounded-full ${
+          enabled ? 'bg-white animate-pulse' : confirming ? 'bg-black' : 'bg-rose-400'
+        }`}
+      />
+      {enabled ? 'KILL ACTIVE' : confirming ? 'Confirm?' : 'KILL'}
     </button>
   );
 }

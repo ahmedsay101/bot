@@ -11,7 +11,7 @@ export const DefaultConfig = {
   trading: {
     maxSymbols: 3,
     leverage: 2,
-    totalBalance: 600,
+    totalBalance: 300,
     riskPerTrade: 0.01,
     maxOpenPositionsPerSymbol: 1,
   },
@@ -39,6 +39,10 @@ export const DefaultConfig = {
     rsiOversold: 35,
     rsiNeutralLow: 45,
     rsiNeutralHigh: 55,
+    // 1m trigger thresholds — stricter than the 15m setup thresholds so the
+    // setup waits for an actual fast-RSI excursion before firing.
+    rsi1mTriggerLong: 30,
+    rsi1mTriggerShort: 70,
     // Audit: trendSlope tuned to 0.004 (per-bar relative MA slope).
     // |slope| < 0.004 → RANGE, otherwise TREND.
     trendSlope: 0.004,
@@ -72,6 +76,14 @@ export const DefaultConfig = {
   loop: {
     intervalMs: env.LOOP_INTERVAL_MS,
     scannerIntervalMs: env.SCANNER_INTERVAL_MS,
+  },
+
+  // Stateful setup engine (15m → 1m sequential confirmation).
+  // 15m scanner creates a setup; 1m loop has `expiryMs` to find a trigger.
+  // After a fill, symbol is locked out for `cooldownMs`.
+  setup: {
+    expiryMs: 30 * 60_000,
+    cooldownMs: 10 * 60_000,
   },
 
   killSwitch: false,
@@ -112,6 +124,8 @@ export const SettingsSchema = z.object({
       rsiOversold: z.number().min(0).max(50),
       rsiNeutralLow: z.number().min(0).max(100),
       rsiNeutralHigh: z.number().min(0).max(100),
+      rsi1mTriggerLong: z.number().min(0).max(50),
+      rsi1mTriggerShort: z.number().min(50).max(100),
       trendSlope: z.number().nonnegative(),
       atrExpansion: z.number().positive(),
       supportProximityAtr: z.number().positive(),
@@ -121,6 +135,12 @@ export const SettingsSchema = z.object({
     .object({
       slAtrMultiple: z.number().positive(),
       tpAtrMultiple: z.number().positive(),
+    })
+    .partial(),
+  setup: z
+    .object({
+      expiryMs: z.number().int().positive().max(24 * 60 * 60_000),
+      cooldownMs: z.number().int().nonnegative().max(24 * 60 * 60_000),
     })
     .partial(),
   killSwitch: z.boolean().optional(),

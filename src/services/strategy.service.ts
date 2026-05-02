@@ -3,6 +3,7 @@ import { Side, Regime } from '../core/constants.js';
 import { rsi } from '../indicators/index.js';
 import { detectRegime, type RegimeSnapshot } from './regime.service.js';
 import type { Candle } from './marketData.service.js';
+import type { Setup } from './setup.service.js';
 
 export type Signal =
   | { kind: 'OPEN'; side: Side; price: number; atr: number; rsi: number; reason: string }
@@ -13,6 +14,8 @@ export interface StrategyContext {
   candles: Candle[];
   hasOpenPosition: boolean;
   positionSide?: Side;
+  /** Active 15m setup for this symbol (from SetupService) or null. */
+  setup?: Setup | null;
 }
 
 export interface StrategyEvaluation {
@@ -24,16 +27,17 @@ export interface StrategyEvaluation {
 }
 
 /**
- * Pure evaluation of latest closed candle.
+ * Pure evaluation of latest closed 1m candle.
  *
- * Audit-simplified entry logic (was over-filtering on support/resistance
- * proximity which suppressed almost all signals):
- *   LONG  ⇔ RANGE  &&  RSI < oversold
- *   SHORT ⇔ RANGE  &&  RSI > overbought
- *   CLOSE ⇔ regime change OR RSI returns to neutral band
+ * Sequential setup→trigger model:
+ *   - 15m scanner creates a Setup (LONG or SHORT) when 15m RSI breaches the
+ *     oversold/overbought band in a RANGE regime.
+ *   - Strategy fires OPEN only when an active Setup exists AND the 1m RSI
+ *     also breaches its (typically tighter) trigger band in the matching
+ *     direction. This decouples opportunity (slow) from entry timing (fast).
  *
- * Rolling support/resistance still computed and exposed for the dashboard
- * (informational only). SL/TP / liquidation are handled by execution layer.
+ * No setup → HOLD with reason `no_setup`. Setup expired → HOLD `setup_expired`.
+ * Position management (CLOSE on regime change / RSI neutral) is unchanged.
  */
 export function evaluate(ctx: StrategyContext): StrategyEvaluation {
   const cfg = CONFIG();
@@ -73,7 +77,7 @@ export function evaluate(ctx: StrategyContext): StrategyEvaluation {
     return out({ kind: 'HOLD', reason: 'position_active' });
   }
 
-  // Entry path — RANGE only
+  // Entry path — RANGE only and only against an active 15m setup.
   if (regime.regime !== Regime.RANGE) {
     return out({ kind: 'HOLD', reason: 'not_range' });
   }
@@ -81,26 +85,32 @@ export function evaluate(ctx: StrategyContext): StrategyEvaluation {
     return out({ kind: 'HOLD', reason: 'indicators_not_ready' });
   }
 
-  if (rsiV < cfg.thresholds.rsiOversold) {
+  const setup = ctx.setup ?? null;
+  if (!setup) {
+    return out({ kind: 'HOLD', reason: 'no_setup' });
+  }
+
+  // Sequential trigger: setup direction + 1m RSI confirmation
+  if (setup.type === 'LONG' && rsiV < cfg.thresholds.rsi1mTriggerLong) {
     return out({
       kind: 'OPEN',
       side: Side.LONG,
       price: close,
       atr: regime.atr,
       rsi: rsiV,
-      reason: 'rsi_oversold',
+      reason: 'setup_long_triggered',
     });
   }
-  if (rsiV > cfg.thresholds.rsiOverbought) {
+  if (setup.type === 'SHORT' && rsiV > cfg.thresholds.rsi1mTriggerShort) {
     return out({
       kind: 'OPEN',
       side: Side.SHORT,
       price: close,
       atr: regime.atr,
       rsi: rsiV,
-      reason: 'rsi_overbought',
+      reason: 'setup_short_triggered',
     });
   }
 
-  return out({ kind: 'HOLD', reason: 'no_setup' });
+  return out({ kind: 'HOLD', reason: 'awaiting_trigger' });
 }

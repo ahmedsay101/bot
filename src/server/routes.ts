@@ -66,12 +66,30 @@ export function buildRouter(deps: RouterDeps): Router {
     res.json({
       ts: Date.now(),
       debug: CONFIG().debug,
+      setups: deps.orchestrator.getSetupSnapshot(),
       evaluations: deps.orchestrator.getLastEvaluations(),
     });
   });
 
   r.get('/positions', async (_req: Request, res: Response) => {
-    res.json(await PositionModel.find({ mode: env.MODE }).lean());
+    const positions = await PositionModel.find({ mode: env.MODE }).lean();
+    // Enrich with live mark price (mid of book ticker) + unrealized PnL.
+    const enriched = positions.map((p) => {
+      const bt = deps.market.getBookTicker(p.symbol);
+      const markPrice =
+        bt && Number.isFinite(bt.bidPrice) && Number.isFinite(bt.askPrice)
+          ? (bt.bidPrice + bt.askPrice) / 2
+          : null;
+      let unrealizedPnl: number | null = null;
+      let unrealizedPnlPct: number | null = null;
+      if (markPrice != null && Number.isFinite(p.entryPrice) && Number.isFinite(p.size)) {
+        const dir = p.side === 'LONG' ? 1 : -1;
+        unrealizedPnl = (markPrice - p.entryPrice) * p.size * dir;
+        unrealizedPnlPct = ((markPrice - p.entryPrice) / p.entryPrice) * 100 * dir;
+      }
+      return { ...p, markPrice, unrealizedPnl, unrealizedPnlPct };
+    });
+    res.json(enriched);
   });
 
   r.get('/orders', async (req: Request, res: Response) => {

@@ -89,6 +89,39 @@ export class RiskManager {
   isKillSwitchOn(): boolean {
     return CONFIG().killSwitch === true;
   }
+
+  /**
+   * Recompute SL/TP from a *known actual* entry price (e.g. avgFillPrice
+   * after a market order). Critical for low-priced or low-ATR symbols where
+   * the gap between signal.price (candle close) and the actual fill can be
+   * larger than tpAtrMultiple * ATR — in which case TP can land BELOW entry
+   * for a LONG and trigger immediately as a fake "take_profit" loss.
+   */
+  computeStops(
+    side: Side,
+    actualEntryPrice: number,
+    atrValue: number,
+    symbolInfo: ExchangeSymbolInfo | undefined,
+  ): { stopPrice: number; takeProfitPrice: number } | null {
+    if (!isFinite(actualEntryPrice) || actualEntryPrice <= 0) return null;
+    if (!isFinite(atrValue) || atrValue <= 0) return null;
+    const cfg = CONFIG();
+    const slDist = atrValue * cfg.exits.slAtrMultiple;
+    const tpDist = atrValue * cfg.exits.tpAtrMultiple;
+    const stop = side === Side.LONG ? actualEntryPrice - slDist : actualEntryPrice + slDist;
+    const tp = side === Side.LONG ? actualEntryPrice + tpDist : actualEntryPrice - tpDist;
+    if (stop <= 0 || tp <= 0) return null;
+    const tickSize = symbolInfo?.filters.tickSize ?? 0.01;
+    const stopPrice = roundToTick(stop, tickSize);
+    const takeProfitPrice = roundToTick(tp, tickSize);
+    // Defensive sanity: TP must be on the profitable side, SL on the loss side.
+    if (side === Side.LONG) {
+      if (takeProfitPrice <= actualEntryPrice || stopPrice >= actualEntryPrice) return null;
+    } else {
+      if (takeProfitPrice >= actualEntryPrice || stopPrice <= actualEntryPrice) return null;
+    }
+    return { stopPrice, takeProfitPrice };
+  }
 }
 
 function roundToTick(price: number, tick: number): number {

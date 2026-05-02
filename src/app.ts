@@ -5,6 +5,7 @@ import { MarketDataService } from './services/marketData.service.js';
 import { SymbolScannerService } from './services/symbolScanner.service.js';
 import { PortfolioService } from './services/portfolio.service.js';
 import { RiskManager } from './services/riskManager.service.js';
+import { SetupService } from './services/setup.service.js';
 import { Orchestrator } from './services/orchestrator.service.js';
 import { createExecutionService } from './services/execution/index.js';
 import { createServer } from './server/index.js';
@@ -26,13 +27,14 @@ async function main(): Promise<void> {
   const market = new MarketDataService();
   await market.start();
 
-  const scanner = new SymbolScannerService(market);
+  const setups = new SetupService();
+  const scanner = new SymbolScannerService(market, setups);
   const portfolio = new PortfolioService();
   const risk = new RiskManager();
   const execution = createExecutionService(market);
   await execution.start();
 
-  const orchestrator = new Orchestrator(market, scanner, risk, portfolio, execution);
+  const orchestrator = new Orchestrator(market, scanner, risk, portfolio, execution, setups);
 
   const http = createServer({ orchestrator, execution, market });
   await http.listen();

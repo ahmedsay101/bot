@@ -13,6 +13,11 @@ const TradeSchema = new Schema(
     fees: { type: Number, required: true, default: 0 },
     leverage: { type: Number, required: true },
     reason: { type: String, required: true },
+    stopPrice: { type: Number, default: null },
+    takeProfitPrice: { type: Number, default: null },
+    /** What the engine *intended* the fill price to be (SL/TP target). The
+     * difference vs `exitPrice` is realized slippage. */
+    intendedExitPrice: { type: Number, default: null },
     openedAt: { type: Date, required: true },
     closedAt: { type: Date, required: true, index: true },
     meta: { type: Schema.Types.Mixed },
