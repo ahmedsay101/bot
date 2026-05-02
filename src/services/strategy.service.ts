@@ -25,10 +25,15 @@ export interface StrategyEvaluation {
 
 /**
  * Pure evaluation of latest closed candle.
- * - Entries only in RANGE regime.
- * - LONG  ⇔ RSI < oversold AND price near rolling support (low) within proximity buffer
- * - SHORT ⇔ RSI > overbought AND price near rolling resistance (high)
- * - Exit  ⇔ RSI returns to neutral band (price-based SL/TP handled by execution)
+ *
+ * Audit-simplified entry logic (was over-filtering on support/resistance
+ * proximity which suppressed almost all signals):
+ *   LONG  ⇔ RANGE  &&  RSI < oversold
+ *   SHORT ⇔ RANGE  &&  RSI > overbought
+ *   CLOSE ⇔ regime change OR RSI returns to neutral band
+ *
+ * Rolling support/resistance still computed and exposed for the dashboard
+ * (informational only). SL/TP / liquidation are handled by execution layer.
  */
 export function evaluate(ctx: StrategyContext): StrategyEvaluation {
   const cfg = CONFIG();
@@ -40,7 +45,7 @@ export function evaluate(ctx: StrategyContext): StrategyEvaluation {
   const close = closes[i] as number;
   const rsiV = rsiSeries[i] as number;
 
-  // rolling support/resistance over maPeriod / 2 candles
+  // rolling support/resistance over maPeriod / 2 candles (informational)
   const lookback = Math.max(5, Math.floor(cfg.indicators.maPeriod / 2));
   const window = ctx.candles.slice(Math.max(0, i - lookback + 1), i + 1);
   let support = Infinity;
@@ -76,26 +81,24 @@ export function evaluate(ctx: StrategyContext): StrategyEvaluation {
     return out({ kind: 'HOLD', reason: 'indicators_not_ready' });
   }
 
-  const proximity = cfg.thresholds.supportProximityAtr * regime.atr;
-
-  if (rsiV < cfg.thresholds.rsiOversold && close - support <= proximity) {
+  if (rsiV < cfg.thresholds.rsiOversold) {
     return out({
       kind: 'OPEN',
       side: Side.LONG,
       price: close,
       atr: regime.atr,
       rsi: rsiV,
-      reason: 'rsi_oversold_at_support',
+      reason: 'rsi_oversold',
     });
   }
-  if (rsiV > cfg.thresholds.rsiOverbought && resistance - close <= proximity) {
+  if (rsiV > cfg.thresholds.rsiOverbought) {
     return out({
       kind: 'OPEN',
       side: Side.SHORT,
       price: close,
       atr: regime.atr,
       rsi: rsiV,
-      reason: 'rsi_overbought_at_resistance',
+      reason: 'rsi_overbought',
     });
   }
 

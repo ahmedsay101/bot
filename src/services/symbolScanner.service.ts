@@ -127,9 +127,10 @@ export class SymbolScannerService {
     const slopeV = slopeSeries[last] as number;
     if (!isFinite(price) || !isFinite(atrV) || !isFinite(maV) || !isFinite(slopeV)) return null;
 
-    const volatilityScore = atrV / price;
-    const trendScore = Math.abs(slopeV);
-    const score = volatilityScore * 0.6 - trendScore * 0.4;
+    const volatilityScore = atrV / price;        // normalized volatility
+    const trendScore = Math.abs(slopeV);          // |slope|
+    // Audit-fixed weights: favour volatility (0.7) penalize trend (0.3)
+    const score = volatilityScore * 0.7 - trendScore * 0.3;
 
     const regime: Regime = trendScore > cfg.thresholds.trendSlope ? Regime.TREND : Regime.RANGE;
 

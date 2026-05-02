@@ -15,9 +15,12 @@ export interface RegimeSnapshot {
 /**
  * Detect market regime from a candle window.
  *
- * RANGE  ⇔ |slope| < trendSlope AND ATR_now / mean(ATR_lookback) < atrExpansion
- * TREND  ⇔ otherwise (with finite slope/ATR)
- * UNKNOWN ⇔ insufficient data
+ * Simplified per audit: slope-only classification (atrRatio kept in the
+ * snapshot for diagnostics but no longer required for RANGE).
+ *
+ *   RANGE   ⇔ |slope| < trendSlope
+ *   TREND   ⇔ |slope| >= trendSlope
+ *   UNKNOWN ⇔ insufficient data / non-finite indicators
  */
 export function detectRegime(candles: Candle[]): RegimeSnapshot {
   const cfg = CONFIG();
@@ -42,11 +45,11 @@ export function detectRegime(candles: Candle[]): RegimeSnapshot {
   const atrMean = atrLookback.length ? mean(atrLookback) : NaN;
   const atrRatio = atrMean > 0 ? atrNow / atrMean : NaN;
 
-  if (!Number.isFinite(slopeNow) || !Number.isFinite(atrRatio)) {
+  if (!Number.isFinite(slopeNow)) {
     return { regime: Regime.UNKNOWN, slope: slopeNow, atr: atrNow, atrRatio, ma: maNow };
   }
 
-  const isRange = Math.abs(slopeNow) < cfg.thresholds.trendSlope && atrRatio < cfg.thresholds.atrExpansion;
+  const isRange = Math.abs(slopeNow) < cfg.thresholds.trendSlope;
   return {
     regime: isRange ? Regime.RANGE : Regime.TREND,
     slope: slopeNow,

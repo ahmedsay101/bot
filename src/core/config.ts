@@ -35,7 +35,9 @@ export const DefaultConfig = {
     rsiOversold: 30,
     rsiNeutralLow: 45,
     rsiNeutralHigh: 55,
-    trendSlope: 0.002,
+    // Loosened from 0.002 → 0.006 so realistic intraday drift still classifies
+    // as RANGE. Below this MA slope (per bar, fractional), regime is RANGE.
+    trendSlope: 0.006,
     atrExpansion: 1.5,
     supportProximityAtr: 0.25,
   },
@@ -69,6 +71,9 @@ export const DefaultConfig = {
   },
 
   killSwitch: false,
+
+  // Verbose per-tick decision logging. Toggle at runtime via Settings page.
+  debug: false,
 };
 
 export type Config = typeof DefaultConfig;
@@ -115,6 +120,7 @@ export const SettingsSchema = z.object({
     })
     .partial(),
   killSwitch: z.boolean().optional(),
+  debug: z.boolean().optional(),
 }).partial();
 
 export type SettingsPatch = z.infer<typeof SettingsSchema>;
@@ -132,6 +138,8 @@ export function applySettingsPatch(patch: SettingsPatch): Config {
     if (v === undefined) continue;
     if (k === 'killSwitch') {
       next.killSwitch = Boolean(v);
+    } else if (k === 'debug') {
+      next.debug = Boolean(v);
     } else {
       // shallow merge per top-level key
       // @ts-expect-error dynamic merge; structurally identical sub-shapes

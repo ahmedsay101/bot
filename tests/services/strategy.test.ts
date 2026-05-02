@@ -26,7 +26,8 @@ describe('regime', () => {
   });
 
   it('TREND on monotonically increasing series', () => {
-    const closes = Array.from({ length: 120 }, (_, i) => 100 + i);
+    // slope must exceed 0.006 (audit-loosened threshold). +2/bar yields ~0.007.
+    const closes = Array.from({ length: 120 }, (_, i) => 100 + 2 * i);
     const r = detectRegime(makeCandles(closes));
     expect(r.regime).toBe(Regime.TREND);
   });
@@ -41,7 +42,7 @@ describe('regime', () => {
 
 describe('strategy.evaluate', () => {
   it('does NOT open in TREND even if RSI extreme', () => {
-    const closes = Array.from({ length: 120 }, (_, i) => 100 + i);
+    const closes = Array.from({ length: 120 }, (_, i) => 100 + 2 * i);
     const ev = evaluate({ candles: makeCandles(closes), hasOpenPosition: false });
     expect(ev.regime.regime).toBe(Regime.TREND);
     expect(ev.signal.kind).not.toBe('OPEN');
@@ -76,7 +77,7 @@ describe('strategy.evaluate', () => {
   });
 
   it('emits CLOSE on regime change for an open position', () => {
-    const closes = Array.from({ length: 120 }, (_, i) => 100 + i); // strong trend
+    const closes = Array.from({ length: 120 }, (_, i) => 100 + 2 * i); // strong trend
     const ev = evaluate({
       candles: makeCandles(closes),
       hasOpenPosition: true,

@@ -1,11 +1,12 @@
 {
   "/_not-found/page": "/_not-found",
   "/(auth)/login/page": "/login",
-  "/(app)/backtest/page": "/backtest",
-  "/(app)/strategy/[symbol]/page": "/strategy/[symbol]",
-  "/(app)/settings/page": "/settings",
-  "/(app)/symbols/page": "/symbols",
   "/(app)/page": "/",
+  "/(app)/backtest/page": "/backtest",
+  "/(app)/debug/page": "/debug",
+  "/(app)/strategy/[symbol]/page": "/strategy/[symbol]",
+  "/(app)/symbols/page": "/symbols",
+  "/(app)/settings/page": "/settings",
   "/(app)/trades/page": "/trades",
   "/(app)/strategy/page": "/strategy"
 }

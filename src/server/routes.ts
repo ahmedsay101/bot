@@ -61,6 +61,15 @@ export function buildRouter(deps: RouterDeps): Router {
     res.json(last ?? null);
   });
 
+  // Debug / observability: per-symbol last decision + status
+  r.get('/debug/evaluations', (_req: Request, res: Response) => {
+    res.json({
+      ts: Date.now(),
+      debug: CONFIG().debug,
+      evaluations: deps.orchestrator.getLastEvaluations(),
+    });
+  });
+
   r.get('/positions', async (_req: Request, res: Response) => {
     res.json(await PositionModel.find({ mode: env.MODE }).lean());
   });

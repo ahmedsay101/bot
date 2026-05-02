@@ -13,6 +13,22 @@ import type { IExecutionService } from './execution/execution.interface.js';
 
 const log = scoped('ORCH');
 
+/** Snapshot of the last decision for a symbol — surfaced via /debug. */
+export interface SymbolEvaluation {
+  symbol: string;
+  ts: number;
+  regime: string;
+  rsi: number;
+  slope: number;
+  atr: number;
+  signal: string;          // OPEN | CLOSE | HOLD
+  side?: 'LONG' | 'SHORT';
+  reason: string;
+  hasPosition: boolean;
+  status: 'WAITING' | 'SIGNAL' | 'EXECUTED' | 'REJECTED';
+  rejectReason?: string;
+}
+
 export interface OrchestratorState {
   shuttingDown: boolean;
   lastScanAt: number;
@@ -28,6 +44,9 @@ export class Orchestrator {
     selected: [],
   };
 
+  /** Per-symbol last evaluation (for /debug + dashboard panel). */
+  private readonly lastEvaluations = new Map<string, SymbolEvaluation>();
+
   constructor(
     private readonly market: MarketDataService,
     private readonly scanner: SymbolScannerService,
@@ -38,6 +57,11 @@ export class Orchestrator {
 
   getState(): Readonly<OrchestratorState> {
     return this.state;
+  }
+
+  /** All cached per-symbol evaluations, newest first. */
+  getLastEvaluations(): SymbolEvaluation[] {
+    return [...this.lastEvaluations.values()].sort((a, b) => b.ts - a.ts);
   }
 
   shutdown(): void {
@@ -110,15 +134,66 @@ export class Orchestrator {
       ...(position && { positionSide: position.side }),
     });
 
-    if (evalResult.signal.kind === 'HOLD') return;
+    // ----- Decision cache + structured debug log -----
+    const baseEval: SymbolEvaluation = {
+      symbol,
+      ts: Date.now(),
+      regime: evalResult.regime.regime,
+      rsi: Number.isFinite(evalResult.rsi) ? Number(evalResult.rsi.toFixed(4)) : NaN,
+      slope: Number.isFinite(evalResult.regime.slope) ? Number(evalResult.regime.slope.toFixed(6)) : NaN,
+      atr: Number.isFinite(evalResult.regime.atr) ? Number(evalResult.regime.atr.toFixed(6)) : NaN,
+      signal: evalResult.signal.kind,
+      reason: 'reason' in evalResult.signal ? evalResult.signal.reason : '',
+      hasPosition: !!position,
+      status: 'WAITING',
+    };
+    if (evalResult.signal.kind === 'OPEN') {
+      baseEval.side = evalResult.signal.side === Side.LONG ? 'LONG' : 'SHORT';
+      baseEval.status = 'SIGNAL';
+    }
+
+    const recordAndLog = (extra?: Partial<SymbolEvaluation>): void => {
+      const merged: SymbolEvaluation = { ...baseEval, ...extra };
+      this.lastEvaluations.set(symbol, merged);
+      if (cfg.debug || merged.status === 'EXECUTED' || merged.status === 'REJECTED') {
+        log.info(
+          {
+            symbol: merged.symbol,
+            regime: merged.regime,
+            rsi: merged.rsi,
+            slope: merged.slope,
+            signal: merged.signal,
+            side: merged.side,
+            hasPosition: merged.hasPosition,
+            status: merged.status,
+            reason: merged.reason,
+            rejectReason: merged.rejectReason,
+          },
+          'decision',
+        );
+      }
+    };
+
+    if (evalResult.signal.kind === 'HOLD') {
+      recordAndLog();
+      return;
+    }
 
     if (evalResult.signal.kind === 'CLOSE') {
-      await this.closePosition(symbol, evalResult.signal.reason);
+      try {
+        await this.closePosition(symbol, evalResult.signal.reason);
+        recordAndLog({ status: 'EXECUTED' });
+      } catch (e) {
+        recordAndLog({ status: 'REJECTED', rejectReason: (e as Error).message });
+      }
       return;
     }
 
     // OPEN
-    if (position) return; // already in position
+    if (position) {
+      recordAndLog({ status: 'REJECTED', rejectReason: 'already_in_position' });
+      return;
+    }
     const sizing = this.risk.size({
       symbol,
       side: evalResult.signal.side,
@@ -128,7 +203,7 @@ export class Orchestrator {
       symbolInfo: this.market.getSymbolInfo(symbol),
     });
     if (!sizing) {
-      log.debug({ symbol }, 'sizing rejected');
+      recordAndLog({ status: 'REJECTED', rejectReason: 'sizing_rejected' });
       return;
     }
 
@@ -143,7 +218,12 @@ export class Orchestrator {
       purpose: 'ENTRY' as const,
     };
     log.info({ symbol, side: evalResult.signal.side, qty: sizing.qty }, 'entering');
-    await this.execution.placeOrder(entryReq);
+    try {
+      await this.execution.placeOrder(entryReq);
+    } catch (e) {
+      recordAndLog({ status: 'REJECTED', rejectReason: (e as Error).message });
+      return;
+    }
 
     // Attach SL/TP — implementation differs:
     //  - test mode: stops are tracked in-memory by the simulator
@@ -175,6 +255,8 @@ export class Orchestrator {
         purpose: 'TP',
       });
     }
+
+    recordAndLog({ status: 'EXECUTED' });
   }
 
   private async closePosition(symbol: string, reason: string): Promise<void> {
