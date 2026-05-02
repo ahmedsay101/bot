@@ -12,6 +12,9 @@ const log = scoped('HTTP');
 
 export function createServer(deps: RouterDeps): { app: Express; server: http.Server; listen: () => Promise<void>; stop: () => Promise<void> } {
   const app = express();
+  // We sit behind exactly one reverse proxy (nginx). Trust the first hop so
+  // X-Forwarded-For is honored for rate-limit keying / req.ip.
+  app.set('trust proxy', 1);
   app.use(helmet());
   app.use(
     cors({
