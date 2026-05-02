@@ -25,9 +25,10 @@ export default function StrategyMonitorPage({ params }) {
   };
 
   const candles = data?.candles || [];
-  const rsiArr = data?.rsi || [];
-  const atrArr = data?.atr || [];
-  const maArr = data?.ma || [];
+  const rsiArr = data?.indicators?.rsi || [];
+  const atrArr = data?.indicators?.atr || [];
+  const maArr = data?.indicators?.ma || [];
+  const regimeName = typeof data?.regime === 'string' ? data.regime : data?.regime?.regime;
 
   const chartData = candles.map((c, i) => ({
     t: new Date(c.closeTime).toLocaleTimeString(),
@@ -55,14 +56,14 @@ export default function StrategyMonitorPage({ params }) {
             Regime:{' '}
             <span
               className={
-                data.regime === 'RANGE'
+                regimeName === 'RANGE'
                   ? 'text-emerald-400'
-                  : data.regime === 'TREND'
+                  : regimeName === 'TREND'
                   ? 'text-amber-400'
                   : 'text-slate-500'
               }
             >
-              {data.regime}
+              {regimeName || '—'}
             </span>{' '}
             <span className="text-slate-500">
               | ATR {fmt(atrArr[atrArr.length - 1])} | RSI {fmt(rsiArr[rsiArr.length - 1], 1)}

@@ -53,7 +53,7 @@ export class SymbolScannerService {
     // Limit candidate set to keep API budget sane: top N by quoteVolume.
     const candidatesUniverse = filtered
       .sort((a, b) => b.quoteVolume - a.quoteVolume)
-      .slice(0, 60);
+      .slice(0, cfg.filters.candidateUniverseSize);
 
     const candidates: ScanCandidate[] = [];
     for (const t of candidatesUniverse) {

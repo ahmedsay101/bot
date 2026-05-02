@@ -19,6 +19,9 @@ export const DefaultConfig = {
   filters: {
     minVolume: 50_000_000,
     maxSpreadPercent: 0.2,
+    // How many top-volume symbols the scanner scores each cycle.
+    // Trading parallelism is still capped by `trading.maxSymbols`.
+    candidateUniverseSize: 100,
   },
 
   indicators: {
@@ -84,6 +87,7 @@ export const SettingsSchema = z.object({
     .object({
       minVolume: z.number().nonnegative(),
       maxSpreadPercent: z.number().positive().max(5),
+      candidateUniverseSize: z.number().int().min(5).max(500),
     })
     .partial(),
   indicators: z

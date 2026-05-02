@@ -33,7 +33,7 @@ export default function SymbolsPage() {
           ))}
         </div>
         <div className="text-xs text-slate-500 mt-2">
-          Last scan: {data.scannedAt ? new Date(data.scannedAt).toLocaleString() : '—'}
+          Last scan: {data.ts ? new Date(data.ts).toLocaleString() : '—'}
         </div>
       </div>
 
