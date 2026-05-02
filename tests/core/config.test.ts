@@ -7,7 +7,7 @@ describe('config', () => {
   it('starts with defaults from spec', () => {
     expect(CONFIG().trading.maxSymbols).toBe(3);
     expect(CONFIG().trading.leverage).toBe(2);
-    expect(CONFIG().thresholds.rsiOverbought).toBe(70);
+    expect(CONFIG().thresholds.rsiOverbought).toBe(65);
   });
 
   it('applies a settings patch', () => {

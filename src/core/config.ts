@@ -17,7 +17,9 @@ export const DefaultConfig = {
   },
 
   filters: {
-    minVolume: 50_000_000,
+    // Audit: liquidity floor raised to 100M USDT 24h quote-volume to keep
+    // the universe in BTC/ETH/SOL-tier names where fills + spreads are sane.
+    minVolume: 100_000_000,
     maxSpreadPercent: 0.2,
     // How many top-volume symbols the scanner scores each cycle.
     // Trading parallelism is still capped by `trading.maxSymbols`.
@@ -31,13 +33,15 @@ export const DefaultConfig = {
   },
 
   thresholds: {
-    rsiOverbought: 70,
-    rsiOversold: 30,
+    // Audit: widen RSI bands 30/70 → 35/65 so realistic mean-reversion
+    // setups generate signals (was producing ~0 trades).
+    rsiOverbought: 65,
+    rsiOversold: 35,
     rsiNeutralLow: 45,
     rsiNeutralHigh: 55,
-    // Loosened from 0.002 → 0.006 so realistic intraday drift still classifies
-    // as RANGE. Below this MA slope (per bar, fractional), regime is RANGE.
-    trendSlope: 0.006,
+    // Audit: trendSlope tuned to 0.004 (per-bar relative MA slope).
+    // |slope| < 0.004 → RANGE, otherwise TREND.
+    trendSlope: 0.004,
     atrExpansion: 1.5,
     supportProximityAtr: 0.25,
   },

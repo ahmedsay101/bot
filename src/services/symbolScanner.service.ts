@@ -87,9 +87,22 @@ export class SymbolScannerService {
       }
     }
 
-    // Sort by score desc, take maxSymbols of non-skipped
+    // Audit-mandated selection pipeline:
+    //   1. drop skipped (trend / wide spread / low volume already filtered)
+    //   2. require regime === RANGE
+    //   3. require RSI extreme (oversold OR overbought) — the actual signal
+    //   4. sort by score desc, take maxSymbols
+    //
+    // This guarantees every selected symbol is a *trade-ready* candidate,
+    // not just a high-volatility name we'd sit on indefinitely.
     const sorted = candidates.slice().sort((a, b) => b.score - a.score);
-    const selected = sorted.filter((c) => !c.skipped).slice(0, cfg.trading.maxSymbols).map((c) => c.symbol);
+    const tradeable = sorted.filter((c) => {
+      if (c.skipped) return false;
+      if (c.regime !== Regime.RANGE) return false;
+      if (!Number.isFinite(c.rsi)) return false;
+      return c.rsi < cfg.thresholds.rsiOversold || c.rsi > cfg.thresholds.rsiOverbought;
+    });
+    const selected = tradeable.slice(0, cfg.trading.maxSymbols).map((c) => c.symbol);
 
     const result: ScanResult = { ts: new Date(), selected, candidates: sorted };
     this.last = result;
