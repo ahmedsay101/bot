@@ -9,12 +9,12 @@ cp .env.example .env       # set BINANCE_*, JWT_SECRET, ADMIN_PASSWORD
 docker compose up --build
 ```
 
-In production the entire app is reachable on **port 80** through an nginx reverse proxy:
+In production the entire app is reachable on **127.0.0.1:8080** through an nginx reverse proxy (intended to sit behind a host-level TLS terminator / reverse proxy such as Caddy, Traefik, or Cloudflare Tunnel):
 
-- Dashboard:     http://localhost/        → Next.js (`web` service, internal :3000)
-- REST API:      http://localhost/api/    → bot (internal :4000)
-- WebSocket:     ws://localhost/ws        → bot (internal :4000)
-- Healthcheck:   http://localhost/healthz
+- Dashboard:     http://127.0.0.1:8080/        → Next.js (`web` service, internal :3000)
+- REST API:      http://127.0.0.1:8080/api/    → bot (internal :4000)
+- WebSocket:     ws://127.0.0.1:8080/ws        → bot (internal :4000)
+- Healthcheck:   http://127.0.0.1:8080/healthz
 
 The `bot`, `web`, `mongo`, and `redis` services are not directly exposed to the internet (mongo/redis are bound to `127.0.0.1` for local ops only).
 
