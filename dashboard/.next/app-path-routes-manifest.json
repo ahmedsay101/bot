@@ -1,0 +1,11 @@
+{
+  "/_not-found/page": "/_not-found",
+  "/(auth)/login/page": "/login",
+  "/(app)/page": "/",
+  "/(app)/strategy/page": "/strategy",
+  "/(app)/backtest/page": "/backtest",
+  "/(app)/settings/page": "/settings",
+  "/(app)/trades/page": "/trades",
+  "/(app)/strategy/[symbol]/page": "/strategy/[symbol]",
+  "/(app)/symbols/page": "/symbols"
+}
