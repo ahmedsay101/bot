@@ -37,6 +37,37 @@ const tickerCache = new Map();   // symbol → { symbol, percent }
 let topGainersWs = null;
 let priceFeedAttached = false;
 
+// Set of tradable USDT perpetuals — populated from /fapi/v1/exchangeInfo.
+// Keeps the dashboard list aligned with Binance's Futures Top Gainers
+// (perpetual contracts in TRADING status only — no delivery, no halted, etc.)
+let tradablePerpetuals = null;
+let tradablePerpetualsAt = 0;
+const TRADABLE_TTL_MS = 10 * 60 * 1000;
+
+async function refreshTradablePerpetuals(force = false) {
+  const now = Date.now();
+  if (!force && tradablePerpetuals && (now - tradablePerpetualsAt) < TRADABLE_TTL_MS) {
+    return tradablePerpetuals;
+  }
+  try {
+    const info = await fetchJson(`${config.baseRestUrl}/fapi/v1/exchangeInfo`);
+    const symbols = Array.isArray(info?.symbols) ? info.symbols : [];
+    const next = new Set(
+      symbols
+        .filter((s) => s.contractType === "PERPETUAL")
+        .filter((s) => s.quoteAsset === "USDT")
+        .filter((s) => s.status === "TRADING")
+        .map((s) => s.symbol)
+    );
+    tradablePerpetuals = next;
+    tradablePerpetualsAt = now;
+    log("API", `Tradable perpetuals refreshed (${next.size} symbols)`);
+  } catch (err) {
+    log("API", `exchangeInfo refresh failed: ${err.message}`);
+  }
+  return tradablePerpetuals;
+}
+
 function fetchJson(url) {
   return new Promise((resolve, reject) => {
     https
@@ -68,12 +99,16 @@ function updateTopGainersFromTickers(tickers) {
     const quoteVolume = Number(t?.quoteVolume ?? t?.q ?? 0);
     if (typeof symbol !== "string" || !symbol.endsWith("USDT")) continue;
     if (!Number.isFinite(percent)) continue;
+    // Drop symbols Binance doesn't show on Futures (delivery contracts,
+    // halted/settling perpetuals, BVOL/leveraged tokens, etc.).
+    if (tradablePerpetuals && !tradablePerpetuals.has(symbol)) continue;
     tickerCache.set(symbol, { symbol, percent, quoteVolume });
   }
   // Always show a healthy list so the user can see the broader market —
   // the dashboard highlights which rows the scanner would actually pick.
   const displayCount = Math.max(15, Number(config.maxTraders) || 0);
   topGainers = Array.from(tickerCache.values())
+    .filter((t) => !tradablePerpetuals || tradablePerpetuals.has(t.symbol))
     .sort((a, b) => b.percent - a.percent)
     .slice(0, displayCount);
 }
@@ -82,6 +117,7 @@ function updateTopGainersFromTickers(tickers) {
 // before the !ticker@arr stream delivers its first batch.
 async function seedTopGainersFromRest() {
   try {
+    await refreshTradablePerpetuals(true);
     const data = await fetchJson(`${config.baseRestUrl}/fapi/v1/ticker/24hr`);
     updateTopGainersFromTickers(data);
     log("API", `Top gainers seeded via REST (${tickerCache.size} symbols)`);
@@ -154,6 +190,8 @@ setInterval(() => {
 
 startTopGainersWs();
 seedTopGainersFromRest();
+// Refresh the tradable-perpetuals whitelist hourly to catch new listings.
+setInterval(() => { refreshTradablePerpetuals(true); }, 60 * 60 * 1000);
 
 const port = Number(process.env.API_PORT) || 8080;
 const host = process.env.HOST || "0.0.0.0";
