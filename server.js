@@ -70,12 +70,24 @@ function updateTopGainersFromTickers(tickers) {
     if (!Number.isFinite(percent)) continue;
     tickerCache.set(symbol, { symbol, percent, quoteVolume });
   }
-  // Match symbolScanner: only filter is the 24h % change threshold; show enough
-  // rows for the dashboard to highlight which would actually be picked up.
-  const displayCount = Math.max(5, Number(config.maxTraders) || 0);
+  // Always show a healthy list so the user can see the broader market —
+  // the dashboard highlights which rows the scanner would actually pick.
+  const displayCount = Math.max(15, Number(config.maxTraders) || 0);
   topGainers = Array.from(tickerCache.values())
     .sort((a, b) => b.percent - a.percent)
     .slice(0, displayCount);
+}
+
+// Seed the cache once at boot via REST so the dashboard has data immediately,
+// before the !ticker@arr stream delivers its first batch.
+async function seedTopGainersFromRest() {
+  try {
+    const data = await fetchJson(`${config.baseRestUrl}/fapi/v1/ticker/24hr`);
+    updateTopGainersFromTickers(data);
+    log("API", `Top gainers seeded via REST (${tickerCache.size} symbols)`);
+  } catch (err) {
+    log("API", `Top gainers REST seed failed: ${err.message}`);
+  }
 }
 
 function startTopGainersWs() {
@@ -141,6 +153,7 @@ setInterval(() => {
 }, 2000);
 
 startTopGainersWs();
+seedTopGainersFromRest();
 
 const port = Number(process.env.API_PORT) || 8080;
 const host = process.env.HOST || "0.0.0.0";
