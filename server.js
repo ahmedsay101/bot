@@ -114,15 +114,16 @@ function updateTopGainersFromTickers(tickers) {
 }
 
 // Seed the cache once at boot via REST so the dashboard has data immediately,
-// before the !ticker@arr stream delivers its first batch.
+// before the !ticker@arr stream delivers its first batch. Also called on a
+// short interval as a fallback in case the WS stream stalls.
 async function seedTopGainersFromRest() {
   try {
-    await refreshTradablePerpetuals(true);
+    // Refresh the perpetuals whitelist on demand (cached for TRADABLE_TTL_MS).
+    await refreshTradablePerpetuals();
     const data = await fetchJson(`${config.baseRestUrl}/fapi/v1/ticker/24hr`);
     updateTopGainersFromTickers(data);
-    log("API", `Top gainers seeded via REST (${tickerCache.size} symbols)`);
   } catch (err) {
-    log("API", `Top gainers REST seed failed: ${err.message}`);
+    log("API", `Top gainers REST refresh failed: ${err.message}`);
   }
 }
 
@@ -192,6 +193,9 @@ startTopGainersWs();
 seedTopGainersFromRest();
 // Refresh the tradable-perpetuals whitelist hourly to catch new listings.
 setInterval(() => { refreshTradablePerpetuals(true); }, 60 * 60 * 1000);
+// REST fallback / source of truth: refresh the full 24h ticker every 10s so
+// the dashboard always matches Binance even if the WS stream stalls.
+setInterval(() => { seedTopGainersFromRest(); }, 10 * 1000);
 
 const port = Number(process.env.API_PORT) || 8080;
 const host = process.env.HOST || "0.0.0.0";
