@@ -8,11 +8,17 @@ function fmt(value, digits = 2) {
 }
 
 /**
- * DCATrader — simple short strategy.
+ * DCATrader — short-with-hedge strategy.
  *
- * On start: places a single market SHORT at the current price.
- * Take-profit = entry * (1 - round(changePercent / 10) / 100)
- * Stop-loss   = entry * (1 + stopLossPercent / 100)
+ *   1. On start: open a market SHORT. TP = entry × (1 - takeProfitPercent / 100).
+ *   2. While the SHORT is losing >= hedgeTriggerPercent and there is no hedge,
+ *      open a market LONG hedge of the same quantity. The hedge has no TP
+ *      and a stop-loss at entry × (1 - hedgeStopLossPercent / 100).
+ *   3. If the hedge SL is hit, close the hedge only. The trader continues to
+ *      run; another hedge will be re-opened on the next tick if the short is
+ *      still losing >= hedgeTriggerPercent.
+ *   4. The trader is destroyed only when the SHORT hits TP, or via manual
+ *      destroy through the API.
  */
 class DCATrader {
   constructor({ symbol, api, onDestroy, changePercent, equity }) {
@@ -27,38 +33,41 @@ class DCATrader {
     this.startPrice = null;
     this.lastPrice = null;
 
-    // Configurable parameters
+    // Sizing — notional = equityFraction * balance * leverage.
+    // Same notional is reused for the LONG hedge so both sides have equal
+    // exposure (qty is set once on entry and reused when opening the hedge).
     this.leverage = Number(config.leverage) || 2;
-    this.equityFraction = Number(config.equityFraction) || 0.9;
-    const eq = Number(equity) || Number(config.startingBalanceUSDT);
-    const fixedNotional = Number(config.fixedNotional) || 200;
-    // Use fixed notional as margin if equity covers it, otherwise fall back to fraction of equity
-    this.margin = eq >= fixedNotional ? fixedNotional : eq * this.equityFraction;
+    this.equityFraction = Number(config.equityFraction) || 0.4;
+    const balance = Number(equity) || Number(config.startingBalanceUSDT);
+    this.margin = balance * this.equityFraction;
     this.notional = this.margin * this.leverage;
-    // TP% = round(24h change / 10), minimum 1%
-    //this.takeProfitPercent = Math.max(1, Math.round(this.changePercent / 10));
-    this.takeProfitPercent = 5;
-    // Fixed SL%
-    this.stopLossPercent = 0;
 
+    // Strategy parameters (configurable)
+    this.takeProfitPercent = Number(config.takeProfitPercent) || 10;
+    this.hedgeTriggerPercent = Number(config.hedgeTriggerPercent) || 5;
+    this.hedgeStopLossPercent = Number(config.hedgeStopLossPercent) || 5;
+
+    // Main short state
     this.entryPrice = 0;
     this.quantity = 0;
     this.tpPrice = 0;
-    this.slPrice = 0;
 
+    // Hedge state (null when no hedge is open)
+    this.hedge = null; // { entryPrice, quantity, slPrice, openedAt }
+    this.hedgeCount = 0;
+    this.hedgeRealizedPnl = 0;
+
+    // PnL & accounting
     this.realizedPnl = 0;
     this.feesPaid = 0;
     this.unrealizedPnl = 0;
     this.highestNetProfit = 0;
-
     this.totalTrades = 0;
     this.tradeHistory = [];
 
     this._onMarkPrice = this._onMarkPrice.bind(this);
     this._onBookTicker = this._onBookTicker.bind(this);
   }
-
-  // ── Config helpers ──────────────────────────────────────────
 
   get _feeRate() { return config.feeRate != null ? Number(config.feeRate) : 0.0004; }
 
@@ -70,27 +79,28 @@ class DCATrader {
 
     const rawQty = Number((this.notional / this.startPrice).toFixed(4));
 
-    const marketResult = await this.api.placeMarketOrder({
+    const result = await this.api.placeMarketOrder({
       symbol: this.symbol,
       side: "SELL",
-      quantity: rawQty
+      quantity: rawQty,
+      positionSide: "SHORT"
     });
 
-    // Use actual fill price and quantity from the exchange
-    this.entryPrice = Number(marketResult.price) || this.startPrice;
-    this.quantity = Number(marketResult.quantity) || rawQty;
+    this.entryPrice = Number(result.price) || this.startPrice;
+    this.quantity = Number(result.quantity) || rawQty;
     this.feesPaid += this.entryPrice * this.quantity * this._feeRate;
 
     this.tpPrice = this.entryPrice * (1 - this.takeProfitPercent / 100);
-    this.slPrice = this.entryPrice * (1 + this.stopLossPercent / 100);
 
     this.api.on("markPrice", this._onMarkPrice);
     this.api.on("bookTicker", this._onBookTicker);
 
-    log(`DCA ${this.symbol}`,
-      `SHORT @ ${fmt(this.entryPrice, 6)} | qty=${this.quantity} ` +
-      `margin=$${fmt(this.margin)} notional=$${fmt(this.notional)} ` +
-      `lev=${this.leverage}x TP=${fmt(this.tpPrice, 6)} SL=${fmt(this.slPrice, 6)}`);
+    log(
+      `DCA ${this.symbol}`,
+      `SHORT @ ${fmt(this.entryPrice, 6)} qty=${this.quantity} ` +
+      `notional=$${fmt(this.notional)} TP=${fmt(this.tpPrice, 6)} ` +
+      `(hedge trigger -${this.hedgeTriggerPercent}%, hedge SL -${this.hedgeStopLossPercent}%)`
+    );
     this._updateStore();
   }
 
@@ -99,9 +109,7 @@ class DCATrader {
   async _onMarkPrice({ symbol, price }) {
     if (!this.active || symbol !== this.symbol) return;
     this.lastPrice = price;
-    await this._checkExits(price);
-    this._trackHighestProfit();
-    this._updateStore();
+    await this._tick(price);
   }
 
   async _onBookTicker({ symbol, bid, ask }) {
@@ -114,31 +122,117 @@ class DCATrader {
     else if (Number.isFinite(askNum)) price = askNum;
     if (!Number.isFinite(price)) return;
     this.lastPrice = price;
-    await this._checkExits(price);
+    await this._tick(price);
+  }
+
+  // ── Tick / strategy ─────────────────────────────────────────
+
+  async _tick(price) {
+    if (!this.active) return;
+
+    // 1) Main TP — destroys the trader.
+    if (price <= this.tpPrice) {
+      log(`DCA ${this.symbol}`, `TP hit @ ${fmt(price, 6)} <= ${fmt(this.tpPrice, 6)}`);
+      await this.destroy("take-profit");
+      return;
+    }
+
+    // 2) Hedge SL — close hedge only.
+    if (this.hedge && price <= this.hedge.slPrice) {
+      log(
+        `DCA ${this.symbol}`,
+        `Hedge SL hit @ ${fmt(price, 6)} <= ${fmt(this.hedge.slPrice, 6)}`
+      );
+      await this._closeHedge(price, "stop-loss");
+    }
+
+    // 3) Open hedge if short is losing enough and no hedge is open.
+    if (!this.hedge && this.entryPrice > 0) {
+      const lossPct = ((price - this.entryPrice) / this.entryPrice) * 100;
+      if (lossPct >= this.hedgeTriggerPercent) {
+        await this._openHedge(price);
+      }
+    }
+
     this._trackHighestProfit();
     this._updateStore();
   }
 
-  // ── TP / SL check ──────────────────────────────────────────
+  // ── Hedge ───────────────────────────────────────────────────
 
-  async _checkExits(price) {
-    if (!this.active) return;
+  async _openHedge(price) {
+    try {
+      const result = await this.api.placeMarketOrder({
+        symbol: this.symbol,
+        side: "BUY",
+        quantity: this.quantity,
+        positionSide: "LONG"
+      });
 
-    // Lifetime expiry
-    const maxLifetime = Number(config.maxLifetimeMs) || 12 * 60 * 60 * 1000;
-    if (Date.now() - new Date(this.createdAt).getTime() >= maxLifetime) {
-      log(`DCA ${this.symbol}`, `Max lifetime reached`);
-      await this.destroy("expired");
-      return;
+      const entryPrice = Number(result.price) || price;
+      const qty = Number(result.quantity) || this.quantity;
+      const slPrice = entryPrice * (1 - this.hedgeStopLossPercent / 100);
+      const fee = entryPrice * qty * this._feeRate;
+      this.feesPaid += fee;
+
+      this.hedge = {
+        entryPrice,
+        quantity: qty,
+        slPrice,
+        openedAt: new Date().toISOString()
+      };
+      this.hedgeCount += 1;
+
+      log(
+        `DCA ${this.symbol}`,
+        `HEDGE LONG @ ${fmt(entryPrice, 6)} qty=${qty} SL=${fmt(slPrice, 6)}`
+      );
+    } catch (err) {
+      log(`DCA ${this.symbol}`, `Hedge open failed: ${err.message}`);
+    }
+  }
+
+  async _closeHedge(price, reason) {
+    if (!this.hedge) return 0;
+    const hedge = this.hedge;
+    this.hedge = null;
+
+    const exitPrice = reason === "stop-loss" ? hedge.slPrice : price;
+    const closeFee = exitPrice * hedge.quantity * this._feeRate;
+    this.feesPaid += closeFee;
+
+    // LONG hedge PnL = (exit - entry) * qty
+    const grossPnl = (exitPrice - hedge.entryPrice) * hedge.quantity;
+    this.hedgeRealizedPnl += grossPnl;
+
+    try {
+      await this.api.placeMarketOrder({
+        symbol: this.symbol,
+        side: "SELL",
+        quantity: hedge.quantity,
+        positionSide: "LONG"
+      });
+    } catch (err) {
+      log(`DCA ${this.symbol}`, `Hedge close error: ${err.message}`);
     }
 
-    if (price <= this.tpPrice) {
-      log(`DCA ${this.symbol}`, `TP hit @ ${fmt(price, 6)} <= ${fmt(this.tpPrice, 6)}`);
-      await this.destroy("take-profit");
-    } else if (this.stopLossPercent > 0 && price >= this.slPrice) {
-      log(`DCA ${this.symbol}`, `SL hit @ ${fmt(price, 6)} >= ${fmt(this.slPrice, 6)}`);
-      await this.destroy("stop-loss");
-    }
+    this.tradeHistory.push({
+      direction: "HEDGE_LONG",
+      entry: hedge.entryPrice,
+      exit: exitPrice,
+      quantity: hedge.quantity,
+      grossPnl,
+      fees: closeFee,
+      netPnl: grossPnl - closeFee,
+      reason,
+      closedAt: new Date().toISOString()
+    });
+
+    log(
+      `DCA ${this.symbol}`,
+      `Hedge closed (${reason}) @ ${fmt(exitPrice, 6)} PnL=${fmt(grossPnl, 4)}`
+    );
+    return grossPnl;
   }
 
   // ── Destroy ─────────────────────────────────────────────────
@@ -150,41 +244,52 @@ class DCATrader {
     this.api.off("markPrice", this._onMarkPrice);
     this.api.off("bookTicker", this._onBookTicker);
 
-    await this.api.cancelAllOpenOrders(this.symbol);
-
-    // Use TP/SL price as exit when triggered by those conditions,
-    // not lastPrice which could have gapped past the target
-    let exitPrice = this.lastPrice || this.startPrice;
+    const exitPriceSource = this.lastPrice || this.startPrice;
+    let exitPrice = exitPriceSource;
     if (reason === "take-profit") exitPrice = this.tpPrice;
-    else if (reason === "stop-loss") exitPrice = this.slPrice;
 
-    const grossPnl = (this.entryPrice - exitPrice) * this.quantity;
-    const closeFees = exitPrice * this.quantity * this._feeRate;
+    // Close any open hedge first (use current market price for closing).
+    let hedgePnl = 0;
+    if (this.hedge) {
+      hedgePnl = await this._closeHedge(exitPriceSource, "trader-closed");
+    }
 
-    await this.api.placeMarketOrder({
-      symbol: this.symbol,
-      side: "BUY",
-      quantity: this.quantity
-    });
+    // Close the main short.
+    try {
+      await this.api.cancelAllOpenOrders(this.symbol);
+    } catch (_) { /* best-effort */ }
 
-    this.feesPaid += closeFees;
-    this.realizedPnl = grossPnl - this.feesPaid;
-    this.totalTrades = 1;
+    try {
+      await this.api.placeMarketOrder({
+        symbol: this.symbol,
+        side: "BUY",
+        quantity: this.quantity,
+        positionSide: "SHORT"
+      });
+    } catch (err) {
+      log(`DCA ${this.symbol}`, `Short close error: ${err.message}`);
+    }
+
+    const closeFee = exitPrice * this.quantity * this._feeRate;
+    this.feesPaid += closeFee;
+    const shortGrossPnl = (this.entryPrice - exitPrice) * this.quantity;
+    const totalGrossPnl = shortGrossPnl + this.hedgeRealizedPnl;
+    this.realizedPnl = totalGrossPnl - this.feesPaid;
+    this.totalTrades = 1 + this.hedgeCount;
 
     this.tradeHistory.push({
       direction: "SHORT",
       entry: this.entryPrice,
       exit: exitPrice,
       quantity: this.quantity,
-      grossPnl,
-      fees: this.feesPaid,
-      netPnl: grossPnl - this.feesPaid,
+      grossPnl: shortGrossPnl,
+      fees: closeFee,
+      netPnl: shortGrossPnl - closeFee,
       reason,
       closedAt: new Date().toISOString()
     });
 
-    store.recordTrade({ pnl: grossPnl, fees: this.feesPaid });
-
+    store.recordTrade({ pnl: totalGrossPnl, fees: this.feesPaid });
     store.removeTrader(this.id, {
       id: this.id,
       symbol: this.symbol,
@@ -192,6 +297,8 @@ class DCATrader {
       realizedPnl: this.realizedPnl,
       feesPaid: this.feesPaid,
       totalTrades: this.totalTrades,
+      hedgeCount: this.hedgeCount,
+      hedgeRealizedPnl: this.hedgeRealizedPnl,
       highestNetProfit: this.highestNetProfit,
       createdAt: this.createdAt,
       closedAt: new Date().toISOString(),
@@ -201,20 +308,27 @@ class DCATrader {
       entryPrice: this.entryPrice
     });
 
-    log(`DCA ${this.symbol}`, `Destroyed (${reason}) | PnL $${fmt(this.realizedPnl)}`);
+    log(
+      `DCA ${this.symbol}`,
+      `Destroyed (${reason}) | Net PnL $${fmt(this.realizedPnl)} | ${this.hedgeCount} hedge(s)`
+    );
     if (this.onDestroy) this.onDestroy(this.symbol, this.realizedPnl, reason);
+    void hedgePnl; // already accumulated into hedgeRealizedPnl
   }
 
   // ── PnL helpers ─────────────────────────────────────────────
 
   _calcUnrealizedPnl(price) {
-    return (this.entryPrice - price) * this.quantity;
+    const shortUpnl = (this.entryPrice - price) * this.quantity;
+    const hedgeUpnl = this.hedge
+      ? (price - this.hedge.entryPrice) * this.hedge.quantity
+      : 0;
+    return shortUpnl + hedgeUpnl + this.hedgeRealizedPnl;
   }
 
   _trackHighestProfit() {
     const price = this.lastPrice || this.startPrice || 0;
-    const unrealized = this._calcUnrealizedPnl(price);
-    const totalNet = unrealized - this.feesPaid;
+    const totalNet = this._calcUnrealizedPnl(price) - this.feesPaid;
     if (totalNet > this.highestNetProfit) this.highestNetProfit = totalNet;
   }
 
@@ -226,10 +340,14 @@ class DCATrader {
     const unrealized = this._calcUnrealizedPnl(price);
     this.unrealizedPnl = unrealized;
 
+    const lossPct = this.entryPrice > 0
+      ? ((price - this.entryPrice) / this.entryPrice) * 100
+      : 0;
+
     store.upsertTrader({
       id: this.id,
       symbol: this.symbol,
-      traderType: "DCA",
+      traderType: "SHORT_WITH_HEDGE",
       lastPrice: price,
       startPrice: this.startPrice,
       entryPrice: this.entryPrice,
@@ -237,10 +355,21 @@ class DCATrader {
       notional: this.notional,
       margin: this.margin,
       takeProfitPercent: this.takeProfitPercent,
-      stopLossPercent: this.stopLossPercent,
+      hedgeTriggerPercent: this.hedgeTriggerPercent,
+      hedgeStopLossPercent: this.hedgeStopLossPercent,
       quantity: this.quantity,
       tpPrice: this.tpPrice,
-      slPrice: this.slPrice,
+      lossPercent: lossPct,
+      hedge: this.hedge
+        ? {
+            entryPrice: this.hedge.entryPrice,
+            quantity: this.hedge.quantity,
+            slPrice: this.hedge.slPrice,
+            openedAt: this.hedge.openedAt
+          }
+        : null,
+      hedgeCount: this.hedgeCount,
+      hedgeRealizedPnl: this.hedgeRealizedPnl,
       totalTrades: this.totalTrades,
       realizedPnl: this.realizedPnl,
       unrealizedPnl: unrealized,

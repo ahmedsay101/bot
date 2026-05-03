@@ -2,6 +2,11 @@ const express = require("express");
 const store = require("../src/state/store");
 const router = express.Router();
 
+// Lightweight liveness probe used by Docker healthcheck and load balancers.
+router.get("/health", (_req, res) => {
+  res.json({ ok: true, ts: Date.now() });
+});
+
 router.get("/status", (req, res) => {
   res.json(store.getStatus());
 });
@@ -18,10 +23,14 @@ router.get("/traders", (req, res) => {
     notional: trader.notional,
     margin: trader.margin,
     takeProfitPercent: trader.takeProfitPercent,
-    stopLossPercent: trader.stopLossPercent,
+    hedgeTriggerPercent: trader.hedgeTriggerPercent,
+    hedgeStopLossPercent: trader.hedgeStopLossPercent,
     quantity: trader.quantity,
     tpPrice: trader.tpPrice,
-    slPrice: trader.slPrice,
+    lossPercent: trader.lossPercent,
+    hedge: trader.hedge || null,
+    hedgeCount: trader.hedgeCount || 0,
+    hedgeRealizedPnl: trader.hedgeRealizedPnl || 0,
     realizedPnl: trader.realizedPnl,
     unrealizedPnl: trader.unrealizedPnl,
     feesPaid: trader.feesPaid,
@@ -43,8 +52,9 @@ router.get("/traders/:id", (req, res) => {
     startPrice: trader.startPrice,
     entryPrice: trader.entryPrice,
     tpPrice: trader.tpPrice,
-    slPrice: trader.slPrice,
     quantity: trader.quantity,
+    hedge: trader.hedge || null,
+    hedgeCount: trader.hedgeCount || 0,
     highestNetProfit: trader.highestNetProfit,
     totalTrades: trader.totalTrades,
     tradeHistory: trader.tradeHistory || []

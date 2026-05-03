@@ -1,0 +1,26 @@
+services:
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: binance-volatility-trap-bot:latest
+    container_name: volatility-trap-bot
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      # API/server
+      API_PORT: 8080
+      HOST: 0.0.0.0
+      # Binance credentials (only required for live mode)
+      BINANCE_API_KEY: ${BINANCE_API_KEY:-}
+      BINANCE_API_SECRET: ${BINANCE_API_SECRET:-}
+    # By default the bot runs in TEST mode (see src/utils/config.js).
+    # Override the command and add `--live` to trade real funds:
+    #   command: ["node", "server.js", "--live"]
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:8080/api/health', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s

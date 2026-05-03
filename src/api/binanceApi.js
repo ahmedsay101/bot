@@ -44,6 +44,37 @@ class BinanceApi extends EventEmitter {
     await this._connectUserDataWs();
   }
 
+  /**
+   * Ensure dual-side (hedge) position mode is enabled on the live account.
+   * Required for placing orders with `positionSide=LONG/SHORT`.
+   * No-op in test mode (the simulator now mirrors hedge mode behavior).
+   */
+  async ensureDualSidePositionMode() {
+    if (this.mode !== "live") return { mode: "test", dualSidePosition: true };
+    try {
+      const current = await this._request("GET", "/fapi/v1/positionSide/dual", {}, true);
+      if (current && current.dualSidePosition === true) {
+        log("BINANCE", "Hedge (dual-side) position mode already enabled");
+        return current;
+      }
+      const result = await this._request(
+        "POST",
+        "/fapi/v1/positionSide/dual",
+        { dualSidePosition: "true" },
+        true
+      );
+      log("BINANCE", "Enabled hedge (dual-side) position mode");
+      return result;
+    } catch (err) {
+      // Binance returns -4059 if the mode is already set to the requested value
+      if (String(err.message).includes("-4059")) {
+        log("BINANCE", "Hedge mode already configured (per exchange response)");
+        return { dualSidePosition: true };
+      }
+      throw err;
+    }
+  }
+
   async updateSymbols(symbols) {
     const next = new Set(symbols);
     const changed = next.size !== this.symbolStreams.size ||
@@ -604,12 +635,16 @@ class BinanceApi extends EventEmitter {
     return this._request("DELETE", "/fapi/v1/allOpenOrders", { symbol }, true);
   }
 
-  async getPosition(symbol) {
+  async getPosition(symbol, positionSide) {
     if (this.mode === "test") {
-      return this.testPositions.get(symbol) || { qty: 0, entryPrice: 0 };
+      const ps = positionSide || "BOTH";
+      return this.testPositions.get(`${symbol}:${ps}`) || { qty: 0, entryPrice: 0 };
     }
     const data = await this._request("GET", "/fapi/v2/positionRisk", {}, true);
-    const pos = data.find((p) => p.symbol === symbol);
+    const matches = data.filter((p) => p.symbol === symbol);
+    const pos = positionSide
+      ? matches.find((p) => p.positionSide === positionSide)
+      : matches[0];
     return {
       qty: pos ? Number(pos.positionAmt) : 0,
       entryPrice: pos ? Number(pos.entryPrice) : 0
@@ -653,14 +688,21 @@ class BinanceApi extends EventEmitter {
     return this._request("GET", "/fapi/v1/userTrades", { symbol, orderId }, true);
   }
 
-  async closePositionMarket(symbol) {
-    const position = await this.getPosition(symbol);
+  async closePositionMarket(symbol, positionSide) {
+    const position = await this.getPosition(symbol, positionSide);
     if (!position || position.qty === 0) return { status: "NONE" };
-    const side = position.qty > 0 ? "SELL" : "BUY";
+    // Hedge mode: bucket qty is always positive. The reducing order side is:
+    //   LONG bucket  -> SELL    SHORT bucket -> BUY
+    const side = positionSide === "SHORT"
+      ? "BUY"
+      : positionSide === "LONG"
+        ? "SELL"
+        : (position.qty > 0 ? "SELL" : "BUY");
     return this.placeMarketOrder({
       symbol,
       side,
-      quantity: Math.abs(position.qty)
+      quantity: Math.abs(position.qty),
+      positionSide
     });
   }
 
@@ -669,11 +711,16 @@ class BinanceApi extends EventEmitter {
     const nextQuantity = normalized.quantity;
     if (this.mode === "test") {
       const price = this._getFillPrice(symbol, side);
-      const qty = side === "BUY" ? nextQuantity : -nextQuantity;
-      const pnl = this._realizePnl(symbol, qty, price);
+      // In hedge mode, every order belongs to a position side. The direction
+      // applied to that bucket depends on (side, positionSide):
+      //   LONG/BUY  -> +qty (open/add)         LONG/SELL -> -qty (close/reduce)
+      //   SHORT/SELL -> -qty (open/add)        SHORT/BUY -> +qty (close/reduce)
+      const ps = positionSide || "BOTH";
+      const deltaQty = side === "BUY" ? nextQuantity : -nextQuantity;
+      const pnl = this._realizePnl(symbol, ps, deltaQty, price);
       log(
         "BINANCE",
-        `Order TEST market ${symbol} ${side} qty=${nextQuantity} fill=${price} pnl=${pnl} positionSide=${positionSide || ""}`
+        `Order TEST market ${symbol} ${side} qty=${nextQuantity} fill=${price} pnl=${pnl} positionSide=${ps}`
       );
       return { status: "FILLED", price, quantity: nextQuantity };
     }
@@ -704,24 +751,41 @@ class BinanceApi extends EventEmitter {
     return side === "BUY" ? base + slip : base - slip;
   }
 
-  _realizePnl(symbol, deltaQty, price) {
-    const pos = this.testPositions.get(symbol) || { qty: 0, entryPrice: 0 };
-    const newQty = pos.qty + deltaQty;
+  /**
+   * Hedge-mode aware PnL bookkeeping for the test simulator.
+   * Positions are keyed by `${symbol}:${positionSide}` so a SHORT bucket
+   * and a LONG bucket on the same symbol stay independent — matching
+   * Binance dual-side position mode (the live behavior we use).
+   *
+   * For a LONG bucket: positive qty = long exposure, BUY adds, SELL reduces/closes.
+   * For a SHORT bucket: positive qty = short exposure, SELL adds, BUY reduces/closes.
+   */
+  _realizePnl(symbol, positionSide, deltaQty, price) {
+    const key = `${symbol}:${positionSide}`;
+    const pos = this.testPositions.get(key) || { qty: 0, entryPrice: 0 };
+
+    // Convert deltaQty (+BUY / -SELL) into bucket exposure delta.
+    //   LONG bucket  : exposure delta = +deltaQty (BUY adds, SELL closes)
+    //   SHORT bucket : exposure delta = -deltaQty (SELL adds, BUY closes)
+    const exposureDelta = positionSide === "SHORT" ? -deltaQty : deltaQty;
+    const newQty = pos.qty + exposureDelta;
     let pnl = 0;
 
-    if (pos.qty === 0 || Math.sign(pos.qty) === Math.sign(newQty)) {
-      const totalNotional = pos.entryPrice * Math.abs(pos.qty) + price * Math.abs(deltaQty);
-      const totalQty = Math.abs(pos.qty) + Math.abs(deltaQty);
+    if (pos.qty === 0 || (pos.qty > 0 && exposureDelta > 0)) {
+      // Opening or adding to the bucket — recompute average entry.
+      const totalNotional = pos.entryPrice * pos.qty + price * Math.abs(exposureDelta);
+      const totalQty = pos.qty + Math.abs(exposureDelta);
       const avgPrice = totalQty === 0 ? 0 : totalNotional / totalQty;
-      this.testPositions.set(symbol, { qty: newQty, entryPrice: avgPrice });
+      this.testPositions.set(key, { qty: newQty, entryPrice: avgPrice });
     } else {
-      const closedQty = Math.min(Math.abs(pos.qty), Math.abs(deltaQty));
-      const direction = pos.qty > 0 ? 1 : -1;
+      // Reducing / closing the bucket — realize PnL on the closed portion.
+      const closedQty = Math.min(pos.qty, Math.abs(exposureDelta));
+      const direction = positionSide === "SHORT" ? -1 : 1; // long: profit when price up
       pnl = (price - pos.entryPrice) * closedQty * direction;
-      const remainingQty = newQty;
-      this.testPositions.set(symbol, {
+      const remainingQty = Math.max(0, newQty);
+      this.testPositions.set(key, {
         qty: remainingQty,
-        entryPrice: remainingQty === 0 ? 0 : price
+        entryPrice: remainingQty === 0 ? 0 : pos.entryPrice
       });
     }
 
@@ -757,8 +821,9 @@ class BinanceApi extends EventEmitter {
       const fillPrice = Number.isFinite(order.price) ? order.price : order.stopPrice;
       order.status = "FILLED";
       this.testOrders.delete(order.orderId);
-      const qty = order.side === "BUY" ? order.quantity : -order.quantity;
-      this._realizePnl(symbol, qty, fillPrice);
+      const deltaQty = order.side === "BUY" ? order.quantity : -order.quantity;
+      const ps = order.positionSide || "BOTH";
+      this._realizePnl(symbol, ps, deltaQty, fillPrice);
 
       this.emit("orderFilled", {
         symbol,

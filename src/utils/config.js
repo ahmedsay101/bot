@@ -4,23 +4,22 @@ const config = {
   apiSecret: process.env.BINANCE_API_SECRET || "",
   baseRestUrl: "https://fapi.binance.com",
   baseWsUrl: "wss://fstream.binance.com",
+
   maxTraders: 1,
   feeRate: 0.0004,
-  fixedNotional: 500,
-  equityFraction: 0.9,
-  leverage: 2,
-  startingBalanceUSDT: 500,
+  equityFraction: 0.4,
+  leverage: 4,
+  startingBalanceUSDT: 300,
+
+  // Scanner — only filter is 24h change ≥ minChange24hPercent
   scannerIntervalMs: 1 * 60 * 1000,
-  maxLifetimeMs: 24 * 60 * 60 * 1000,
-  slCooldownMs: 3 * 60 * 60 * 1000,
-  safetyFilter: {
-    maxAbsChange24h: 80,
-    maxVolumeSpike: 3,
-    maxSpreadPct: 0.2,
-    maxAbsFundingRate: 0.05,
-    maxAtrRatio: 0.08,
-    minListingAgeDays: 7
-  },
+  minChange24hPercent: 60,
+
+  // Strategy parameters
+  takeProfitPercent: 10,        // Short TP — price drops 10% from entry
+  hedgeTriggerPercent: 5,       // Open hedge when short is losing this %
+  hedgeStopLossPercent: 5,      // Hedge SL — price drops 5% from hedge entry
+
   recvWindow: 5000
 };
 

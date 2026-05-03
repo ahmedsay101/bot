@@ -70,10 +70,12 @@ function updateTopGainersFromTickers(tickers) {
     if (!Number.isFinite(percent)) continue;
     tickerCache.set(symbol, { symbol, percent, quoteVolume });
   }
+  // Match symbolScanner: only filter is the 24h % change threshold; show enough
+  // rows for the dashboard to highlight which would actually be picked up.
+  const displayCount = Math.max(5, Number(config.maxTraders) || 0);
   topGainers = Array.from(tickerCache.values())
-    .filter((t) => t.quoteVolume >= 10_000_000)
     .sort((a, b) => b.percent - a.percent)
-    .slice(0, 5);
+    .slice(0, displayCount);
 }
 
 function startTopGainersWs() {
@@ -140,11 +142,34 @@ setInterval(() => {
 
 startTopGainersWs();
 
-const port = Number(process.env.API_PORT) || 4000;
+const port = Number(process.env.API_PORT) || 8080;
+const host = process.env.HOST || "0.0.0.0";
 
-server.listen(port, () => {
-  log("API", `Server listening on port ${port}`);
+server.listen(port, host, () => {
+  log("API", `Server listening on http://${host}:${port}`);
 });
+
+let shuttingDown = false;
+async function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  log("API", `Received ${signal} — shutting down gracefully`);
+  try {
+    const controller = app.get("controller");
+    if (controller && typeof controller.stop === "function") {
+      await controller.stop();
+    }
+  } catch (err) {
+    log("API", `Error during controller stop: ${err.message}`);
+  }
+  try { if (topGainersWs) topGainersWs.terminate(); } catch (_) {}
+  io.close();
+  server.close(() => process.exit(0));
+  // Hard timeout in case sockets hang
+  setTimeout(() => process.exit(0), 5000).unref();
+}
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));
 
 startBot().catch((err) => {
   log("API", `Bot failed to start: ${err.message}`);
