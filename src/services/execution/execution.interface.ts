@@ -10,7 +10,7 @@ export interface OrderRequest {
   price?: number;
   stopPrice?: number;
   reduceOnly?: boolean;
-  purpose: 'ENTRY' | 'EXIT' | 'SL' | 'TP';
+  purpose: 'ENTRY' | 'EXIT' | 'SL' | 'TP' | 'GRID' | 'HEDGE' | 'GRID_TP' | 'HEDGE_CLOSE';
 }
 
 export interface OrderResult {
@@ -32,7 +32,7 @@ export interface FillEvent {
   fee: number;
   ts: number;
   isFinal: boolean;
-  purpose: 'ENTRY' | 'EXIT' | 'SL' | 'TP';
+  purpose: 'ENTRY' | 'EXIT' | 'SL' | 'TP' | 'GRID' | 'HEDGE' | 'GRID_TP' | 'HEDGE_CLOSE';
 }
 
 export interface PositionSnapshot {

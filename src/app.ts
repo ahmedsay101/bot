@@ -2,11 +2,8 @@ import { connectDb, disconnectDb } from './services/db.service.js';
 import { ensureAdminUser } from './services/auth.service.js';
 import { loadSettings, startSettingsWatcher, stopSettingsWatcher } from './services/settings.service.js';
 import { MarketDataService } from './services/marketData.service.js';
-import { SymbolScannerService } from './services/symbolScanner.service.js';
-import { PortfolioService } from './services/portfolio.service.js';
-import { RiskManager } from './services/riskManager.service.js';
-import { SetupService } from './services/setup.service.js';
-import { Orchestrator } from './services/orchestrator.service.js';
+import { SymbolUniverseService } from './services/symbolUniverse.service.js';
+import { GridOrchestrator } from './services/gridOrchestrator.service.js';
 import { createExecutionService } from './services/execution/index.js';
 import { createServer } from './server/index.js';
 import { startBacktestWorker } from './services/backtest.service.js';
@@ -17,7 +14,7 @@ import { env } from './core/env.js';
 const log = scoped('APP');
 
 async function main(): Promise<void> {
-  log.info({ mode: env.MODE }, 'booting');
+  log.info({ mode: env.MODE }, 'booting grid+hedge bot');
 
   await connectDb();
   await ensureAdminUser();
@@ -27,22 +24,20 @@ async function main(): Promise<void> {
   const market = new MarketDataService();
   await market.start();
 
-  const setups = new SetupService();
-  const scanner = new SymbolScannerService(market, setups);
-  const portfolio = new PortfolioService();
-  const risk = new RiskManager();
+  const universe = new SymbolUniverseService(market);
   const execution = createExecutionService(market);
   await execution.start();
 
-  const orchestrator = new Orchestrator(market, scanner, risk, portfolio, execution, setups);
+  const orchestrator = new GridOrchestrator(market, universe, execution);
 
-  const http = createServer({ orchestrator, execution, market });
+  const http = createServer({ orchestrator, execution, market, universe });
   await http.listen();
 
   const backtestWorker = startBacktestWorker(market);
 
-  // Run orchestrator loop
-  const loopPromise = orchestrator.run().catch((e) => log.error({ err: (e as Error).message }, 'orchestrator crashed'));
+  const loopPromise = orchestrator
+    .run()
+    .catch((e) => log.error({ err: (e as Error).message }, 'orchestrator crashed'));
 
   // Graceful shutdown
   let shuttingDown = false;

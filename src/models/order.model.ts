@@ -27,7 +27,7 @@ const OrderSchema = new Schema(
     avgFillPrice: { type: Number, default: 0 },
     fees: { type: Number, default: 0 },
     reduceOnly: { type: Boolean, default: false },
-    purpose: { type: String, enum: ['ENTRY', 'EXIT', 'SL', 'TP'], required: true },
+    purpose: { type: String, enum: ['ENTRY', 'EXIT', 'SL', 'TP', 'GRID', 'HEDGE', 'GRID_TP', 'HEDGE_CLOSE'], required: true },
     error: { type: String, default: null },
   },
   { collection: 'orders', timestamps: true },

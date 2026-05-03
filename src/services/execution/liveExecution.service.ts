@@ -296,7 +296,15 @@ export class LiveExecutionService extends EventEmitter implements IExecutionServ
 
     if (lastFillQty > 0) {
       const dbOrder = await OrderModel.findOne({ clientOrderId }).lean();
-      const purpose = (dbOrder?.purpose ?? 'ENTRY') as 'ENTRY' | 'EXIT' | 'SL' | 'TP';
+      const purpose = (dbOrder?.purpose ?? 'ENTRY') as
+        | 'ENTRY'
+        | 'EXIT'
+        | 'SL'
+        | 'TP'
+        | 'GRID'
+        | 'HEDGE'
+        | 'GRID_TP'
+        | 'HEDGE_CLOSE';
       const positionSide = (dbOrder?.positionSide ?? Side.LONG) as Side;
       const ev: FillEvent = {
         clientOrderId,

@@ -388,6 +388,18 @@ export class TestExecutionService extends EventEmitter implements IExecutionServ
     // Apply to position
     if (p.req.purpose === 'ENTRY') {
       await this.openOrAddPosition(p);
+    } else if (
+      p.req.purpose === 'GRID' ||
+      p.req.purpose === 'HEDGE' ||
+      p.req.purpose === 'GRID_TP' ||
+      p.req.purpose === 'HEDGE_CLOSE'
+    ) {
+      // Grid+Hedge engine owns its own position bookkeeping (multiple
+      // simultaneous positions per symbol, net-exposure model). Skip the
+      // legacy single-position-per-symbol manager — fills are routed back
+      // via onFill() handlers and the engine maintains state.
+      // Realized PnL on closing legs is computed by the engine and applied
+      // to the balance via creditRealizedPnl().
     } else {
       await this.reduceOrClosePosition(p);
     }
@@ -509,6 +521,47 @@ export class TestExecutionService extends EventEmitter implements IExecutionServ
       { symbol, mode: 'test' },
       { $set: { stopPrice, takeProfitPrice } },
     );
+  }
+
+  /**
+   * GridEngine settlement hook. The engine computes realized PnL when a
+   * grid level closes (fill ↔ TP fill) or when a hedge closes; it calls
+   * here to apply the cash effect to the simulator balance and persist a
+   * Trade row for reporting/dashboard.
+   */
+  async creditRealizedPnl(args: {
+    symbol: string;
+    side: Side;
+    entryPrice: number;
+    exitPrice: number;
+    qty: number;
+    fees: number;
+    leverage: number;
+    reason: string;
+    openedAt: number;
+  }): Promise<void> {
+    const direction = args.side === Side.LONG ? 1 : -1;
+    const pnl = (args.exitPrice - args.entryPrice) * args.qty * direction;
+    this.balance += pnl;
+    await TradeModel.create({
+      symbol: args.symbol,
+      side: args.side,
+      mode: 'test',
+      entryPrice: args.entryPrice,
+      exitPrice: args.exitPrice,
+      qty: args.qty,
+      notional: args.qty * args.entryPrice,
+      pnl,
+      fees: args.fees,
+      leverage: args.leverage,
+      reason: args.reason,
+      stopPrice: 0,
+      takeProfitPrice: args.exitPrice,
+      intendedExitPrice: args.exitPrice,
+      openedAt: new Date(args.openedAt),
+      closedAt: new Date(),
+    });
+    void publish(Channels.TRADE_CLOSED, { symbol: args.symbol, pnl, reason: args.reason });
   }
 
   private async reduceOrClosePosition(p: PendingOrder): Promise<void> {

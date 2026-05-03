@@ -8,3 +8,4 @@ export * from './user.model.js';
 export * from './klineCache.model.js';
 export * from './scan.model.js';
 export * from './backtest.model.js';
+export * from './gridState.model.js';

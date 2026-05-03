@@ -86,6 +86,51 @@ export const DefaultConfig = {
     cooldownMs: 10 * 60_000,
   },
 
+  // ---------------------------------------------------------------------
+  // GRID + HEDGE state machine (the active trading strategy).
+  //
+  // Pure price-structure based: NO indicators, NO predictions. Range is
+  // built from recent candle highs/lows; breakouts are price + persistence.
+  // ---------------------------------------------------------------------
+  grid: {
+    /** Range build timeframe — candle interval the engine reads. */
+    timeframe: '5m' as const,
+    /** Number of recent closed candles used to compute hi/lo. */
+    lookback: 30,
+    /** Buffer above max(highs) (1.002 = +0.2%). */
+    upperBuffer: 1.002,
+    /** Buffer below min(lows)  (0.998 = -0.2%). */
+    lowerBuffer: 0.998,
+    /** Minimum range as fraction of price; expanded to this if narrower. */
+    minRangePercent: 0.01,
+    /** Maximum range as fraction of price; shrunk to this if wider. */
+    maxRangePercent: 0.04,
+    /** Spacing between adjacent grid levels (0.0025 = 0.25%). */
+    spacing: 0.0025,
+    /** Per-side concurrent open positions cap. */
+    maxOpenPositionsPerSide: 3,
+    /** Total concurrent open positions cap (longs + shorts). */
+    maxTotalPositions: 6,
+    /** USDT notional per grid order. Floor of 5 to satisfy MIN_NOTIONAL. */
+    orderNotionalUsdt: 25,
+    /** Breakout trigger: |price/band - 1| ≥ this (0.005 = 0.5%). */
+    breakoutPercent: 0.005,
+    /** Number of consecutive timeframe-candles price must remain past band. */
+    breakoutHoldCandles: 3,
+    /** Trend-confirm: extra distance past band (0.005 = 0.5%) to flip RESET. */
+    trendConfirmPercent: 0.005,
+    /** Fake-breakout window: if price returns inside range within this many
+     *  candles of breakout, it's a fake. */
+    fakeBreakoutCandles: 5,
+    /** Chop detection: ≥ this many band-crossings inside chopWindowCandles. */
+    chopCrosses: 2,
+    chopWindowCandles: 4,
+    /** Reset cooldown before re-entering GRID. */
+    cooldownMs: 15 * 60_000,
+    /** Universe selection: top-N USDT perpetuals by 24h quote-volume. */
+    universeSize: 3,
+  },
+
   killSwitch: false,
 
   // Verbose per-tick decision logging. Toggle at runtime via Settings page.
@@ -141,6 +186,28 @@ export const SettingsSchema = z.object({
     .object({
       expiryMs: z.number().int().positive().max(24 * 60 * 60_000),
       cooldownMs: z.number().int().nonnegative().max(24 * 60 * 60_000),
+    })
+    .partial(),
+  grid: z
+    .object({
+      timeframe: z.string().min(1),
+      lookback: z.number().int().min(5).max(500),
+      upperBuffer: z.number().min(1).max(1.05),
+      lowerBuffer: z.number().min(0.95).max(1),
+      minRangePercent: z.number().positive().max(0.5),
+      maxRangePercent: z.number().positive().max(0.5),
+      spacing: z.number().positive().max(0.05),
+      maxOpenPositionsPerSide: z.number().int().min(1).max(50),
+      maxTotalPositions: z.number().int().min(1).max(100),
+      orderNotionalUsdt: z.number().positive().max(100000),
+      breakoutPercent: z.number().nonnegative().max(0.1),
+      breakoutHoldCandles: z.number().int().min(1).max(50),
+      trendConfirmPercent: z.number().nonnegative().max(0.1),
+      fakeBreakoutCandles: z.number().int().min(1).max(50),
+      chopCrosses: z.number().int().min(1).max(20),
+      chopWindowCandles: z.number().int().min(1).max(50),
+      cooldownMs: z.number().int().nonnegative().max(24 * 60 * 60_000),
+      universeSize: z.number().int().min(1).max(20),
     })
     .partial(),
   killSwitch: z.boolean().optional(),

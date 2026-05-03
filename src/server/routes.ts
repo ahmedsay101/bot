@@ -5,12 +5,11 @@ import { signToken, authMiddleware, type AuthedRequest } from './auth.middleware
 import { CONFIG } from '../core/config.js';
 import { saveSettings } from '../services/settings.service.js';
 import { env } from '../core/env.js';
-import { OrderModel, PositionModel, TradeModel, BalanceModel, ScanModel, BacktestModel } from '../models/index.js';
-import type { Orchestrator } from '../services/orchestrator.service.js';
+import { OrderModel, PositionModel, TradeModel, BalanceModel, ScanModel, BacktestModel, GridStateModel } from '../models/index.js';
+import type { GridOrchestrator } from '../services/gridOrchestrator.service.js';
+import type { SymbolUniverseService } from '../services/symbolUniverse.service.js';
 import type { IExecutionService } from '../services/execution/execution.interface.js';
 import type { MarketDataService } from '../services/marketData.service.js';
-import { detectRegime } from '../services/regime.service.js';
-import { rsi, atr, sma, slope as slopeOf } from '../indicators/index.js';
 import { backtestQueue } from '../services/backtest.service.js';
 
 const LoginSchema = z.object({
@@ -19,9 +18,10 @@ const LoginSchema = z.object({
 });
 
 export interface RouterDeps {
-  orchestrator: Orchestrator;
+  orchestrator: GridOrchestrator;
   execution: IExecutionService;
   market: MarketDataService;
+  universe: SymbolUniverseService;
 }
 
 export function buildRouter(deps: RouterDeps): Router {
@@ -55,19 +55,42 @@ export function buildRouter(deps: RouterDeps): Router {
   });
 
   r.get('/symbols/scan', async (_req: Request, res: Response) => {
-    const lastInMem = (deps as RouterDeps).orchestrator;
-    void lastInMem;
+    // Legacy scan view + new universe selection.
     const last = await ScanModel.findOne().sort({ ts: -1 }).lean();
-    res.json(last ?? null);
+    res.json({ legacy: last ?? null, universe: deps.universe.getLast() });
   });
 
-  // Debug / observability: per-symbol last decision + status
+  // -----------------------------------------------------------------------
+  // Grid+Hedge state machine endpoints
+  // -----------------------------------------------------------------------
+  r.get('/grid/state', (_req: Request, res: Response) => {
+    res.json({
+      ts: Date.now(),
+      mode: env.MODE,
+      orchestrator: deps.orchestrator.getState(),
+      symbols: deps.orchestrator.snapshots(),
+    });
+  });
+
+  r.get('/grid/:symbol', (req: Request, res: Response) => {
+    const eng = deps.orchestrator.getEngine(req.params.symbol as string);
+    if (!eng) return res.status(404).json({ error: 'not_found' });
+    res.json(eng.snapshot());
+  });
+
+  r.get('/grid/:symbol/history', async (req: Request, res: Response) => {
+    const doc = await GridStateModel.findOne({ symbol: req.params.symbol, mode: env.MODE }).lean();
+    if (!doc) return res.status(404).json({ error: 'not_found' });
+    res.json(doc);
+  });
+
+  // Debug endpoint — kept under same path as before for dashboard compat.
   r.get('/debug/evaluations', (_req: Request, res: Response) => {
     res.json({
       ts: Date.now(),
       debug: CONFIG().debug,
-      setups: deps.orchestrator.getSetupSnapshot(),
-      evaluations: deps.orchestrator.getLastEvaluations(),
+      orchestrator: deps.orchestrator.getState(),
+      symbols: deps.orchestrator.snapshots(),
     });
   });
 
@@ -112,36 +135,18 @@ export function buildRouter(deps: RouterDeps): Router {
   });
 
   r.get('/strategy/:symbol', async (req: Request, res: Response) => {
+    // Grid-friendly variant: returns recent candles + the engine snapshot for
+    // the symbol. NO indicators are computed.
     const cfg = CONFIG();
     const symbol = req.params.symbol as string;
-    const candles = deps.market.getCandles(symbol, cfg.timeframes.strategy);
-    if (candles.length < 50) return res.status(404).json({ error: 'no_data' });
-    const closes = candles.map((c) => c.close);
-    const highs = candles.map((c) => c.high);
-    const lows = candles.map((c) => c.low);
-    const rsiSeries = rsi(closes, cfg.indicators.rsiPeriod);
-    const atrSeries = atr(highs, lows, closes, cfg.indicators.atrPeriod);
-    const maSeries = sma(closes, cfg.indicators.maPeriod);
-    const slopeSeries = slopeOf(maSeries);
-    const regime = detectRegime(candles);
-    const i = candles.length - 1;
+    const candles = deps.market.getCandles(symbol, cfg.grid.timeframe);
+    if (candles.length === 0) return res.status(404).json({ error: 'no_data' });
+    const eng = deps.orchestrator.getEngine(symbol);
     res.json({
       symbol,
+      timeframe: cfg.grid.timeframe,
       candles: candles.slice(-200),
-      indicators: {
-        rsi: rsiSeries.slice(-200),
-        atr: atrSeries.slice(-200),
-        ma: maSeries.slice(-200),
-        slope: slopeSeries.slice(-200),
-      },
-      latest: {
-        close: closes[i],
-        rsi: rsiSeries[i],
-        atr: atrSeries[i],
-        ma: maSeries[i],
-        slope: slopeSeries[i],
-      },
-      regime,
+      grid: eng?.snapshot() ?? null,
     });
   });
 
