@@ -214,6 +214,7 @@ class DCATrader {
         openedAt: new Date().toISOString()
       };
       this.hedgeCount += 1;
+      this._recomputeTp();
 
       log(
         `DCA ${this.symbol}`,
@@ -236,9 +237,6 @@ class DCATrader {
     // LONG hedge PnL = (exit - entry) * qty
     const grossPnl = (exitPrice - hedge.entryPrice) * hedge.quantity;
     this.hedgeRealizedPnl += grossPnl;
-
-    // Widen TP to cover cumulative hedge losses so net PnL stays positive.
-    this._recomputeTp();
 
     try {
       await this.api.placeMarketOrder({
@@ -390,13 +388,14 @@ class DCATrader {
    */
   _recomputeTp() {
     if (!this.entryPrice) return;
-    const hedgeLoss = Math.max(0, -this.hedgeRealizedPnl); // only count losses
-    const extraPct = this.notional > 0 ? (hedgeLoss / this.notional) * 100 : 0;
-    this.takeProfitPercent = this.baseTakeProfitPercent + extraPct;
+    // Add one hedgeStopLossPercent to TP for every hedge opened.
+    this.takeProfitPercent = this.baseTakeProfitPercent + this.hedgeCount * this.hedgeStopLossPercent;
     this.tpPrice = this.entryPrice * (1 - this.takeProfitPercent / 100);
     log(
       `DCA ${this.symbol}`,
-      `TP widened to ${fmt(this.takeProfitPercent, 2)}% (base ${this.baseTakeProfitPercent}% + ${fmt(extraPct, 2)}% hedge loss) => ${fmt(this.tpPrice, 6)}`
+      `TP widened to ${fmt(this.takeProfitPercent, 2)}% ` +
+      `(base ${this.baseTakeProfitPercent}% + ${this.hedgeCount} x ${this.hedgeStopLossPercent}%) ` +
+      `=> ${fmt(this.tpPrice, 6)}`
     );
   }
 
