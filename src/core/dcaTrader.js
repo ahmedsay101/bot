@@ -33,13 +33,17 @@ class DCATrader {
     this.startPrice = null;
     this.lastPrice = null;
 
-    // Sizing — notional = equityFraction * balance * leverage.
-    // Same notional is reused for the LONG hedge so both sides have equal
-    // exposure (qty is set once on entry and reused when opening the hedge).
+    // Sizing — split equity across traders, then split each trader's slice
+    // across the two sides (main short + hedge), then apply leverage:
+    //   perTrader  = equity / maxTraders          (e.g. 300 / 3 = 100)
+    //   perSide    = perTrader / 2                (e.g. 100 / 2 = 50  → margin)
+    //   notional   = perSide * leverage           (e.g. 50  * 4 = 200)
+    // Same notional is used for the LONG hedge so both sides have equal exposure.
     this.leverage = Number(config.leverage) || 2;
-    this.equityFraction = Number(config.equityFraction) || 0.4;
+    const maxTraders = Math.max(1, Number(config.maxTraders) || 1);
     const balance = Number(equity) || Number(config.startingBalanceUSDT);
-    this.margin = balance * this.equityFraction;
+    this.perTraderEquity = balance / maxTraders;
+    this.margin = this.perTraderEquity / 2;
     this.notional = this.margin * this.leverage;
 
     // Strategy parameters (configurable)

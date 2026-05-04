@@ -43,8 +43,13 @@ function StatCard({ label, value, sub, color }) {
 
 /* ── Price Level Indicator ──────────────────────────────────── */
 /**
- * Shows where the current price sits between the SHORT TP (below entry) and
- * the SHORT entry. If a hedge is open, also marks the hedge entry and SL.
+ * A simple 3-zone gauge that tells you at a glance:
+ *   • where the price is (green pointer + % move from entry)
+ *   • how close it is to TP (left edge) or hedge trigger (right edge)
+ *   • whether the hedge is currently open (with its SL marker)
+ *
+ * Zones, left → right:
+ *   [ PROFIT ] entry [ WATCHING ] +5% trigger [ HEDGED ]
  */
 function PriceLevelIndicator({ trader }) {
   const price = Number(trader.lastPrice);
@@ -52,58 +57,107 @@ function PriceLevelIndicator({ trader }) {
   const entry = Number(trader.entryPrice);
   if (!Number.isFinite(price) || !Number.isFinite(tp) || !Number.isFinite(entry)) return null;
 
-  const trigger = entry * (1 + (Number(trader.hedgeTriggerPercent) || 5) / 100);
-  const high = Math.max(trigger, price) * 1.02;
-  const low = Math.min(tp, price) * 0.99;
-  const range = high - low || 1;
-  const pct = (v) => Math.max(0, Math.min(100, ((v - low) / range) * 100));
-
+  const triggerPct = Number(trader.hedgeTriggerPercent) || 5;
+  const tpPct = Number(trader.takeProfitPercent) || 10;
+  const trigger = entry * (1 + triggerPct / 100);
   const hedge = trader.hedge || null;
 
+  // Render scale: a bit of headroom on both ends so markers near the edges
+  // don't get clipped, and so a runaway price still appears at the far right.
+  const lo = tp * 0.98;
+  const hi = Math.max(trigger, price, hedge ? hedge.entryPrice : 0) * 1.02;
+  const range = hi - lo || 1;
+  const pct = (v) => Math.max(0, Math.min(100, ((v - lo) / range) * 100));
+
+  const moveFromEntry = ((price - entry) / entry) * 100;
+  const hedged = !!hedge;
+
+  // State label + color drives the price-pill style
+  let stateLabel, stateColor;
+  if (hedged) { stateLabel = "HEDGED"; stateColor = "bg-sky-500"; }
+  else if (price <= entry) { stateLabel = "IN PROFIT"; stateColor = "bg-emerald-500"; }
+  else if (price < trigger) { stateLabel = "WATCHING"; stateColor = "bg-amber-500"; }
+  else { stateLabel = "TRIGGERING"; stateColor = "bg-rose-500"; }
+
+  const tpLeft = pct(tp);
+  const entryLeft = pct(entry);
+  const triggerLeft = pct(trigger);
+  const priceLeft = pct(price);
+
   return (
-    <div className="space-y-1">
-      <div className="flex justify-between text-[10px] text-slate-500">
-        <span>TP {fmtPrice(tp)}</span>
-        <span>Entry {fmtPrice(entry)}</span>
-        <span>Hedge @ +{fmt(trader.hedgeTriggerPercent || 5)}%</span>
-      </div>
-      <div className="relative h-3 w-full overflow-hidden rounded-full bg-slate-800">
-        {/* TP zone (profit on short) */}
-        <div className="absolute h-full bg-emerald-500/15" style={{ left: 0, width: `${pct(entry)}%` }} />
-        {/* Loss zone (above entry) */}
+    <div className="space-y-2">
+      {/* The bar itself: three colored zones separated by entry & trigger */}
+      <div className="relative h-8 w-full rounded-md bg-slate-800/60 ring-1 ring-white/5">
+        {/* Profit zone (TP side, left of entry) */}
         <div
-          className="absolute h-full bg-rose-500/10"
-          style={{ left: `${pct(entry)}%`, width: `${100 - pct(entry)}%` }}
+          className="absolute top-0 h-full rounded-l-md bg-emerald-500/15"
+          style={{ left: `${tpLeft}%`, width: `${Math.max(0, entryLeft - tpLeft)}%` }}
         />
-        {/* TP line */}
-        <div className="absolute top-0 h-full w-0.5 bg-emerald-400/80" style={{ left: `${pct(tp)}%` }} />
-        {/* Entry line */}
-        <div className="absolute top-0 h-full w-0.5 bg-amber-400/80" style={{ left: `${pct(entry)}%` }} />
-        {/* Hedge trigger line */}
+        {/* Watching zone (entry → hedge trigger) */}
         <div
-          className="absolute top-0 h-full w-0.5 bg-violet-400/60"
-          style={{ left: `${pct(trigger)}%` }}
+          className="absolute top-0 h-full bg-amber-500/15"
+          style={{ left: `${entryLeft}%`, width: `${Math.max(0, triggerLeft - entryLeft)}%` }}
         />
-        {/* Hedge entry & SL when hedge open */}
-        {hedge && (
-          <>
-            <div
-              className="absolute top-0 h-full w-0.5 bg-sky-400/80"
-              style={{ left: `${pct(hedge.entryPrice)}%` }}
-              title={`Hedge entry ${fmtPrice(hedge.entryPrice)}`}
-            />
-            <div
-              className="absolute top-0 h-full w-0.5 bg-rose-400/80"
-              style={{ left: `${pct(hedge.slPrice)}%` }}
-              title={`Hedge SL ${fmtPrice(hedge.slPrice)}`}
-            />
-          </>
+        {/* Hedged zone (above trigger) */}
+        <div
+          className="absolute top-0 h-full rounded-r-md bg-rose-500/15"
+          style={{ left: `${triggerLeft}%`, right: 0 }}
+        />
+
+        {/* Vertical reference lines */}
+        <div className="absolute top-0 h-full w-px bg-emerald-400/70" style={{ left: `${tpLeft}%` }} />
+        <div className="absolute top-0 h-full w-px bg-amber-400/70" style={{ left: `${entryLeft}%` }} />
+        <div className="absolute top-0 h-full w-px bg-rose-400/70" style={{ left: `${triggerLeft}%` }} />
+
+        {/* Hedge SL marker (only when a hedge is open) */}
+        {hedged && (
+          <div
+            className="absolute top-0 h-full w-px bg-sky-400/80"
+            style={{ left: `${pct(hedge.slPrice)}%` }}
+            title={`Hedge SL ${fmtPrice(hedge.slPrice)}`}
+          />
         )}
+
         {/* Price marker */}
         <div
-          className="absolute top-0 h-full w-1.5 rounded-full bg-sky-300 shadow-lg shadow-sky-400/50 transition-all"
-          style={{ left: `calc(${pct(price)}% - 3px)` }}
-        />
+          className="absolute -top-1 flex h-10 -translate-x-1/2 flex-col items-center"
+          style={{ left: `${priceLeft}%` }}
+        >
+          <div className={`h-10 w-1 rounded-full ${stateColor} shadow-md`} />
+        </div>
+      </div>
+
+      {/* Zone labels under the bar — anchored to each segment */}
+      <div className="relative h-4 text-[10px] font-medium uppercase tracking-wider text-slate-500">
+        <span className="absolute -translate-x-1/2 text-emerald-400" style={{ left: `${(tpLeft + entryLeft) / 2}%` }}>Profit</span>
+        <span className="absolute -translate-x-1/2 text-amber-400" style={{ left: `${(entryLeft + triggerLeft) / 2}%` }}>Watching</span>
+        <span className="absolute -translate-x-1/2 text-rose-400" style={{ left: `${(triggerLeft + 100) / 2}%` }}>Hedged</span>
+      </div>
+
+      {/* Reference prices row */}
+      <div className="flex justify-between text-[11px] font-mono">
+        <div className="text-emerald-400">
+          <span className="text-slate-500 mr-1">TP</span>{fmtPrice(tp)} <span className="text-slate-500">(-{fmt(tpPct)}%)</span>
+        </div>
+        <div className="text-amber-400">
+          <span className="text-slate-500 mr-1">Entry</span>{fmtPrice(entry)}
+        </div>
+        <div className="text-rose-400">
+          <span className="text-slate-500 mr-1">Hedge @</span>{fmtPrice(trigger)} <span className="text-slate-500">(+{fmt(triggerPct)}%)</span>
+        </div>
+      </div>
+
+      {/* Live price + state pill */}
+      <div className="flex items-center justify-between text-xs">
+        <div className="font-mono text-slate-300">
+          Price <span className="text-slate-100">{fmtPrice(price)}</span>{" "}
+          <span className={moveFromEntry >= 0 ? "text-rose-400" : "text-emerald-400"}>
+            ({moveFromEntry >= 0 ? "+" : ""}{fmt(moveFromEntry)}%)
+          </span>
+        </div>
+        <span className={`rounded-md px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-white ${stateColor}`}>
+          {stateLabel}
+        </span>
       </div>
     </div>
   );

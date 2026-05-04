@@ -5,7 +5,7 @@ const config = {
   baseRestUrl: "https://fapi.binance.com",
   baseWsUrl: "wss://fstream.binance.com",
 
-  maxTraders: 1,
+  maxTraders: 3,
   feeRate: 0.0004,
   equityFraction: 0.4,
   leverage: 4,
