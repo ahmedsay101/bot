@@ -137,7 +137,8 @@ function PriceLevelIndicator({ trader }) {
       {/* Reference prices row */}
       <div className="flex justify-between text-[11px] font-mono">
         <div className="text-emerald-400">
-          <span className="text-slate-500 mr-1">TP</span>{fmtPrice(tp)} <span className="text-slate-500">(-{fmt(tpPct)}%)</span>
+          <span className="text-slate-500 mr-1">TP</span>{fmtPrice(tp)}{" "}
+          <span className="text-slate-500">(-{fmt(trader.takeProfitPercent || tpPct)}%)</span>
         </div>
         <div className="text-amber-400">
           <span className="text-slate-500 mr-1">Entry</span>{fmtPrice(entry)}
@@ -300,7 +301,17 @@ function TraderCard({ trader, onDestroy }) {
                 <p className="font-mono text-amber-400">{fmtPrice(trader.entryPrice)}</p>
               </div>
               <div>
-                <p className="text-[10px] uppercase text-slate-500">TP ({fmt(trader.takeProfitPercent || 10)}%)</p>
+                <p className="text-[10px] uppercase text-slate-500">
+                  TP{" "}
+                  {trader.takeProfitPercent > (trader.baseTakeProfitPercent || trader.takeProfitPercent) ? (
+                    <span className="text-rose-400">{fmt(trader.takeProfitPercent || 10)}%</span>
+                  ) : (
+                    <span>{fmt(trader.takeProfitPercent || 10)}%</span>
+                  )}
+                  {trader.takeProfitPercent > (trader.baseTakeProfitPercent || trader.takeProfitPercent) && (
+                    <span className="ml-1 text-slate-600">(base {fmt(trader.baseTakeProfitPercent)}%)</span>
+                  )}
+                </p>
                 <p className="font-mono text-emerald-400">{fmtPrice(trader.tpPrice)}</p>
               </div>
               <div>

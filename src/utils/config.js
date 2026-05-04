@@ -16,7 +16,7 @@ const config = {
   minChange24hPercent: 60,
 
   // Strategy parameters
-  takeProfitPercent: 30,        // Short TP — price drops 10% from entry
+  takeProfitPercent: 3,        // Short TP — price drops 10% from entry
   hedgeTriggerPercent: 10,       // Open hedge when short is losing this %
   hedgeStopLossPercent: 10,      // Hedge SL — price drops 5% from hedge entry
   maxHedgesPerTrader: 3,        // Hard cap on hedge cycles before trader force-closes (0 = unlimited)

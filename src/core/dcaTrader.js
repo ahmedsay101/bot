@@ -47,7 +47,8 @@ class DCATrader {
     this.notional = this.margin * this.leverage;
 
     // Strategy parameters (configurable)
-    this.takeProfitPercent = Number(config.takeProfitPercent) || 10;
+    this.baseTakeProfitPercent = Number(config.takeProfitPercent) || 10; // never changes
+    this.takeProfitPercent = this.baseTakeProfitPercent;                 // effective — grows with hedge losses
     this.hedgeTriggerPercent = Number(config.hedgeTriggerPercent) || 5;
     this.hedgeStopLossPercent = Number(config.hedgeStopLossPercent) || 5;
     this.maxHedgesPerTrader = Number(config.maxHedgesPerTrader) || 0; // 0 = unlimited
@@ -236,6 +237,9 @@ class DCATrader {
     const grossPnl = (exitPrice - hedge.entryPrice) * hedge.quantity;
     this.hedgeRealizedPnl += grossPnl;
 
+    // Widen TP to cover cumulative hedge losses so net PnL stays positive.
+    this._recomputeTp();
+
     try {
       await this.api.placeMarketOrder({
         symbol: this.symbol,
@@ -371,6 +375,31 @@ class DCATrader {
     void hedgePnl; // already accumulated into hedgeRealizedPnl
   }
 
+  // ── TP recomputation ────────────────────────────────────────
+
+  /**
+   * After each hedge close, widen the TP so the short's profit covers:
+   *   (a) the base take-profit target, AND
+   *   (b) all realized hedge losses so far.
+   *
+   * effectiveTpPct = baseTpPct + (totalHedgeLoss / notional) * 100
+   * tpPrice        = entryPrice * (1 - effectiveTpPct / 100)
+   *
+   * If hedgeRealizedPnl is positive (rare — hedge closed in profit), the TP
+   * tightens back toward base, but never below it.
+   */
+  _recomputeTp() {
+    if (!this.entryPrice) return;
+    const hedgeLoss = Math.max(0, -this.hedgeRealizedPnl); // only count losses
+    const extraPct = this.notional > 0 ? (hedgeLoss / this.notional) * 100 : 0;
+    this.takeProfitPercent = this.baseTakeProfitPercent + extraPct;
+    this.tpPrice = this.entryPrice * (1 - this.takeProfitPercent / 100);
+    log(
+      `DCA ${this.symbol}`,
+      `TP widened to ${fmt(this.takeProfitPercent, 2)}% (base ${this.baseTakeProfitPercent}% + ${fmt(extraPct, 2)}% hedge loss) => ${fmt(this.tpPrice, 6)}`
+    );
+  }
+
   // ── PnL helpers ─────────────────────────────────────────────
 
   _calcUnrealizedPnl(price) {
@@ -409,6 +438,7 @@ class DCATrader {
       leverage: this.leverage,
       notional: this.notional,
       margin: this.margin,
+      baseTakeProfitPercent: this.baseTakeProfitPercent,
       takeProfitPercent: this.takeProfitPercent,
       hedgeTriggerPercent: this.hedgeTriggerPercent,
       hedgeStopLossPercent: this.hedgeStopLossPercent,
