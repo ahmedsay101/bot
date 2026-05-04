@@ -19,6 +19,7 @@ const config = {
   takeProfitPercent: 10,        // Short TP — price drops 10% from entry
   hedgeTriggerPercent: 5,       // Open hedge when short is losing this %
   hedgeStopLossPercent: 5,      // Hedge SL — price drops 5% from hedge entry
+  maxHedgesPerTrader: 6,        // Hard cap on hedge cycles before trader force-closes (0 = unlimited)
 
   recvWindow: 5000
 };

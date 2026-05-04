@@ -352,6 +352,7 @@ function TraderHistoryTable({ history }) {
             <th className="py-2 pr-3 text-right">Exit</th>
             <th className="py-2 pr-3 text-right">Hedges</th>
             <th className="py-2 pr-3 text-right">PnL</th>
+            <th className="py-2 pr-3 text-right">Hedge PnL</th>
             <th className="py-2 pr-3 text-right">Fees</th>
             <th className="py-2 pr-3">Reason</th>
             <th className="py-2 pr-3">Duration</th>
@@ -369,6 +370,9 @@ function TraderHistoryTable({ history }) {
               <td className={`py-1.5 pr-3 text-right font-mono font-bold ${pnlColor(h.realizedPnl)}`}>
                 ${fmt(h.realizedPnl, 4)}
               </td>
+              <td className={`py-1.5 pr-3 text-right font-mono ${pnlColor(h.hedgeRealizedPnl)}`}>
+                ${fmt(h.hedgeRealizedPnl, 4)}
+              </td>
               <td className="py-1.5 pr-3 text-right font-mono text-slate-500">${fmt(h.feesPaid, 4)}</td>
               <td className="py-1.5 pr-3">
                 <span className={`rounded-md px-1.5 py-0.5 text-[10px] font-bold uppercase ${
@@ -376,6 +380,8 @@ function TraderHistoryTable({ history }) {
                     ? "bg-emerald-500/15 text-emerald-400"
                     : h.reason === "manual"
                     ? "bg-amber-500/15 text-amber-400"
+                    : h.reason === "max-hedges"
+                    ? "bg-rose-500/15 text-rose-400"
                     : "bg-slate-700/50 text-slate-400"
                 }`}>
                   {h.reason}

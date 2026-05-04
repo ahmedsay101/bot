@@ -46,6 +46,11 @@ class DCATrader {
     this.takeProfitPercent = Number(config.takeProfitPercent) || 10;
     this.hedgeTriggerPercent = Number(config.hedgeTriggerPercent) || 5;
     this.hedgeStopLossPercent = Number(config.hedgeStopLossPercent) || 5;
+    this.maxHedgesPerTrader = Number(config.maxHedgesPerTrader) || 0; // 0 = unlimited
+
+    // Serialize tick handling so concurrent markPrice + bookTicker events
+    // can't double-open or double-close a hedge while we await order calls.
+    this._tickBusy = false;
 
     // Main short state
     this.entryPrice = 0;
@@ -128,39 +133,61 @@ class DCATrader {
   // ── Tick / strategy ─────────────────────────────────────────
 
   async _tick(price) {
-    if (!this.active) return;
-
-    // 1) Main TP — destroys the trader.
-    if (price <= this.tpPrice) {
-      log(`DCA ${this.symbol}`, `TP hit @ ${fmt(price, 6)} <= ${fmt(this.tpPrice, 6)}`);
-      await this.destroy("take-profit");
-      return;
-    }
-
-    // 2) Hedge SL — close hedge only.
-    if (this.hedge && price <= this.hedge.slPrice) {
-      log(
-        `DCA ${this.symbol}`,
-        `Hedge SL hit @ ${fmt(price, 6)} <= ${fmt(this.hedge.slPrice, 6)}`
-      );
-      await this._closeHedge(price, "stop-loss");
-    }
-
-    // 3) Open hedge if short is losing enough and no hedge is open.
-    if (!this.hedge && this.entryPrice > 0) {
-      const lossPct = ((price - this.entryPrice) / this.entryPrice) * 100;
-      if (lossPct >= this.hedgeTriggerPercent) {
-        await this._openHedge(price);
+    if (!this.active || this._tickBusy) return;
+    this._tickBusy = true;
+    try {
+      // 1) Main TP — destroys the trader.
+      if (price <= this.tpPrice) {
+        log(`DCA ${this.symbol}`, `TP hit @ ${fmt(price, 6)} <= ${fmt(this.tpPrice, 6)}`);
+        await this.destroy("take-profit");
+        return;
       }
-    }
 
-    this._trackHighestProfit();
-    this._updateStore();
+      // 2) Hedge SL — close hedge only.
+      if (this.hedge && price <= this.hedge.slPrice) {
+        log(
+          `DCA ${this.symbol}`,
+          `Hedge SL hit @ ${fmt(price, 6)} <= ${fmt(this.hedge.slPrice, 6)}`
+        );
+        await this._closeHedge(price, "stop-loss");
+      }
+
+      // 3) Hedge cap — if we've blown through the configured cycle budget,
+      //    force-close the trader instead of opening yet another hedge.
+      if (
+        this.maxHedgesPerTrader > 0 &&
+        this.hedgeCount >= this.maxHedgesPerTrader &&
+        !this.hedge
+      ) {
+        log(
+          `DCA ${this.symbol}`,
+          `Max hedges (${this.maxHedgesPerTrader}) reached — force closing`
+        );
+        await this.destroy("max-hedges");
+        return;
+      }
+
+      // 4) Open hedge if short is losing enough and no hedge is open.
+      if (!this.hedge && this.entryPrice > 0) {
+        const lossPct = ((price - this.entryPrice) / this.entryPrice) * 100;
+        if (lossPct >= this.hedgeTriggerPercent) {
+          await this._openHedge(price);
+        }
+      }
+
+      this._trackHighestProfit();
+      this._updateStore();
+    } finally {
+      this._tickBusy = false;
+    }
   }
 
   // ── Hedge ───────────────────────────────────────────────────
 
   async _openHedge(price) {
+    // Defensive double-check — _tick is locked, but be explicit so any
+    // future caller can't accidentally open a second hedge.
+    if (this.hedge) return;
     try {
       const result = await this.api.placeMarketOrder({
         symbol: this.symbol,
@@ -276,6 +303,30 @@ class DCATrader {
     const totalGrossPnl = shortGrossPnl + this.hedgeRealizedPnl;
     this.realizedPnl = totalGrossPnl - this.feesPaid;
     this.totalTrades = 1 + this.hedgeCount;
+
+    // Reconciliation: after the trader closes, both position buckets on the
+    // exchange/simulator should be flat. Any residual qty means our internal
+    // hedgeCount/hedgeRealizedPnl drifted from reality (race, missed fill,
+    // exchange rejection, etc.) — surface it loudly instead of silently
+    // reporting an impossible PnL.
+    try {
+      const [shortPos, longPos] = await Promise.all([
+        this.api.getPosition(this.symbol, "SHORT"),
+        this.api.getPosition(this.symbol, "LONG")
+      ]);
+      const shortQty = Math.abs(Number(shortPos?.qty) || 0);
+      const longQty = Math.abs(Number(longPos?.qty) || 0);
+      if (shortQty > 1e-8 || longQty > 1e-8) {
+        log(
+          `DCA ${this.symbol}`,
+          `RECONCILE WARNING: residual position after close ` +
+          `SHORT=${shortQty} LONG=${longQty} — internal PnL ($${fmt(this.realizedPnl, 4)}) ` +
+          `may not match exchange. Investigate hedgeCount=${this.hedgeCount}.`
+        );
+      }
+    } catch (err) {
+      log(`DCA ${this.symbol}`, `Reconcile check failed: ${err.message}`);
+    }
 
     this.tradeHistory.push({
       direction: "SHORT",
