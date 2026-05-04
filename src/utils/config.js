@@ -5,7 +5,7 @@ const config = {
   baseRestUrl: "https://fapi.binance.com",
   baseWsUrl: "wss://fstream.binance.com",
 
-  maxTraders: 3,
+  maxTraders: 1,
   feeRate: 0.0004,
   equityFraction: 0.4,
   leverage: 4,
@@ -16,10 +16,10 @@ const config = {
   minChange24hPercent: 60,
 
   // Strategy parameters
-  takeProfitPercent: 10,        // Short TP — price drops 10% from entry
-  hedgeTriggerPercent: 5,       // Open hedge when short is losing this %
-  hedgeStopLossPercent: 5,      // Hedge SL — price drops 5% from hedge entry
-  maxHedgesPerTrader: 6,        // Hard cap on hedge cycles before trader force-closes (0 = unlimited)
+  takeProfitPercent: 30,        // Short TP — price drops 10% from entry
+  hedgeTriggerPercent: 10,       // Open hedge when short is losing this %
+  hedgeStopLossPercent: 10,      // Hedge SL — price drops 5% from hedge entry
+  maxHedgesPerTrader: 3,        // Hard cap on hedge cycles before trader force-closes (0 = unlimited)
 
   recvWindow: 5000
 };
