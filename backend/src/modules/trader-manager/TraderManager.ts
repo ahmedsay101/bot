@@ -136,11 +136,11 @@ export class TraderManager extends EventEmitter {
       );
 
       const hedgeLevels = await this.db.$queryRaw<Array<{ level: number; entryPrice: string; stopPrice: string; tpPrice: string; status: string }>>`
-        SELECT DISTINCT ON (hedge_level) hedge_level as level, price as "entryPrice", stop_price as "stopPrice",
+        SELECT DISTINCT ON ("hedgeLevel") "hedgeLevel" as level, price as "entryPrice", "stopPrice",
                '0' as "tpPrice", status
         FROM "Order"
-        WHERE trader_id = ${dbTrader.id} AND role = 'HEDGE'
-        ORDER BY hedge_level, created_at DESC
+        WHERE "traderId" = ${dbTrader.id} AND role = 'HEDGE'
+        ORDER BY "hedgeLevel", "createdAt" DESC
       `;
 
       await trader.restore({
