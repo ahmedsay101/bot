@@ -1,6 +1,6 @@
 import React from 'react';
-import { Grid, Card, CardContent, Typography, Box, Button, Chip, Alert } from '@mui/material';
-import { TrendingUp, TrendingDown, People, CheckCircle, Warning } from '@mui/icons-material';
+import { Grid, Card, CardContent, Typography, Box, Button, Chip, Alert, Paper } from '@mui/material';
+import { TrendingUp, TrendingDown, People, CheckCircle, AccountBalanceWallet } from '@mui/icons-material';
 import {
   useStatsSummary,
   useGlobalStats,
@@ -64,6 +64,65 @@ export function DashboardPage(): React.ReactElement {
       {stopMutation.isSuccess && (
         <Alert severity="warning" sx={{ mb: 2 }}>Emergency stop executed. All positions closed.</Alert>
       )}
+
+      <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
+        <Box display="flex" alignItems="center" gap={1} mb={2}>
+          <AccountBalanceWallet color="primary" />
+          <Typography variant="h6" fontWeight="bold">Equity Overview</Typography>
+          <Chip
+            label={stats?.tradingMode ?? 'SIMULATION'}
+            size="small"
+            color={stats?.tradingMode === 'LIVE' ? 'error' : 'info'}
+            sx={{ ml: 1 }}
+          />
+        </Box>
+        <Grid container spacing={2}>
+          <Grid item xs={6} sm={3}>
+            <Box textAlign="center" sx={{ p: 1.5, borderRadius: 1, bgcolor: 'background.default' }}>
+              <Typography variant="caption" color="text.secondary" display="block">Total Equity</Typography>
+              <Typography variant="h6" fontWeight="bold" color={parseFloat(stats?.totalEquity ?? '0') >= 0 ? 'success.main' : 'error.main'}>
+                ${parseFloat(stats?.totalEquity ?? '0').toFixed(2)}
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                {stats?.tradingMode === 'LIVE' ? 'Live USDT balance' : '$200 base + PnL'}
+              </Typography>
+            </Box>
+          </Grid>
+          <Grid item xs={6} sm={3}>
+            <Box textAlign="center" sx={{ p: 1.5, borderRadius: 1, bgcolor: 'background.default' }}>
+              <Typography variant="caption" color="text.secondary" display="block">Per Trader</Typography>
+              <Typography variant="h6" fontWeight="bold">
+                ${parseFloat(stats?.equityPerTrader ?? '0').toFixed(2)}
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                ÷ {stats?.maxTraders ?? '-'} max traders
+              </Typography>
+            </Box>
+          </Grid>
+          <Grid item xs={6} sm={3}>
+            <Box textAlign="center" sx={{ p: 1.5, borderRadius: 1, bgcolor: 'background.default' }}>
+              <Typography variant="caption" color="text.secondary" display="block">Per Position</Typography>
+              <Typography variant="h6" fontWeight="bold">
+                ${parseFloat(stats?.positionEquity ?? '0').toFixed(2)}
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                ÷ 2 (short + hedge)
+              </Typography>
+            </Box>
+          </Grid>
+          <Grid item xs={6} sm={3}>
+            <Box textAlign="center" sx={{ p: 1.5, borderRadius: 1, bgcolor: 'background.default' }}>
+              <Typography variant="caption" color="text.secondary" display="block">Position Notional</Typography>
+              <Typography variant="h6" fontWeight="bold" color="primary.main">
+                ${parseFloat(stats?.positionNotional ?? '0').toFixed(2)}
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                × {stats?.leverage ?? '-'}x leverage
+              </Typography>
+            </Box>
+          </Grid>
+        </Grid>
+      </Paper>
 
       <Grid container spacing={2} mb={3}>
         <Grid item xs={6} sm={3}>

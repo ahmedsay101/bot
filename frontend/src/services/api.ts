@@ -149,6 +149,13 @@ export interface GlobalStats {
   totalFees: string;
   dailyPnl: string;
   winRate: string;
+  totalEquity: string;
+  equityPerTrader: string;
+  positionEquity: string;
+  positionNotional: string;
+  maxTraders: number;
+  leverage: number;
+  tradingMode: string;
 }
 
 export interface StatsSummary {

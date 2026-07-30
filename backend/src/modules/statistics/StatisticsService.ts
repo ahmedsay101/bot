@@ -1,5 +1,6 @@
 import Decimal from 'decimal.js';
 import type { PrismaClient } from '@prisma/client';
+import type { BinanceClient } from '../binance/client';
 import { createContextLogger } from '../logger';
 
 const log = createContextLogger('StatisticsService');
@@ -12,6 +13,14 @@ export interface GlobalStats {
   totalFees: string;
   dailyPnl: string;
   winRate: string;
+  // Equity breakdown
+  totalEquity: string;
+  equityPerTrader: string;
+  positionEquity: string;
+  positionNotional: string;
+  maxTraders: number;
+  leverage: number;
+  tradingMode: string;
 }
 
 export interface TraderStats {
@@ -29,7 +38,11 @@ export interface TraderStats {
 }
 
 export class StatisticsService {
-  constructor(private readonly db: PrismaClient) {}
+  constructor(
+    private readonly db: PrismaClient,
+    private readonly binanceClient: BinanceClient,
+    private readonly mode: 'LIVE' | 'SIMULATION',
+  ) {}
 
   async getGlobalStatistics(): Promise<GlobalStats> {
     const [traders, completedStats] = await Promise.all([
@@ -70,6 +83,27 @@ export class StatisticsService {
       new Decimal(0),
     );
 
+    const cfg = await this.db.configuration.findUnique({ where: { id: 'singleton' } });
+    const maxTraders = cfg?.maxTraders ?? 1;
+    const leverage = cfg?.leverage ?? 10;
+
+    let totalEquity: Decimal;
+    if (this.mode === 'SIMULATION') {
+      totalEquity = new Decimal('200').plus(totalRealizedPnl);
+    } else {
+      try {
+        const balances = await this.binanceClient.getAccountBalance();
+        const usdt = balances.find((b) => b.asset === 'USDT');
+        totalEquity = usdt != null ? new Decimal(usdt.balance) : new Decimal(0);
+      } catch {
+        totalEquity = new Decimal(0);
+      }
+    }
+
+    const equityPerTrader = maxTraders > 0 ? totalEquity.div(maxTraders) : totalEquity;
+    const positionEquity = equityPerTrader.div(2);
+    const positionNotional = positionEquity.mul(leverage);
+
     const stats: GlobalStats = {
       totalTraders: traders.length,
       activeTraders,
@@ -78,6 +112,13 @@ export class StatisticsService {
       totalFees: totalFees.toFixed(4),
       dailyPnl: dailyPnl.toFixed(4),
       winRate,
+      totalEquity: totalEquity.toFixed(2),
+      equityPerTrader: equityPerTrader.toFixed(2),
+      positionEquity: positionEquity.toFixed(2),
+      positionNotional: positionNotional.toFixed(2),
+      maxTraders,
+      leverage,
+      tradingMode: this.mode,
     };
 
     // Persist to global statistics table

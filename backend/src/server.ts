@@ -69,7 +69,7 @@ async function bootstrap(): Promise<void> {
   }
 
   // Services
-  const statisticsService = new StatisticsService(db);
+  const statisticsService = new StatisticsService(db, binanceClient, config.trading.mode);
 
   // Trader manager
   const traderManager = new TraderManager(

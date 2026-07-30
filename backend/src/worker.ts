@@ -21,7 +21,8 @@ async function bootstrap(): Promise<void> {
   const binanceClient = new BinanceClient();
   await binanceClient.initialize();
 
-  const statisticsService = new StatisticsService(db);
+  const mode = (process.env.TRADING_MODE ?? 'SIMULATION') as 'LIVE' | 'SIMULATION';
+  const statisticsService = new StatisticsService(db, binanceClient, mode);
 
   // Dummy trader manager for worker (workers only need stats + health)
   const dummyManager = {
