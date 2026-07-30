@@ -126,44 +126,53 @@ export class TraderManager extends EventEmitter {
         continue;
       }
 
-      const trader = new Trader(
-        dbTrader.id,
-        dbTrader.symbol,
-        dbTrader.mode as TraderMode,
-        this.executionProvider,
-        this.traderConfig,
-        this.db,
-      );
+      try {
+        const trader = new Trader(
+          dbTrader.id,
+          dbTrader.symbol,
+          dbTrader.mode as TraderMode,
+          this.executionProvider,
+          this.traderConfig,
+          this.db,
+        );
 
-      const hedgeLevels = await this.db.$queryRaw<Array<{ level: number; entryPrice: string; stopPrice: string; tpPrice: string; status: string }>>`
-        SELECT DISTINCT ON ("hedgeLevel") "hedgeLevel" as level, price as "entryPrice", "stopPrice",
-               '0' as "tpPrice", status
-        FROM "Order"
-        WHERE "traderId" = ${dbTrader.id} AND role = 'HEDGE'
-        ORDER BY "hedgeLevel", "createdAt" DESC
-      `;
+        const hedgeLevels = await this.db.$queryRaw<Array<{ level: number; entryPrice: string; stopPrice: string; tpPrice: string; status: string }>>`
+          SELECT DISTINCT ON ("hedgeLevel") "hedgeLevel" as level, price as "entryPrice", "stopPrice",
+                 '0' as "tpPrice", status
+          FROM "Order"
+          WHERE "traderId" = ${dbTrader.id} AND role = 'HEDGE'
+          ORDER BY "hedgeLevel", "createdAt" DESC
+        `;
 
-      await trader.restore({
-        shortEntryPrice: dbTrader.shortEntryPrice,
-        shortTpPrice: dbTrader.shortTpPrice,
-        currentHedgeLevel: dbTrader.currentHedgeLevel,
-        hedgeLevels: hedgeLevels.map((h) => ({
-          level: h.level,
-          entryPrice: h.entryPrice,
-          stopPrice: h.stopPrice ?? '0',
-          tpPrice: h.tpPrice,
-          status: h.status as import('../../types').HedgeLevel['status'],
-        })),
-        status: dbTrader.status as import('../../types').TraderStatus,
-        realizedPnl: dbTrader.realizedPnl,
-        unrealizedPnl: dbTrader.unrealizedPnl,
-      });
+        await trader.restore({
+          shortEntryPrice: dbTrader.shortEntryPrice,
+          shortTpPrice: dbTrader.shortTpPrice,
+          currentHedgeLevel: dbTrader.currentHedgeLevel,
+          hedgeLevels: hedgeLevels.map((h) => ({
+            level: h.level,
+            entryPrice: h.entryPrice,
+            stopPrice: h.stopPrice ?? '0',
+            tpPrice: h.tpPrice,
+            status: h.status as import('../../types').HedgeLevel['status'],
+          })),
+          status: dbTrader.status as import('../../types').TraderStatus,
+          realizedPnl: dbTrader.realizedPnl,
+          unrealizedPnl: dbTrader.unrealizedPnl,
+        });
 
-      this.wireTraderEvents(trader);
-      this.traders.set(trader.getId(), trader);
-      this.symbolToTrader.set(dbTrader.symbol, trader.getId());
+        this.wireTraderEvents(trader);
+        this.traders.set(trader.getId(), trader);
+        this.symbolToTrader.set(dbTrader.symbol, trader.getId());
 
-      log.info(`Restored trader ${trader.getId()} for ${dbTrader.symbol}`);
+        log.info(`Restored trader ${trader.getId()} for ${dbTrader.symbol}`);
+      } catch (err) {
+        // Symbol may have been delisted; mark as FAILED and continue
+        log.warn(`Failed to restore trader for ${dbTrader.symbol}, marking FAILED`, { error: String(err) });
+        await this.db.trader.update({
+          where: { id: dbTrader.id },
+          data: { status: 'FAILED' },
+        });
+      }
     }
 
     log.info(`Restored ${this.traders.size} active traders from database`);
