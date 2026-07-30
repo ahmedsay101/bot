@@ -11,6 +11,7 @@ export default defineConfig({
   },
   server: {
     port: 3000,
+    allowedHosts: 'all',
     proxy: {
       '/api': {
         target: 'http://backend:5000',
