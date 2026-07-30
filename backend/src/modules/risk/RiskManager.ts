@@ -14,7 +14,6 @@ export class RiskValidationError extends Error {
 
 export class RiskManager {
   private openOrderClientIds = new Set<string>();
-  private lastClockCheck = Date.now();
   private readonly maxClockDriftMs = 5000;
 
   validateOrder(req: OrderRequest, symbolInfo: SymbolInfo, availableBalance: string): void {

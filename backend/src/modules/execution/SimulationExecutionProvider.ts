@@ -92,14 +92,14 @@ export class SimulationExecutionProvider extends EventEmitter implements IExecut
       type: req.type,
       status,
       quantity: adjustedQty,
-      price: req.price != null ? adjustPrice(req.price, symbolInfo) : undefined,
-      stopPrice: req.stopPrice != null ? adjustPrice(req.stopPrice, symbolInfo) : undefined,
+      price: req.price != null ? adjustPrice(req.price, symbolInfo) : null,
+      stopPrice: req.stopPrice != null ? adjustPrice(req.stopPrice, symbolInfo) : null,
       filledQuantity: status === 'FILLED' ? adjustedQty : '0',
-      avgFillPrice: fillPrice,
+      avgFillPrice: fillPrice ?? null,
       fee,
       feeCurrency: 'USDT',
       createdAt: new Date(),
-      filledAt: status === 'FILLED' ? new Date() : undefined,
+      filledAt: status === 'FILLED' ? new Date() : null,
     };
 
     this.orders.set(req.clientOrderId, { req, result, isOpen: status === 'NEW' });

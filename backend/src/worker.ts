@@ -36,7 +36,7 @@ async function bootstrap(): Promise<void> {
   };
 
   await scheduleRecurringJobs();
-  startWorkers(statisticsService, dummyManager as import('./modules/trader-manager/TraderManager').TraderManager);
+  startWorkers(statisticsService, dummyManager as unknown as import('./modules/trader-manager/TraderManager').TraderManager);
 
   log.info('Worker process started');
 

@@ -1,4 +1,4 @@
-import { Queue, Worker, Job } from 'bullmq';
+import { Queue } from 'bullmq';
 import IORedis from 'ioredis';
 import { config } from '../../config';
 import { createContextLogger } from '../logger';

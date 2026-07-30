@@ -58,14 +58,14 @@ export interface OrderResult {
   type: OrderType;
   status: OrderStatus;
   quantity: string;
-  price?: string;
-  stopPrice?: string;
+  price: string | null;
+  stopPrice: string | null;
   filledQuantity: string;
-  avgFillPrice?: string;
+  avgFillPrice: string | null;
   fee: string;
   feeCurrency: string;
   createdAt: Date;
-  filledAt?: Date;
+  filledAt: Date | null;
 }
 
 export interface CancelOrderRequest {
@@ -141,9 +141,9 @@ export interface OrderUpdate {
   symbol: string;
   status: OrderStatus;
   filledQuantity: string;
-  avgFillPrice?: string;
-  fee?: string;
-  feeCurrency?: string;
+  avgFillPrice: string | null;
+  fee: string | null;
+  feeCurrency: string | null;
   timestamp: number;
 }
 

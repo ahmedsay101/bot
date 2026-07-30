@@ -95,7 +95,7 @@ export class BinanceClient {
 
   private sign(params: Record<string, string | number | boolean>): string {
     const query = new URLSearchParams(
-      Object.entries(params).map(([k, v]) => [k, String(v)]),
+      Object.entries(params).map(([k, v]) => [k, String(v)]) as [string, string][],
     ).toString();
     const sig = crypto.createHmac('sha256', config.binance.secretKey).update(query).digest('hex');
     return `${query}&signature=${sig}`;
@@ -250,11 +250,11 @@ export class BinanceClient {
       price: res.price !== '0' ? res.price : undefined,
       stopPrice: res.stopPrice !== '0' ? res.stopPrice : undefined,
       filledQuantity: res.executedQty,
-      avgFillPrice: res.avgPrice ?? undefined,
+      avgFillPrice: res.avgPrice ?? null,
       fee: res.commission ?? '0',
       feeCurrency: res.commissionAsset ?? 'USDT',
       createdAt: new Date(),
-      filledAt: res.executedQty === res.origQty ? new Date(res.updateTime) : undefined,
+      filledAt: res.executedQty === res.origQty ? new Date(res.updateTime) : null,
     };
   }
 

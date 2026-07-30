@@ -196,9 +196,9 @@ export class WebSocketManager extends EventEmitter {
         symbol: order.s as string,
         status: order.X as OrderUpdate['status'],
         filledQuantity: order.z as string,
-        avgFillPrice: (order.ap as string) || undefined,
-        fee: (order.n as string) || undefined,
-        feeCurrency: (order.N as string) || undefined,
+        avgFillPrice: (order.ap as string) || null,
+        fee: (order.n as string) || null,
+        feeCurrency: (order.N as string) || null,
         timestamp: data.E as number,
       };
 

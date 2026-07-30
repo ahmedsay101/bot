@@ -15,6 +15,7 @@ import {
   calcHedgeEntry,
   calcHedgeTp,
   calcNextHedgeEntry,
+  calcFee,
   adjustPrice,
   adjustQuantity,
   validateNotional,
