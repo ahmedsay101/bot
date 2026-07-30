@@ -14,11 +14,11 @@ import { createStatisticsRouter } from './api/routes/statistics';
 import { createSystemRouter } from './api/routes/system';
 import { createConfigRouter } from './api/routes/config';
 import { errorHandler, notFoundHandler } from './api/middleware/error';
-import type { TraderManager } from '../modules/trader-manager/TraderManager';
-import type { StatisticsService } from '../modules/statistics/StatisticsService';
-import type { BinanceClient } from '../modules/binance/client';
-import type { WebSocketManager } from '../modules/websocket/manager';
-import { createContextLogger } from '../modules/logger';
+import type { TraderManager } from './modules/trader-manager/TraderManager';
+import type { StatisticsService } from './modules/statistics/StatisticsService';
+import type { BinanceClient } from './modules/binance/client';
+import type { WebSocketManager } from './modules/websocket/manager';
+import { createContextLogger } from './modules/logger';
 
 const log = createContextLogger('App');
 
