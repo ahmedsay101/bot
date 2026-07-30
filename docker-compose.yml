@@ -123,9 +123,9 @@ services:
       - "3000:3000"
     volumes:
       - ./frontend/src:/app/src
+      - ./frontend/vite.config.ts:/app/vite.config.ts
     environment:
-      VITE_API_URL: http://localhost:5000/api
-      VITE_WS_URL: ws://localhost:5000/ws
+      NODE_ENV: development
     depends_on:
       - backend
     networks:
