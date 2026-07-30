@@ -31,6 +31,9 @@ export function createApp(
 ): ReturnType<typeof createServer> {
   const app = express();
 
+  // Required when running behind a reverse proxy (Nginx)
+  app.set('trust proxy', true);
+
   // Security middlewares
   app.use(helmet());
   app.use(cors({ origin: process.env.CORS_ORIGIN ?? 'http://localhost:3000', credentials: true }));

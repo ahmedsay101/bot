@@ -1,7 +1,8 @@
 import { useEffect, useRef } from 'react';
 import { useSystemStore } from '../stores/systemStore';
 
-const WS_URL = import.meta.env.VITE_WS_URL ?? `ws://${window.location.host}/ws`;
+const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+const WS_URL = import.meta.env.VITE_WS_URL ?? `${wsProtocol}//${window.location.host}/ws`;
 
 export function useWebSocket(): void {
   const ws = useRef<WebSocket | null>(null);
