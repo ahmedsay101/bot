@@ -212,23 +212,37 @@ export class SimulationExecutionProvider extends EventEmitter implements IExecut
       if (!order.isOpen || order.req.symbol !== symbol) continue;
 
       let triggered = false;
+      let fillAt = markPrice; // default: fill at mark (market)
 
-      if (order.req.type === 'STOP_LIMIT' && order.req.stopPrice != null) {
-        const stop = new Decimal(order.req.stopPrice);
-        if (order.req.side === 'BUY' && mark.gte(stop)) triggered = true;
-        if (order.req.side === 'SELL' && mark.lte(stop)) triggered = true;
-      } else if (order.req.type === 'TAKE_PROFIT' && order.req.price != null) {
-        const tp = new Decimal(order.req.price);
-        if (order.req.side === 'SELL' && mark.lte(tp)) triggered = true;
-        if (order.req.side === 'BUY' && mark.gte(tp)) triggered = true;
-      } else if (order.req.type === 'LIMIT' && order.req.price != null) {
-        const price = new Decimal(order.req.price);
-        if (order.req.side === 'BUY' && mark.lte(price)) triggered = true;
-        if (order.req.side === 'SELL' && mark.gte(price)) triggered = true;
+      const { type, side, price, stopPrice } = order.req;
+
+      if (type === 'STOP_LIMIT' && stopPrice != null) {
+        // Trigger when mark crosses stopPrice; fill at limit price (price improvement = mark)
+        const stop = new Decimal(stopPrice);
+        if (side === 'BUY'  && mark.gte(stop)) { triggered = true; fillAt = price ?? markPrice; }
+        if (side === 'SELL' && mark.lte(stop)) { triggered = true; fillAt = price ?? markPrice; }
+
+      } else if (type === 'STOP_MARKET' && stopPrice != null) {
+        // Trigger when mark crosses stopPrice; fill at mark
+        const stop = new Decimal(stopPrice);
+        if (side === 'BUY'  && mark.gte(stop)) triggered = true;
+        if (side === 'SELL' && mark.lte(stop)) triggered = true;
+
+      } else if ((type === 'TAKE_PROFIT' || type === 'TAKE_PROFIT_MARKET') && stopPrice != null) {
+        // BUY take-profit = close a SHORT  → fires when price DROPS to target
+        // SELL take-profit = close a LONG  → fires when price RISES to target
+        const tp = new Decimal(stopPrice);
+        if (side === 'BUY'  && mark.lte(tp)) { triggered = true; if (type === 'TAKE_PROFIT') fillAt = price ?? markPrice; }
+        if (side === 'SELL' && mark.gte(tp)) { triggered = true; if (type === 'TAKE_PROFIT') fillAt = price ?? markPrice; }
+
+      } else if (type === 'LIMIT' && price != null) {
+        const lp = new Decimal(price);
+        if (side === 'BUY'  && mark.lte(lp)) { triggered = true; fillAt = price; }
+        if (side === 'SELL' && mark.gte(lp)) { triggered = true; fillAt = price; }
       }
 
       if (triggered) {
-        this.fillOrder(clientId, order, mark.toFixed(8));
+        this.fillOrder(clientId, order, fillAt);
       }
     }
   }
