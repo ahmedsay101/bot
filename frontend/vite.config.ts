@@ -13,11 +13,11 @@ export default defineConfig({
     port: 3000,
     proxy: {
       '/api': {
-        target: 'http://backend:3001',
+        target: 'http://backend:5000',
         changeOrigin: true,
       },
       '/ws': {
-        target: 'ws://backend:3001',
+        target: 'ws://backend:5000',
         ws: true,
         changeOrigin: true,
       },

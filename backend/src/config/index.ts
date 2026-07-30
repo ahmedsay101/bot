@@ -54,7 +54,7 @@ interface AppConfig {
 
 const schema = Joi.object({
   NODE_ENV: Joi.string().valid('development', 'production', 'test').default('development'),
-  PORT: Joi.number().integer().min(1).max(65535).default(3001),
+  PORT: Joi.number().integer().min(1).max(65535).default(5000),
   WORKER_PORT: Joi.number().integer().min(1).max(65535).default(3002),
   DATABASE_URL: Joi.string().required(),
   REDIS_URL: Joi.string().default('redis://localhost:6379'),

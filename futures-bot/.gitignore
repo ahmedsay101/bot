@@ -1,9 +1,0 @@
-futures-bot/backend/.env
-futures-bot/.env
-futures-bot/.env.prod
-futures-bot/backend/dist/
-futures-bot/backend/node_modules/
-futures-bot/frontend/dist/
-futures-bot/frontend/node_modules/
-futures-bot/backend/logs/
-futures-bot/backend/coverage/

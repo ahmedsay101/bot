@@ -35,10 +35,10 @@ RUN mkdir -p logs && chown -R node:node /app
 
 USER node
 
-EXPOSE 3001
+EXPOSE 5000
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-  CMD wget -qO- http://localhost:3001/api/system/health || exit 1
+  CMD wget -qO- http://localhost:5000/api/system/health || exit 1
 
 ENTRYPOINT ["dumb-init", "--"]
 CMD ["node", "dist/server.js"]

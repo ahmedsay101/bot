@@ -63,7 +63,7 @@ docker compose up --build
 ```
 
 - **Frontend**: http://localhost:3000
-- **Backend API**: http://localhost:3001
+- **Backend API**: http://localhost:5000
 - **Database admin** (optional): http://localhost:8080 — run with `docker compose --profile tools up`
 
 ## Production Deployment
