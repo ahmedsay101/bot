@@ -152,6 +152,11 @@ export class Trader extends EventEmitter {
   private async openShort(): Promise<void> {
     if (this.symbolInfo == null) throw new Error('Symbol info not loaded');
 
+    const markPriceDecimal = new Decimal(this.markPrice);
+    if (markPriceDecimal.isZero() || markPriceDecimal.isNaN() || markPriceDecimal.isNeg()) {
+      throw new Error(`Cannot open short: invalid mark price '${this.markPrice}' for ${this.symbol}`);
+    }
+
     const qty = adjustQuantity(
       new Decimal(this.traderConfig.positionSize)
         .div(this.markPrice)

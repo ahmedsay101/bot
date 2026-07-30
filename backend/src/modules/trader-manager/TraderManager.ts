@@ -144,6 +144,12 @@ export class TraderManager extends EventEmitter {
           ORDER BY "hedgeLevel", "createdAt" DESC
         `;
 
+        // Detect corrupt state from a previous zero-price fill
+        const shortEp = dbTrader.shortEntryPrice;
+        if (shortEp === '0' || shortEp === '0.0' || Number(shortEp) === 0) {
+          throw new Error(`Corrupt state: shortEntryPrice is ${shortEp}`);
+        }
+
         await trader.restore({
           shortEntryPrice: dbTrader.shortEntryPrice,
           shortTpPrice: dbTrader.shortTpPrice,
