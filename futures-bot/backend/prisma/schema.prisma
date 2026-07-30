@@ -1,0 +1,233 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum TraderStatus {
+  INITIALIZING
+  ACTIVE
+  PAUSED
+  COMPLETING
+  COMPLETED
+  FAILED
+}
+
+enum TraderMode {
+  LIVE
+  SIMULATION
+}
+
+enum OrderSide {
+  BUY
+  SELL
+}
+
+enum OrderType {
+  MARKET
+  LIMIT
+  STOP_LIMIT
+  TAKE_PROFIT
+  STOP_MARKET
+  TAKE_PROFIT_MARKET
+}
+
+enum OrderStatus {
+  PENDING
+  NEW
+  PARTIALLY_FILLED
+  FILLED
+  CANCELED
+  REJECTED
+  EXPIRED
+}
+
+enum PositionSide {
+  LONG
+  SHORT
+  BOTH
+}
+
+enum HedgeRole {
+  SHORT
+  HEDGE
+}
+
+model Trader {
+  id              String       @id @default(uuid())
+  symbol          String
+  mode            TraderMode
+  status          TraderStatus @default(INITIALIZING)
+  leverage        Int
+  marginMode      String
+  initialCapital  String       // Decimal stored as string
+  positionSize    String       // Decimal stored as string
+  shortEntryPrice String?      // Decimal stored as string
+  shortTpPrice    String?      // Decimal stored as string
+  currentHedgeLevel Int        @default(0)
+  hedgeEntryPrice String?      // Last hedge entry
+  hedgeTpPrice    String?      // Last hedge take profit
+  hedgeStopPrice  String?      // Last hedge stop loss
+  realizedPnl     String       @default("0")
+  unrealizedPnl   String       @default("0")
+  completedAt     DateTime?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  orders     Order[]
+  positions  Position[]
+  trades     Trade[]
+  statistics TraderStatistics?
+
+  @@index([symbol])
+  @@index([status])
+}
+
+model Order {
+  id              String      @id @default(uuid())
+  traderId        String
+  exchangeOrderId String?     @unique
+  clientOrderId   String      @unique
+  symbol          String
+  side            OrderSide
+  type            OrderType
+  status          OrderStatus @default(PENDING)
+  role            HedgeRole
+  hedgeLevel      Int         @default(0)
+  quantity        String      // Decimal stored as string
+  price           String?     // Decimal stored as string
+  stopPrice       String?     // Decimal stored as string
+  filledQuantity  String      @default("0")
+  avgFillPrice    String?     // Decimal stored as string
+  fee             String      @default("0")
+  feeCurrency     String?
+  reduceOnly      Boolean     @default(false)
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+  filledAt        DateTime?
+
+  trader Trader @relation(fields: [traderId], references: [id])
+
+  @@index([traderId])
+  @@index([symbol])
+  @@index([status])
+  @@index([clientOrderId])
+}
+
+model Position {
+  id               String       @id @default(uuid())
+  traderId         String
+  symbol           String
+  side             PositionSide
+  role             HedgeRole
+  hedgeLevel       Int          @default(0)
+  entryPrice       String       // Decimal stored as string
+  quantity         String       // Decimal stored as string
+  leverage         Int
+  unrealizedPnl    String       @default("0")
+  realizedPnl      String       @default("0")
+  liquidationPrice String?      // Decimal stored as string
+  markPrice        String?      // Decimal stored as string
+  isOpen           Boolean      @default(true)
+  closedAt         DateTime?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  trader Trader @relation(fields: [traderId], references: [id])
+
+  @@index([traderId])
+  @@index([symbol])
+  @@index([isOpen])
+}
+
+model Trade {
+  id          String    @id @default(uuid())
+  traderId    String
+  orderId     String
+  symbol      String
+  side        OrderSide
+  role        HedgeRole
+  hedgeLevel  Int       @default(0)
+  quantity    String    // Decimal stored as string
+  price       String    // Decimal stored as string
+  fee         String    // Decimal stored as string
+  feeCurrency String
+  realizedPnl String    @default("0")
+  tradeTime   DateTime
+  createdAt   DateTime  @default(now())
+
+  trader Trader @relation(fields: [traderId], references: [id])
+
+  @@index([traderId])
+  @@index([symbol])
+}
+
+model TraderStatistics {
+  id              String   @id @default(uuid())
+  traderId        String   @unique
+  symbol          String
+  mode            TraderMode
+  shortEntryPrice String
+  shortExitPrice  String?
+  totalHedgeLevels Int     @default(0)
+  hedgeWins       Int      @default(0)
+  hedgeLosses     Int      @default(0)
+  totalFees       String   @default("0")
+  realizedPnl     String   @default("0")
+  peakUnrealizedPnl String @default("0")
+  durationMs      BigInt?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  trader Trader @relation(fields: [traderId], references: [id])
+}
+
+model GlobalStatistics {
+  id              String     @id @default("singleton")
+  totalTraders    Int        @default(0)
+  activeTraders   Int        @default(0)
+  completedTraders Int       @default(0)
+  totalRealizedPnl String    @default("0")
+  totalFees       String     @default("0")
+  dailyPnl        String     @default("0")
+  winRate         String     @default("0")
+  lastUpdated     DateTime   @default(now())
+}
+
+model Configuration {
+  id              String   @id @default("singleton")
+  maxTraders      Int      @default(5)
+  initialCapital  String   @default("1000")
+  positionSize    String   @default("100")
+  leverage        Int      @default(10)
+  marginMode      String   @default("ISOLATED")
+  hedgeDistance   String   @default("0.10")
+  hedgeTpPercent  String   @default("0.50")
+  hedgeSlPercent  String   @default("0.10")
+  shortTpPercent  String   @default("0.20")
+  refreshInterval Int      @default(60000)
+  retryLimit      Int      @default(5)
+  feeRate         String   @default("0.0004")
+  slippage        String   @default("0.0001")
+  mode            TraderMode @default(SIMULATION)
+  isPaused        Boolean  @default(false)
+  updatedAt       DateTime @updatedAt
+}
+
+model AppLog {
+  id        String   @id @default(uuid())
+  level     String
+  message   String
+  context   String?
+  meta      String?  // JSON blob
+  timestamp DateTime @default(now())
+
+  @@index([level])
+  @@index([timestamp])
+}

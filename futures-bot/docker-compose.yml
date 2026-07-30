@@ -1,0 +1,153 @@
+version: '3.9'
+
+x-backend-env: &backend-env
+  env_file: .env
+  environment:
+    NODE_ENV: development
+    DATABASE_URL: postgresql://${POSTGRES_USER:-trader}:${POSTGRES_PASSWORD:-trader_secret}@postgres:5432/${POSTGRES_DB:-futures_bot}
+    REDIS_URL: redis://redis:6379
+    REDIS_HOST: redis
+    REDIS_PORT: 6379
+    BINANCE_API_KEY: ${BINANCE_API_KEY}
+    BINANCE_SECRET_KEY: ${BINANCE_SECRET_KEY}
+    BINANCE_FUTURES_BASE_URL: ${BINANCE_FUTURES_BASE_URL:-https://fapi.binance.com/fapi/v1}
+    BINANCE_FUTURES_WS_URL: ${BINANCE_FUTURES_WS_URL:-wss://fstream.binance.com}
+    JWT_SECRET: ${JWT_SECRET}
+    TRADING_MODE: ${TRADING_MODE:-SIMULATION}
+    MAX_TRADERS: ${MAX_TRADERS:-5}
+    LEVERAGE: ${LEVERAGE:-10}
+    INITIAL_CAPITAL: ${INITIAL_CAPITAL:-1000}
+    POSITION_SIZE: ${POSITION_SIZE:-100}
+    CORS_ORIGIN: http://localhost:3000
+    LOG_LEVEL: ${LOG_LEVEL:-debug}
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-trader}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-trader_secret}
+      POSTGRES_DB: ${POSTGRES_DB:-futures_bot}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-trader} -d ${POSTGRES_DB:-futures_bot}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - bot-network
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - bot-network
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: builder
+    restart: unless-stopped
+    <<: *backend-env
+    ports:
+      - "3001:3001"
+    volumes:
+      - ./backend/src:/app/src
+      - ./backend/prisma:/app/prisma
+      - backend_logs:/app/logs
+    command: >
+      sh -c "
+        npx prisma migrate deploy &&
+        npm run dev
+      "
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3001/api/system/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - bot-network
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.worker
+      target: builder
+    restart: unless-stopped
+    <<: *backend-env
+    volumes:
+      - ./backend/src:/app/src
+      - ./backend/prisma:/app/prisma
+      - backend_logs:/app/logs
+    command: npm run dev:worker
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    networks:
+      - bot-network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: development
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend/src:/app/src
+      - ./frontend/public:/app/public
+    environment:
+      VITE_API_URL: http://localhost:3001/api
+      VITE_WS_URL: ws://localhost:3001/ws
+    depends_on:
+      - backend
+    networks:
+      - bot-network
+
+  adminer:
+    image: adminer:latest
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    depends_on:
+      - postgres
+    networks:
+      - bot-network
+    profiles:
+      - tools
+
+volumes:
+  postgres_data:
+  redis_data:
+  backend_logs:
+
+networks:
+  bot-network:
+    driver: bridge
