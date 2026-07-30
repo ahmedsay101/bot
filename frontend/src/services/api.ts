@@ -81,6 +81,14 @@ export interface Trader {
   updatedAt: string;
 }
 
+export interface HedgeLevelInfo {
+  level: number;
+  entryPrice: string;
+  tpPrice: string;
+  stopPrice: string;
+  status: 'PENDING' | 'ACTIVE' | 'HIT_TP' | 'HIT_SL' | 'CANCELED';
+}
+
 export interface TraderSummary {
   id: string;
   symbol: string;
@@ -89,6 +97,9 @@ export interface TraderSummary {
   unrealizedPnl: string;
   hedgeLevel: number;
   entryPrice: string | null;
+  tpPrice: string | null;
+  markPrice: string;
+  hedgeLevels: HedgeLevelInfo[];
 }
 
 export interface TraderDetail extends Trader {

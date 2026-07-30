@@ -5,7 +5,7 @@ import { Trader } from '../trader/Trader';
 import type { IExecutionProvider } from '../execution/IExecutionProvider';
 import type { WebSocketManager } from '../websocket/manager';
 import type { BinanceClient } from '../binance/client';
-import type { Ticker24h, TraderConfig, OrderUpdate, PriceUpdate, TraderMode } from '../../types';
+import type { Ticker24h, TraderConfig, OrderUpdate, PriceUpdate, TraderMode, HedgeLevel } from '../../types';
 import { createContextLogger } from '../logger';
 import { withRetry } from '../utils/retry';
 import type { PrismaClient } from '@prisma/client';
@@ -335,6 +335,9 @@ export class TraderManager extends EventEmitter {
     unrealizedPnl: string;
     hedgeLevel: number;
     entryPrice: string | null;
+    tpPrice: string | null;
+    markPrice: string;
+    hedgeLevels: HedgeLevel[];
   }> {
     return [...this.traders.values()].map((t) => ({
       id: t.getId(),
@@ -344,6 +347,11 @@ export class TraderManager extends EventEmitter {
       unrealizedPnl: t.getUnrealizedPnl(),
       hedgeLevel: t.getCurrentHedgeLevel(),
       entryPrice: t.getShortEntryPrice(),
+      tpPrice: t.getShortTpPrice(),
+      markPrice: t.getMarkPrice(),
+      hedgeLevels: t.getHedgeLevels(),
+    }));
+  }
     }));
   }
 

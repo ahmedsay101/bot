@@ -618,6 +618,8 @@ export class Trader extends EventEmitter {
   getHedgeLevels(): HedgeLevel[] { return [...this.hedgeLevels]; }
   getCurrentHedgeLevel(): number { return this.currentHedgeLevel; }
   getShortEntryPrice(): string | null { return this.shortEntryPrice; }
+  getShortTpPrice(): string | null { return this.shortTpPrice; }
+  getMarkPrice(): string { return this.markPrice; }
   isActive(): boolean { return this.status === 'ACTIVE' && !this.isDestroyed; }
 
   generateClientOrderId(prefix: string): string {
