@@ -59,7 +59,10 @@ async function bootstrap(): Promise<void> {
     executionProvider = new LiveExecutionProvider(binanceClient);
     log.warn('LIVE TRADING MODE ENABLED — real orders will be placed');
   } else {
-    const simProvider = new SimulationExecutionProvider(() => binanceClient.getExchangeInfo());
+    const simProvider = new SimulationExecutionProvider(
+      () => binanceClient.getExchangeInfo(),
+      (symbol) => binanceClient.getMarkPrice(symbol),
+    );
     // Wire sim price updates from WebSocket
     wsManager.on('priceUpdate', (update: import('./types').PriceUpdate) => {
       simProvider.onPriceUpdate(update.symbol, update.price);

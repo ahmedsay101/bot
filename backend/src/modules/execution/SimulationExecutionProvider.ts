@@ -42,7 +42,10 @@ export class SimulationExecutionProvider extends EventEmitter implements IExecut
   private markPrices = new Map<string, string>();
   private readonly simLatencyMs = 50;
 
-  constructor(private readonly exchangeInfoProvider: () => Promise<SymbolInfo[]>) {
+  constructor(
+    private readonly exchangeInfoProvider: () => Promise<SymbolInfo[]>,
+    private readonly restMarkPriceFetcher: (symbol: string) => Promise<string>,
+  ) {
     super();
   }
 
@@ -62,9 +65,10 @@ export class SimulationExecutionProvider extends EventEmitter implements IExecut
     let fillPrice: string | undefined;
     let status: OrderStatus = 'NEW';
 
-    const markPrice = this.markPrices.get(req.symbol) ?? req.price ?? '0';
+    // Use cached WS price; for MARKET orders the cache is always populated by this point
+    const markPrice = this.markPrices.get(req.symbol) ?? req.price;
 
-    if (req.type === 'MARKET') {
+    if (req.type === 'MARKET' && markPrice != null) {
       // Apply slippage
       const slip = new Decimal(config.trading.slippage);
       const mark = new Decimal(markPrice);
@@ -182,7 +186,12 @@ export class SimulationExecutionProvider extends EventEmitter implements IExecut
   }
 
   async getMarkPrice(symbol: string): Promise<string> {
-    return this.markPrices.get(symbol) ?? '0';
+    const cached = this.markPrices.get(symbol);
+    if (cached != null) return cached;
+    // WebSocket hasn't delivered a price yet — fetch from REST and cache it
+    const price = await this.restMarkPriceFetcher(symbol);
+    this.markPrices.set(symbol, price);
+    return price;
   }
 
   async getSymbolInfo(symbol: string): Promise<SymbolInfo> {
