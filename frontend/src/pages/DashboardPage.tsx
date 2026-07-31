@@ -6,6 +6,7 @@ import {
 import { AccountBalanceWallet, Warning } from '@mui/icons-material';
 import {
   useGlobalStats,
+  useStatsSummary,
   useActiveTraders,
   usePauseTraders,
   useResumeTraders,
@@ -244,12 +245,14 @@ function TraderCard({ trader }: { trader: TraderSummary }): React.ReactElement {
 
 export function DashboardPage(): React.ReactElement {
   const { data: stats   } = useGlobalStats();
+  const { data: summary } = useStatsSummary();
   const { data: traders } = useActiveTraders();
   const pauseMutation  = usePauseTraders();
   const resumeMutation = useResumeTraders();
   const stopMutation   = useEmergencyStop();
 
   const isLive = stats?.tradingMode === 'LIVE';
+  const gainers = summary?.topGainers ?? [];
 
   return (
     <Box>
@@ -299,21 +302,62 @@ export function DashboardPage(): React.ReactElement {
         </Box>
       </Box>
 
-      {/* ── trader grid ── */}
-      {traders == null || traders.length === 0 ? (
-        <Box sx={{ textAlign: 'center', py: 10, color: 'text.secondary' }}>
-          <Typography variant="h6" gutterBottom>No active traders</Typography>
-          <Typography variant="body2">The bot is scanning for opportunities…</Typography>
-        </Box>
-      ) : (
-        <Grid container spacing={2}>
-          {traders.map(t => (
-            <Grid item xs={12} sm={6} xl={4} key={t.id}>
-              <TraderCard trader={t} />
+      {/* ── content: traders + gainers sidebar ── */}
+      <Grid container spacing={2}>
+        {/* trader cards */}
+        <Grid item xs={12} md={gainers.length > 0 ? 9 : 12}>
+          {traders == null || traders.length === 0 ? (
+            <Box sx={{ textAlign: 'center', py: 10, color: 'text.secondary' }}>
+              <Typography variant="h6" gutterBottom>No active traders</Typography>
+              <Typography variant="body2">The bot is scanning for opportunities…</Typography>
+            </Box>
+          ) : (
+            <Grid container spacing={2}>
+              {traders.map(t => (
+                <Grid item xs={12} lg={6} key={t.id}>
+                  <TraderCard trader={t} />
+                </Grid>
+              ))}
             </Grid>
-          ))}
+          )}
         </Grid>
-      )}
+
+        {/* top gainers sidebar */}
+        {gainers.length > 0 && (
+          <Grid item xs={12} md={3}>
+            <Card sx={{ position: 'sticky', top: 16 }}>
+              <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
+                <Typography variant="subtitle2" fontWeight={700} sx={{ mb: 1, opacity: 0.7, letterSpacing: 0.5 }}>
+                  TOP GAINERS
+                </Typography>
+                {gainers.slice(0, 15).map(g => {
+                  const pct = parseFloat(g.priceChangePercent);
+                  const color = pct >= 0 ? '#4caf50' : '#f44336';
+                  return (
+                    <Box key={g.symbol} sx={{
+                      display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                      py: 0.5, borderBottom: '1px solid', borderColor: 'divider',
+                      '&:last-child': { borderBottom: 'none' },
+                    }}>
+                      <Typography variant="caption" fontFamily="monospace" fontWeight={600}>
+                        {g.symbol.replace('USDT', '')}
+                      </Typography>
+                      <Box sx={{ textAlign: 'right' }}>
+                        <Typography variant="caption" sx={{ color, fontWeight: 700, display: 'block' }}>
+                          {pct >= 0 ? '+' : ''}{pct.toFixed(2)}%
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary" sx={{ fontSize: 10 }}>
+                          ${parseFloat(g.lastPrice).toFixed(4)}
+                        </Typography>
+                      </Box>
+                    </Box>
+                  );
+                })}
+              </CardContent>
+            </Card>
+          </Grid>
+        )}
+      </Grid>
     </Box>
   );
 }
