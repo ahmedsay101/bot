@@ -261,7 +261,7 @@ export class TraderManager extends EventEmitter {
     );
 
     this.wireTraderEvents(trader);
-    this.traders.set(traderId, trader);
+    // Reserve the symbol slot immediately so concurrent refreshes don't create duplicates
     this.symbolToTrader.set(symbol, traderId);
 
     // Subscribe to mark price — failure is non-fatal; getMarkPrice falls back to REST
@@ -273,13 +273,12 @@ export class TraderManager extends EventEmitter {
 
     try {
       await trader.initialize();
+      // Only expose to dashboard/routing after successful initialization
+      this.traders.set(traderId, trader);
     } catch (err) {
       log.error(`Failed to initialize trader for ${symbol}`, { error: String(err) });
-      this.traders.delete(traderId);
       this.symbolToTrader.delete(symbol);
-      // Clean up dangling WS subscription if it was opened
-      const stream = `${symbol.toLowerCase()}@markPrice@1s`;
-      this.wsManager.unsubscribe(stream).catch(() => {});
+      this.wsManager.unsubscribe(`${symbol.toLowerCase()}@markPrice@1s`).catch(() => {});
       await this.db.trader.update({
         where: { id: traderId },
         data: { status: 'FAILED' },
