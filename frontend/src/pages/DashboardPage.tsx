@@ -64,10 +64,12 @@ function PriceRuler({ trader }: { trader: TraderSummary }): React.ReactElement |
 
   for (const h of trader.hedgeLevels) {
     if (h.status === 'CANCELED') continue;
-    const active = h.status === 'ACTIVE';
-    if (parseFloat(h.tpPrice)    > 0) levels.push({ price: parseFloat(h.tpPrice),    label: `L${h.level} Hedge TP`,    color: '#8bc34a', dashed: !active });
-    if (parseFloat(h.entryPrice) > 0) levels.push({ price: parseFloat(h.entryPrice), label: `L${h.level} Hedge Entry`,  color: '#ff9800', dashed: !active });
-    if (parseFloat(h.stopPrice)  > 0) levels.push({ price: parseFloat(h.stopPrice),  label: `L${h.level} Hedge Stop`,   color: '#f44336', dashed: !active });
+    // ACTIVE = stop-limit order placed but not yet triggered (dashed)
+    // OPEN   = position is filled and live (solid)
+    const isPositionOpen = h.status === 'OPEN';
+    if (parseFloat(h.tpPrice)    > 0) levels.push({ price: parseFloat(h.tpPrice),    label: `L${h.level} Hedge TP`,    color: '#8bc34a', dashed: !isPositionOpen });
+    if (parseFloat(h.entryPrice) > 0) levels.push({ price: parseFloat(h.entryPrice), label: `L${h.level} Hedge Entry`,  color: '#ff9800', dashed: !isPositionOpen });
+    if (parseFloat(h.stopPrice)  > 0) levels.push({ price: parseFloat(h.stopPrice),  label: `L${h.level} Hedge Stop`,   color: '#f44336', dashed: !isPositionOpen });
   }
 
   levels.push({ price: mark, label: '◀ Mark', color: '#ffffff', isMark: true });
@@ -146,7 +148,7 @@ function PriceRuler({ trader }: { trader: TraderSummary }): React.ReactElement |
 function HedgeProgress({ trader }: { trader: TraderSummary }): React.ReactElement | null {
   const entry     = parseFloat(trader.entryPrice ?? '0');
   const mark      = parseFloat(trader.markPrice);
-  const nextHedge = trader.hedgeLevels.find(h => h.status === 'PENDING');
+  const nextHedge = trader.hedgeLevels.find(h => h.status === 'PENDING' || h.status === 'ACTIVE');
   const hedgeE    = parseFloat(nextHedge?.entryPrice ?? '0');
 
   if (entry === 0 || hedgeE === 0 || !isFinite(mark)) return null;
@@ -176,7 +178,7 @@ function HedgeProgress({ trader }: { trader: TraderSummary }): React.ReactElemen
 
 function TraderCard({ trader }: { trader: TraderSummary }): React.ReactElement {
   const isActive = trader.status === 'ACTIVE';
-  const hedged   = trader.hedgeLevels.some(h => h.status === 'ACTIVE');
+  const hedged   = trader.hedgeLevels.some(h => h.status === 'OPEN');
 
   return (
     <Card sx={{

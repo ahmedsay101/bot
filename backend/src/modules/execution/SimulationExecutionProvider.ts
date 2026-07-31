@@ -217,10 +217,11 @@ export class SimulationExecutionProvider extends EventEmitter implements IExecut
       const { type, side, price, stopPrice } = order.req;
 
       if (type === 'STOP_LIMIT' && stopPrice != null) {
-        // Trigger when mark crosses stopPrice; fill at limit price (price improvement = mark)
+        // Fill at mark (price improvement over limit); limit only caps worst-case
         const stop = new Decimal(stopPrice);
-        if (side === 'BUY'  && mark.gte(stop)) { triggered = true; fillAt = price ?? markPrice; }
-        if (side === 'SELL' && mark.lte(stop)) { triggered = true; fillAt = price ?? markPrice; }
+        if (side === 'BUY'  && mark.gte(stop)) triggered = true;
+        if (side === 'SELL' && mark.lte(stop)) triggered = true;
+        // fillAt stays as markPrice
 
       } else if (type === 'STOP_MARKET' && stopPrice != null) {
         // Trigger when mark crosses stopPrice; fill at mark

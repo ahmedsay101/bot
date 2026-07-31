@@ -107,7 +107,8 @@ export interface HedgeLevel {
   entryPrice: string;
   stopPrice: string;
   tpPrice: string;
-  status: 'PENDING' | 'ACTIVE' | 'HIT_TP' | 'HIT_SL' | 'CANCELED';
+  // PENDING=not placed, ACTIVE=order in exchange, OPEN=position filled, HIT_TP/HIT_SL=closed
+  status: 'PENDING' | 'ACTIVE' | 'OPEN' | 'HIT_TP' | 'HIT_SL' | 'CANCELED';
 }
 
 export interface TraderState {
