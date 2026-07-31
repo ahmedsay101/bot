@@ -23,10 +23,38 @@ async function bootstrap(): Promise<void> {
   await db.$connect();
   log.info('Database connected');
 
+  // Keep DB config aligned with runtime env so UI never shows "5 / 3"
   await db.configuration.upsert({
     where: { id: 'singleton' },
-    update: {},
-    create: { id: 'singleton' },
+    update: {
+      maxTraders: config.trading.maxTraders,
+      leverage: config.trading.leverage,
+      mode: config.trading.mode,
+      hedgeDistance: config.trading.hedgeDistance,
+      hedgeTpPercent: config.trading.hedgeTpPercent,
+      hedgeSlPercent: config.trading.hedgeSlPercent,
+      shortTpPercent: config.trading.shortTpPercent,
+      feeRate: config.trading.feeRate,
+      slippage: config.trading.slippage,
+      refreshInterval: config.trading.refreshInterval,
+      retryLimit: config.trading.retryLimit,
+    },
+    create: {
+      id: 'singleton',
+      maxTraders: config.trading.maxTraders,
+      leverage: config.trading.leverage,
+      mode: config.trading.mode,
+      initialCapital: config.trading.initialCapital,
+      positionSize: config.trading.positionSize,
+      hedgeDistance: config.trading.hedgeDistance,
+      hedgeTpPercent: config.trading.hedgeTpPercent,
+      hedgeSlPercent: config.trading.hedgeSlPercent,
+      shortTpPercent: config.trading.shortTpPercent,
+      feeRate: config.trading.feeRate,
+      slippage: config.trading.slippage,
+      refreshInterval: config.trading.refreshInterval,
+      retryLimit: config.trading.retryLimit,
+    },
   });
 
   const binanceClient = new BinanceClient();

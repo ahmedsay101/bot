@@ -144,7 +144,8 @@ export class Trader extends EventEmitter {
     this.updateUnrealizedPnl();
 
     const now = Date.now();
-    if (now - this.lastSnapshotAt >= 400) {
+    // Emit aggressively so dashboard marks/PnL tick with the mark-price stream
+    if (now - this.lastSnapshotAt >= 200) {
       this.lastSnapshotAt = now;
       this.emitSnapshot();
     }

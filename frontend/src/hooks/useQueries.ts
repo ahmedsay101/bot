@@ -17,8 +17,9 @@ export function useActiveTraders() {
   return useQuery({
     queryKey: queryKeys.activeTraders,
     queryFn: () => tradersApi.getActive().then((r) => r.data.data),
-    refetchInterval: 10000,
-    staleTime: 2000,
+    // Fast REST fallback if dashboard WS drops; WS patches keep this fresh between polls
+    refetchInterval: 1000,
+    staleTime: 0,
   });
 }
 
@@ -49,11 +50,19 @@ export function useGlobalStats() {
 }
 
 export function useStatsSummary() {
+  const qc = useQueryClient();
   return useQuery({
     queryKey: queryKeys.statsSummary,
-    queryFn: () => statisticsApi.getSummary().then((r) => r.data.data),
-    refetchInterval: 10000,
-    staleTime: 2000,
+    queryFn: async () => {
+      const data = await statisticsApi.getSummary().then((r) => r.data.data);
+      // Keep trader cards in sync even if dashboard WS is down
+      if (data.traders != null) {
+        qc.setQueryData(queryKeys.activeTraders, data.traders);
+      }
+      return data;
+    },
+    refetchInterval: 1000,
+    staleTime: 0,
   });
 }
 

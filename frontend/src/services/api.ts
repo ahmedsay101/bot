@@ -185,6 +185,7 @@ export interface StatsSummary {
   equityPerTrader?: string;
   positionNotional?: string;
   leverage?: number;
+  traders?: TraderSummary[];
 }
 
 export interface Ticker {

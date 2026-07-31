@@ -113,6 +113,10 @@ export class SimulationExecutionProvider extends EventEmitter implements IExecut
 
     if (status === 'FILLED') {
       setTimeout(() => this.emitOrderFill(result), this.simLatencyMs);
+    } else if (status === 'NEW') {
+      // If mark already crossed the trigger (e.g. price ran through), fill immediately
+      const mark = this.markPrices.get(req.symbol);
+      if (mark != null) this.checkTriggers(req.symbol, mark);
     }
 
     return result;

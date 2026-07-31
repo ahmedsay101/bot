@@ -8,6 +8,7 @@ import {
 } from '@mui/icons-material';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useSystemHealth, useStatsSummary } from '../../hooks/useQueries';
+import { useSystemStore } from '../../stores/systemStore';
 
 const DRAWER_WIDTH = 220;
 
@@ -32,6 +33,7 @@ export function Layout({ children }: LayoutProps): React.ReactElement {
   const [mobileOpen, setMobileOpen] = useState(false);
   const { data: health } = useSystemHealth();
   const { data: summary } = useStatsSummary();
+  const dashWs = useSystemStore((s) => s.dashboardWsConnected);
 
   const drawer = (
     <Box>
@@ -77,8 +79,15 @@ export function Layout({ children }: LayoutProps): React.ReactElement {
             sx={{ mr: 1 }}
           />
           <Chip
-            label={health?.binanceWs ? 'WS OK' : 'WS Down'}
+            label={health?.binanceWs ? 'Binance OK' : 'Binance Down'}
             color={health?.binanceWs ? 'success' : 'error'}
+            size="small"
+            variant="outlined"
+            sx={{ mr: 1 }}
+          />
+          <Chip
+            label={dashWs ? 'Dash Live' : 'Dash Polling'}
+            color={dashWs ? 'success' : 'warning'}
             size="small"
             variant="outlined"
           />

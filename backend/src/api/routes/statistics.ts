@@ -24,20 +24,22 @@ export function createStatisticsRouter(
 
   router.get('/summary', async (_req, res) => {
     const stats = await statisticsService.getGlobalStatistics();
+    const maxTraders = traderManager.getMaxTraders();
     res.json({
       success: true,
       data: {
-        activeTraders: traderManager.getActiveTraderCount(),
-        maxTraders: stats.maxTraders,
+        activeTraders: traderManager.getOccupiedSlots(),
+        maxTraders,
         topGainers: traderManager.getTopGainers().slice(0, 20),
         totalEquity: stats.totalEquity,
         totalPnl: stats.totalPnl,
-        totalRealizedPnl: traderManager.getTotalRealizedPnl(),
+        totalRealizedPnl: stats.totalRealizedPnl,
         totalUnrealizedPnl: traderManager.getTotalUnrealizedPnl(),
         tradingMode: stats.tradingMode,
         equityPerTrader: stats.equityPerTrader,
         positionNotional: stats.positionNotional,
         leverage: stats.leverage,
+        traders: traderManager.getTraderSummary(),
       },
     });
   });

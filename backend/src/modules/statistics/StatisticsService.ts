@@ -91,8 +91,9 @@ export class StatisticsService {
     );
 
     const cfg = await this.db.configuration.findUnique({ where: { id: 'singleton' } });
-    const maxTraders = cfg?.maxTraders ?? 1;
-    const leverage = cfg?.leverage ?? 10;
+    // Prefer DB (synced from env on boot); never invent a conflicting default
+    const maxTraders = cfg?.maxTraders ?? Number(process.env.MAX_TRADERS ?? 3);
+    const leverage = cfg?.leverage ?? Number(process.env.LEVERAGE ?? 10);
 
     const totalEquity = await this.equityService.getTotalEquity();
     const allocation = calcAllocation(totalEquity, maxTraders, leverage);

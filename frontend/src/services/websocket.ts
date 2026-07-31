@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { queryKeys } from '../hooks/useQueries';
+import { useSystemStore } from '../stores/systemStore';
 import type { StatsSummary, TraderSummary, Ticker } from './api';
 
 const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -31,6 +32,8 @@ export function useWebSocket(): void {
   const ws = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const intentionalClose = useRef(false);
+  const setConnected = useSystemStore((s) => s.setDashboardWsConnected);
+  const touchWs = useSystemStore((s) => s.touchWsMessage);
 
   useEffect(() => {
     intentionalClose.current = false;
@@ -39,10 +42,12 @@ export function useWebSocket(): void {
       ws.current = new WebSocket(WS_URL);
 
       ws.current.onopen = () => {
-        console.log('Dashboard WS connected');
+        console.log('Dashboard WS connected', WS_URL);
+        setConnected(true);
       };
 
       ws.current.onmessage = (event) => {
+        touchWs();
         try {
           const msg = JSON.parse(event.data as string) as DashboardMessage;
 
@@ -98,7 +103,6 @@ export function useWebSocket(): void {
               ),
             );
             void qc.invalidateQueries({ queryKey: queryKeys.activeTraders });
-            void qc.invalidateQueries({ queryKey: queryKeys.traders });
             return;
           }
 
@@ -124,22 +128,23 @@ export function useWebSocket(): void {
               );
             }
             void qc.invalidateQueries({ queryKey: queryKeys.activeTraders });
-            void qc.invalidateQueries({ queryKey: queryKeys.traders });
-            void qc.invalidateQueries({ queryKey: queryKeys.globalStats });
             void qc.invalidateQueries({ queryKey: queryKeys.statsSummary });
+            void qc.invalidateQueries({ queryKey: queryKeys.globalStats });
           }
         } catch {
-          // ignore malformed messages
+          // ignore malformed
         }
       };
 
       ws.current.onclose = () => {
+        setConnected(false);
         if (!intentionalClose.current) {
-          reconnectTimer.current = setTimeout(connect, 3000);
+          reconnectTimer.current = setTimeout(connect, 2000);
         }
       };
 
       ws.current.onerror = () => {
+        setConnected(false);
         ws.current?.close();
       };
     };
@@ -150,6 +155,7 @@ export function useWebSocket(): void {
       intentionalClose.current = true;
       if (reconnectTimer.current != null) clearTimeout(reconnectTimer.current);
       ws.current?.close();
+      setConnected(false);
     };
-  }, [qc]);
+  }, [qc, setConnected, touchWs]);
 }

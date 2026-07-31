@@ -203,7 +203,7 @@ model GlobalStatistics {
 
 model Configuration {
   id              String   @id @default("singleton")
-  maxTraders      Int      @default(5)
+  maxTraders      Int      @default(3)
   initialCapital  String   @default("1000")
   positionSize    String   @default("100")
   leverage        Int      @default(10)

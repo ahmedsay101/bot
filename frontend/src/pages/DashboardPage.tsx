@@ -1,267 +1,130 @@
 import React from 'react';
 import {
-  Box, Grid, Card, CardContent, Typography, Chip, Button, Divider,
+  Box, Grid, Card, CardContent, Typography, Chip, Button, Table, TableBody, TableCell, TableRow,
 } from '@mui/material';
 import { Warning } from '@mui/icons-material';
 import {
-  useGlobalStats,
   useStatsSummary,
   useActiveTraders,
   usePauseTraders,
   useResumeTraders,
   useEmergencyStop,
 } from '../hooks/useQueries';
+import { useSystemStore } from '../stores/systemStore';
 import type { TraderSummary, HedgeLevelInfo } from '../services/api';
 
-function fmt(v: string | number | null | undefined, dp = 4): string {
+function money(v: string | number | null | undefined, dp = 2): string {
   const n = parseFloat(String(v ?? '0'));
-  if (!isFinite(n) || isNaN(n)) return '—';
+  if (!isFinite(n)) return '—';
   return `$${n.toFixed(dp)}`;
 }
 
-function pnlCol(v: string): string {
-  const n = parseFloat(v);
-  if (n > 0) return '#4caf50';
-  if (n < 0) return '#f44336';
-  return '#757575';
-}
-
-function pnlStr(v: string, dp = 4): string {
+function pnl(v: string, dp = 4): string {
   const n = parseFloat(v);
   if (!isFinite(n)) return '—';
   return `${n >= 0 ? '+' : ''}${n.toFixed(dp)}`;
 }
 
-interface Level {
-  price: number;
-  label: string;
-  color: string;
-  dashed?: boolean;
-  isMark?: boolean;
+function pnlColor(v: string): string {
+  const n = parseFloat(v);
+  if (n > 0) return '#4caf50';
+  if (n < 0) return '#f44336';
+  return 'text.secondary';
 }
 
-/** Ladder: current price, main short, short TP, active hedge, hedge SL/TP, pending levels. */
-function PriceLadder({ trader }: { trader: TraderSummary }): React.ReactElement | null {
+function priceDp(p: number): number {
+  if (p >= 100) return 2;
+  if (p >= 1) return 4;
+  return 6;
+}
+
+function LadderRows({ trader }: { trader: TraderSummary }): React.ReactElement {
   const mark = parseFloat(trader.markPrice);
-  const entry = trader.entryPrice != null ? parseFloat(trader.entryPrice) : null;
-  const tp = trader.tpPrice != null ? parseFloat(trader.tpPrice) : null;
+  const rows: Array<{ label: string; price: string; tone?: string }> = [];
 
-  if (!isFinite(mark) || mark === 0) {
-    return (
-      <Box sx={{ py: 2, textAlign: 'center' }}>
-        <Typography variant="caption" color="text.secondary">Awaiting price feed…</Typography>
-      </Box>
-    );
+  rows.push({
+    label: 'Current',
+    price: isFinite(mark) && mark > 0 ? mark.toFixed(priceDp(mark)) : '—',
+    tone: '#fff',
+  });
+  rows.push({ label: 'Main Short', price: trader.entryPrice != null ? parseFloat(trader.entryPrice).toFixed(priceDp(parseFloat(trader.entryPrice))) : '—', tone: '#2196f3' });
+  rows.push({ label: 'Short TP', price: trader.tpPrice != null ? parseFloat(trader.tpPrice).toFixed(priceDp(parseFloat(trader.tpPrice))) : '—', tone: '#4caf50' });
+
+  const live = trader.hedgeLevels.filter((h) => h.status === 'OPEN' || h.status === 'ACTIVE' || h.status === 'PENDING');
+  for (const h of live) {
+    const open = h.status === 'OPEN';
+    rows.push({
+      label: open ? `Hedge L${h.level}` : `Pending L${h.level}`,
+      price: parseFloat(h.entryPrice).toFixed(priceDp(parseFloat(h.entryPrice) || 1)),
+      tone: '#ff9800',
+    });
+    rows.push({
+      label: `Hedge SL L${h.level}`,
+      price: parseFloat(h.stopPrice).toFixed(priceDp(parseFloat(h.stopPrice) || 1)),
+      tone: '#f44336',
+    });
+    rows.push({
+      label: `Hedge TP L${h.level}`,
+      price: parseFloat(h.tpPrice).toFixed(priceDp(parseFloat(h.tpPrice) || 1)),
+      tone: '#8bc34a',
+    });
   }
-
-  const levels: Level[] = [];
-
-  if (tp != null && tp > 0) levels.push({ price: tp, label: 'Short TP', color: '#4caf50' });
-  if (entry != null && entry > 0) levels.push({ price: entry, label: 'Main Short', color: '#2196f3' });
-
-  for (const h of trader.hedgeLevels) {
-    if (h.status === 'CANCELED' || h.status === 'HIT_TP' || h.status === 'HIT_SL') continue;
-    const isOpen = h.status === 'OPEN';
-    const isPending = h.status === 'PENDING' || h.status === 'ACTIVE';
-    const prefix = isOpen ? 'Active' : 'Pending';
-
-    if (parseFloat(h.tpPrice) > 0) {
-      levels.push({
-        price: parseFloat(h.tpPrice),
-        label: `L${h.level} Hedge TP`,
-        color: '#8bc34a',
-        dashed: isPending,
-      });
-    }
-    if (parseFloat(h.entryPrice) > 0) {
-      levels.push({
-        price: parseFloat(h.entryPrice),
-        label: `L${h.level} ${prefix} Hedge`,
-        color: '#ff9800',
-        dashed: isPending,
-      });
-    }
-    if (parseFloat(h.stopPrice) > 0) {
-      levels.push({
-        price: parseFloat(h.stopPrice),
-        label: `L${h.level} Hedge SL`,
-        color: '#f44336',
-        dashed: isPending,
-      });
-    }
-  }
-
-  levels.push({ price: mark, label: '◀ Current', color: '#ffffff', isMark: true });
-
-  const prices = levels.map((l) => l.price).filter((p) => p > 0 && isFinite(p));
-  if (prices.length === 0) return null;
-
-  const hi = Math.max(...prices) * 1.018;
-  const lo = Math.min(...prices) * 0.982;
-  const rng = hi - lo || 1;
-  const pct = (p: number): number => ((hi - p) / rng) * 100;
-
-  const sorted = [...levels].sort((a, b) => b.price - a.price);
-  const HEIGHT = Math.max(180, sorted.length * 34);
-  const mag = Math.floor(Math.log10(mark));
-  const dp = Math.max(2, 5 - mag);
 
   return (
-    <Box sx={{ position: 'relative', height: HEIGHT, my: 1 }}>
-      <Box sx={{ position: 'absolute', left: 98, top: 0, bottom: 0, width: 1, bgcolor: 'rgba(255,255,255,0.06)' }} />
-      {sorted.map((lvl, i) => (
-        <Box
-          key={`${lvl.label}-${i}`}
-          sx={{
-            position: 'absolute',
-            top: `${pct(lvl.price)}%`,
-            left: 0,
-            right: 0,
-            transform: 'translateY(-50%)',
-            display: 'flex',
-            alignItems: 'center',
-            zIndex: lvl.isMark ? 2 : 1,
-          }}
-        >
-          <Typography
-            sx={{
-              width: 92,
-              textAlign: 'right',
-              pr: 0.75,
-              fontSize: lvl.isMark ? 12 : 11,
-              fontFamily: 'monospace',
-              fontWeight: lvl.isMark ? 700 : 400,
-              color: lvl.color,
-              whiteSpace: 'nowrap',
-            }}
-          >
-            ${lvl.price.toFixed(dp)}
-          </Typography>
-          <Box
-            sx={{
-              width: lvl.isMark ? 10 : 7,
-              height: lvl.isMark ? 10 : 7,
-              borderRadius: '50%',
-              bgcolor: lvl.color,
-              flexShrink: 0,
-              boxShadow: lvl.isMark ? `0 0 8px ${lvl.color}` : 'none',
-              zIndex: 2,
-            }}
-          />
-          <Box
-            sx={{
-              flex: 1,
-              height: lvl.isMark ? 2 : 1,
-              bgcolor: lvl.color,
-              opacity: lvl.isMark ? 0.5 : 0.25,
-              mx: 0.5,
-              borderStyle: lvl.dashed ? 'dashed' : 'solid',
-            }}
-          />
-          <Typography
-            sx={{
-              fontSize: 10,
-              color: lvl.color,
-              whiteSpace: 'nowrap',
-              pl: 0.5,
-              fontWeight: lvl.isMark ? 700 : 400,
-            }}
-          >
-            {lvl.label}
-          </Typography>
-        </Box>
-      ))}
-    </Box>
+    <Table size="small" sx={{ mt: 1 }}>
+      <TableBody>
+        {rows.map((r) => (
+          <TableRow key={r.label} sx={{ '& td': { border: 0, py: 0.35, px: 0 } }}>
+            <TableCell sx={{ color: 'text.secondary', width: '45%' }}>{r.label}</TableCell>
+            <TableCell align="right" sx={{ fontFamily: 'monospace', fontWeight: 600, color: r.tone }}>
+              {r.price === '—' ? '—' : `$${r.price}`}
+            </TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
   );
 }
 
 function TraderCard({ trader }: { trader: TraderSummary }): React.ReactElement {
-  const isActive = trader.status === 'ACTIVE';
-  const activeHedge = trader.hedgeLevels.find((h: HedgeLevelInfo) => h.status === 'OPEN' || h.status === 'ACTIVE');
+  const total = String(parseFloat(trader.realizedPnl) + parseFloat(trader.unrealizedPnl));
+  const hedge = trader.hedgeLevels.find((h: HedgeLevelInfo) => h.status === 'OPEN' || h.status === 'ACTIVE' || h.status === 'PENDING');
 
   return (
-    <Card
-      sx={{
-        border: '1px solid',
-        borderColor: isActive ? 'rgba(33,150,243,0.25)' : 'divider',
-        height: '100%',
-      }}
-    >
+    <Card sx={{ border: '1px solid', borderColor: 'divider', height: '100%' }}>
       <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
-            <Typography variant="h6" fontWeight={700}>{trader.symbol}</Typography>
-            <Chip
-              label={trader.status}
-              size="small"
-              sx={{
-                height: 20,
-                fontSize: 10,
-                bgcolor: isActive ? 'rgba(76,175,80,0.15)' : 'rgba(255,255,255,0.07)',
-                color: isActive ? '#4caf50' : 'text.secondary',
-              }}
-            />
-            {activeHedge != null && (
-              <Chip
-                label={`L${activeHedge.level}`}
-                size="small"
-                sx={{ height: 20, fontSize: 10, bgcolor: 'rgba(255,152,0,0.15)', color: '#ff9800' }}
-              />
-            )}
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.5 }}>
+          <Box sx={{ display: 'flex', gap: 0.75, alignItems: 'center' }}>
+            <Typography variant="h6" fontWeight={700}>{trader.symbol.replace('USDT', '')}</Typography>
+            <Chip label={trader.status} size="small" sx={{ height: 20, fontSize: 10 }} color={trader.status === 'ACTIVE' ? 'success' : 'default'} />
+            {hedge != null && <Chip label={`L${hedge.level}`} size="small" sx={{ height: 20, fontSize: 10 }} color="warning" variant="outlined" />}
           </Box>
-          <Box sx={{ textAlign: 'right' }}>
-            <Typography variant="caption" color="text.secondary" display="block">PnL</Typography>
-            <Typography variant="body2" fontWeight={700} sx={{ color: pnlCol(trader.unrealizedPnl) }}>
-              {pnlStr(trader.unrealizedPnl, 4)}
-            </Typography>
-          </Box>
+          <Typography fontWeight={700} sx={{ color: pnlColor(total) }}>{pnl(total, 2)}</Typography>
         </Box>
-
-        <Divider sx={{ mb: 1, opacity: 0.15 }} />
-        <PriceLadder trader={trader} />
-        <Divider sx={{ mt: 1.5, mb: 1, opacity: 0.15 }} />
-
-        <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
-          <Box>
-            <Typography variant="caption" color="text.secondary">Realized</Typography>
-            <Typography variant="body2" fontWeight={600} sx={{ color: pnlCol(trader.realizedPnl) }}>
-              {pnlStr(trader.realizedPnl, 4)}
-            </Typography>
-          </Box>
-          <Box sx={{ textAlign: 'center' }}>
-            <Typography variant="caption" color="text.secondary">Main Short</Typography>
-            <Typography variant="body2">{fmt(trader.entryPrice)}</Typography>
-          </Box>
-          <Box sx={{ textAlign: 'right' }}>
-            <Typography variant="caption" color="text.secondary">Short TP</Typography>
-            <Typography variant="body2" sx={{ color: '#4caf50' }}>{fmt(trader.tpPrice)}</Typography>
-          </Box>
-        </Box>
+        <LadderRows trader={trader} />
       </CardContent>
     </Card>
   );
 }
 
 export function DashboardPage(): React.ReactElement {
-  const { data: stats } = useGlobalStats();
   const { data: summary } = useStatsSummary();
   const { data: traders } = useActiveTraders();
   const pauseMutation = usePauseTraders();
   const resumeMutation = useResumeTraders();
   const stopMutation = useEmergencyStop();
+  const dashWs = useSystemStore((s) => s.dashboardWsConnected);
+  const lastWs = useSystemStore((s) => s.lastWsMessageAt);
 
-  const equity = summary?.totalEquity ?? stats?.totalEquity;
+  const list = traders ?? summary?.traders ?? [];
+  const equity = summary?.totalEquity ?? '0';
   const totalPnl = summary?.totalPnl
-    ?? stats?.totalPnl
-    ?? String(
-      parseFloat(summary?.totalRealizedPnl ?? stats?.totalRealizedPnl ?? '0')
-      + parseFloat(summary?.totalUnrealizedPnl ?? stats?.totalUnrealizedPnl ?? '0'),
-    );
-  const activeCount = summary?.activeTraders ?? stats?.activeTraders ?? traders?.length ?? 0;
-  const maxTraders = summary?.maxTraders ?? stats?.maxTraders ?? 0;
-  const mode = summary?.tradingMode ?? stats?.tradingMode ?? '…';
-  const isLive = mode === 'LIVE';
+    ?? String(parseFloat(summary?.totalRealizedPnl ?? '0') + parseFloat(summary?.totalUnrealizedPnl ?? '0'));
+  const active = summary?.activeTraders ?? list.length;
+  const max = summary?.maxTraders ?? 0;
+  const mode = summary?.tradingMode ?? '…';
   const gainers = summary?.topGainers ?? [];
+  const wsFresh = dashWs && Date.now() - lastWs < 5000;
 
   return (
     <Box>
@@ -269,8 +132,8 @@ export function DashboardPage(): React.ReactElement {
         sx={{
           display: 'flex',
           flexWrap: 'wrap',
-          alignItems: 'center',
           gap: 3,
+          alignItems: 'center',
           p: 2,
           mb: 2,
           borderRadius: 2,
@@ -279,53 +142,54 @@ export function DashboardPage(): React.ReactElement {
           borderColor: 'divider',
         }}
       >
-        {[
-          { label: 'Equity', value: fmt(equity, 2) },
-          { label: 'Total PnL', value: pnlStr(totalPnl, 2), color: pnlCol(totalPnl) },
-          { label: 'Active Traders', value: `${activeCount} / ${maxTraders}` },
-        ].map((item) => (
-          <Box key={item.label}>
-            <Typography variant="caption" color="text.secondary" display="block">{item.label}</Typography>
-            <Typography variant="h6" fontWeight={700} sx={{ color: item.color ?? 'text.primary' }}>
-              {item.value}
-            </Typography>
-          </Box>
-        ))}
+        <Box>
+          <Typography variant="caption" color="text.secondary">Equity</Typography>
+          <Typography variant="h5" fontWeight={700}>{money(equity, 2)}</Typography>
+        </Box>
+        <Box>
+          <Typography variant="caption" color="text.secondary">Total PnL</Typography>
+          <Typography variant="h5" fontWeight={700} sx={{ color: pnlColor(totalPnl) }}>{pnl(totalPnl, 2)}</Typography>
+        </Box>
+        <Box>
+          <Typography variant="caption" color="text.secondary">Active Traders</Typography>
+          <Typography variant="h5" fontWeight={700} sx={{ color: active > max && max > 0 ? '#f44336' : 'inherit' }}>
+            {active} / {max}
+          </Typography>
+        </Box>
 
-        <Chip label={mode} size="small" color={isLive ? 'error' : 'info'} />
+        <Chip label={mode} size="small" color={mode === 'LIVE' ? 'error' : 'info'} />
+        <Chip
+          label={wsFresh ? 'Live feed' : dashWs ? 'WS idle' : 'WS down · polling'}
+          size="small"
+          color={wsFresh ? 'success' : dashWs ? 'warning' : 'error'}
+          variant="outlined"
+        />
 
-        <Box sx={{ ml: 'auto', display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-          <Button size="small" variant="outlined" color="warning" onClick={() => pauseMutation.mutate()} disabled={pauseMutation.isPending}>
-            Pause
-          </Button>
-          <Button size="small" variant="outlined" color="success" onClick={() => resumeMutation.mutate()} disabled={resumeMutation.isPending}>
-            Resume
-          </Button>
+        <Box sx={{ ml: 'auto', display: 'flex', gap: 1 }}>
+          <Button size="small" variant="outlined" color="warning" onClick={() => pauseMutation.mutate()}>Pause</Button>
+          <Button size="small" variant="outlined" color="success" onClick={() => resumeMutation.mutate()}>Resume</Button>
           <Button
             size="small"
             variant="contained"
             color="error"
             startIcon={<Warning />}
-            onClick={() => {
-              if (window.confirm('EMERGENCY STOP — close all positions?')) stopMutation.mutate();
-            }}
+            onClick={() => { if (window.confirm('Close all positions?')) stopMutation.mutate(); }}
           >
-            Emergency Stop
+            Stop
           </Button>
         </Box>
       </Box>
 
       <Grid container spacing={2}>
-        <Grid item xs={12} md={gainers.length > 0 ? 9 : 12}>
-          {traders == null || traders.length === 0 ? (
-            <Box sx={{ textAlign: 'center', py: 10, color: 'text.secondary' }}>
-              <Typography variant="h6" gutterBottom>No active traders</Typography>
-              <Typography variant="body2">Scanning top gainers…</Typography>
+        <Grid item xs={12} md={gainers.length ? 9 : 12}>
+          {list.length === 0 ? (
+            <Box sx={{ py: 8, textAlign: 'center', color: 'text.secondary' }}>
+              <Typography>No active traders — scanning gainers…</Typography>
             </Box>
           ) : (
             <Grid container spacing={2}>
-              {traders.map((t) => (
-                <Grid item xs={12} lg={6} key={t.id}>
+              {list.map((t) => (
+                <Grid item xs={12} sm={6} lg={4} key={t.id}>
                   <TraderCard trader={t} />
                 </Grid>
               ))}
@@ -335,32 +199,18 @@ export function DashboardPage(): React.ReactElement {
 
         {gainers.length > 0 && (
           <Grid item xs={12} md={3}>
-            <Card sx={{ position: 'sticky', top: 16 }}>
+            <Card>
               <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
-                <Typography variant="subtitle2" fontWeight={700} sx={{ mb: 1, opacity: 0.7 }}>
-                  TOP GAINERS
-                </Typography>
-                {gainers.slice(0, 15).map((g) => {
+                <Typography variant="subtitle2" fontWeight={700} sx={{ mb: 1, opacity: 0.7 }}>TOP GAINERS</Typography>
+                {gainers.slice(0, 12).map((g) => {
                   const pct = parseFloat(g.priceChangePercent);
-                  const color = pct >= 0 ? '#4caf50' : '#f44336';
                   return (
-                    <Box
-                      key={g.symbol}
-                      sx={{
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                        py: 0.5,
-                        borderBottom: '1px solid',
-                        borderColor: 'divider',
-                        '&:last-child': { borderBottom: 'none' },
-                      }}
-                    >
+                    <Box key={g.symbol} sx={{ display: 'flex', justifyContent: 'space-between', py: 0.4 }}>
                       <Typography variant="caption" fontFamily="monospace" fontWeight={600}>
                         {g.symbol.replace('USDT', '')}
                       </Typography>
-                      <Typography variant="caption" sx={{ color, fontWeight: 700 }}>
-                        {pct >= 0 ? '+' : ''}{pct.toFixed(2)}%
+                      <Typography variant="caption" fontWeight={700} sx={{ color: pct >= 0 ? '#4caf50' : '#f44336' }}>
+                        {pct >= 0 ? '+' : ''}{pct.toFixed(1)}%
                       </Typography>
                     </Box>
                   );

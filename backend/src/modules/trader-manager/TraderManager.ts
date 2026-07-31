@@ -38,9 +38,11 @@ export class TraderManager extends EventEmitter {
   private topGainers: Ticker24h[] = [];
   private refreshTimer: NodeJS.Timeout | null = null;
   private summaryTimer: NodeJS.Timeout | null = null;
+  private pricePollTimer: NodeJS.Timeout | null = null;
   private isRunning = false;
   private isPaused = false;
   private lastSummaryAt = 0;
+  private refreshInFlight = false;
 
   constructor(
     private readonly executionProvider: IExecutionProvider,
@@ -83,11 +85,18 @@ export class TraderManager extends EventEmitter {
       void this.refreshAndFillSlots();
     }, this.traderConfig.refreshInterval);
 
+    // Push live trader snapshots + summary every second (UI realtime backbone)
     this.summaryTimer = setInterval(() => {
-      void this.broadcastSummary();
-    }, 2000);
+      this.broadcastAllSnapshots();
+      void this.broadcastSummary(true);
+    }, 1000);
 
-    log.info(`TraderManager started with ${this.traders.size} traders`);
+    // REST fallback if Binance mark-price WS stalls (also feeds simulation triggers)
+    this.pricePollTimer = setInterval(() => {
+      void this.pollMarkPrices();
+    }, 1500);
+
+    log.info(`TraderManager started with ${this.traders.size}/${this.traderConfig.maxTraders} traders`);
   }
 
   async stop(): Promise<void> {
@@ -99,6 +108,10 @@ export class TraderManager extends EventEmitter {
     if (this.summaryTimer != null) {
       clearInterval(this.summaryTimer);
       this.summaryTimer = null;
+    }
+    if (this.pricePollTimer != null) {
+      clearInterval(this.pricePollTimer);
+      this.pricePollTimer = null;
     }
     await this.wsManager.shutdown();
     log.info('TraderManager stopped');
@@ -125,6 +138,7 @@ export class TraderManager extends EventEmitter {
     this.isRunning = false;
     if (this.refreshTimer != null) clearInterval(this.refreshTimer);
     if (this.summaryTimer != null) clearInterval(this.summaryTimer);
+    if (this.pricePollTimer != null) clearInterval(this.pricePollTimer);
     for (const trader of this.traders.values()) {
       try {
         await trader.emergencyStop();
@@ -203,7 +217,23 @@ export class TraderManager extends EventEmitter {
       }
     }
 
-    log.info(`Restored ${this.traders.size} active traders from database`);
+    // Hard-cap: if DB had more actives than maxTraders, stop the extras
+    if (this.traders.size > this.traderConfig.maxTraders) {
+      const ordered = [...this.traders.values()];
+      const extras = ordered.slice(this.traderConfig.maxTraders);
+      log.warn(`Restored ${ordered.length} traders but max is ${this.traderConfig.maxTraders} — stopping ${extras.length} extras`);
+      for (const t of extras) {
+        try {
+          await t.emergencyStop();
+        } catch (err) {
+          log.error(`Failed stopping excess trader ${t.getId()}`, { error: String(err) });
+        }
+        this.traders.delete(t.getId());
+        this.symbolToTrader.delete(t.getSymbol());
+      }
+    }
+
+    log.info(`Restored ${this.traders.size}/${this.traderConfig.maxTraders} active traders from database`);
   }
 
   private reconstructStateFromOrders(dbTrader: {
@@ -322,7 +352,8 @@ export class TraderManager extends EventEmitter {
   }
 
   private async refreshAndFillSlots(): Promise<void> {
-    if (this.isPaused) return;
+    if (this.isPaused || this.refreshInFlight) return;
+    this.refreshInFlight = true;
 
     try {
       this.topGainers = await withRetry(
@@ -336,15 +367,16 @@ export class TraderManager extends EventEmitter {
 
       await this.broadcastSummary(true);
 
-      const activeCount = this.getActiveTraderCount();
-      const slotsNeeded = this.traderConfig.maxTraders - activeCount;
+      const occupied = this.getOccupiedSlots();
+      const slotsNeeded = this.traderConfig.maxTraders - occupied;
 
       if (slotsNeeded <= 0) return;
 
       const eligibleGainers = this.topGainers.filter((t) => this.isEligibleSymbol(t.symbol));
-      log.info(`${eligibleGainers.length} eligible gainers, need ${slotsNeeded} new traders`);
+      log.info(`${eligibleGainers.length} eligible gainers, need ${slotsNeeded} new traders (occupied=${occupied})`);
 
       for (let i = 0; i < Math.min(slotsNeeded, eligibleGainers.length); i++) {
+        if (this.getOccupiedSlots() >= this.traderConfig.maxTraders) break;
         const ticker = eligibleGainers[i];
         if (ticker == null) break;
         try {
@@ -355,6 +387,8 @@ export class TraderManager extends EventEmitter {
       }
     } catch (err) {
       log.error('Error refreshing trader slots', { error: String(err) });
+    } finally {
+      this.refreshInFlight = false;
     }
   }
 
@@ -368,6 +402,10 @@ export class TraderManager extends EventEmitter {
   private async createTrader(symbol: string): Promise<void> {
     if (this.symbolToTrader.has(symbol)) {
       log.warn(`Attempted to create duplicate trader for ${symbol}`);
+      return;
+    }
+    if (this.getOccupiedSlots() >= this.traderConfig.maxTraders) {
+      log.warn(`At max traders (${this.traderConfig.maxTraders}) — refusing ${symbol}`);
       return;
     }
 
@@ -455,6 +493,23 @@ export class TraderManager extends EventEmitter {
     trader?.onPriceUpdate(update.price);
   }
 
+  /** REST mark-price poll — keeps marks/PnL/sim triggers alive if WS is quiet. */
+  private async pollMarkPrices(): Promise<void> {
+    const symbols = [...this.symbolToTrader.keys()];
+    await Promise.all(
+      symbols.map(async (symbol) => {
+        try {
+          const price = await this.binanceClient.getMarkPrice(symbol);
+          const sim = this.executionProvider as { onPriceUpdate?: (s: string, p: string) => void };
+          sim.onPriceUpdate?.(symbol, price);
+          this.onPriceUpdate({ symbol, price, timestamp: Date.now() });
+        } catch {
+          // non-fatal; next tick retries
+        }
+      }),
+    );
+  }
+
   private async createListenKey(): Promise<string> {
     const url = `${process.env.BINANCE_FUTURES_BASE_URL ?? 'https://fapi.binance.com/fapi/v1'}/listenKey`;
     const res = await fetch(url, {
@@ -485,7 +540,7 @@ export class TraderManager extends EventEmitter {
           totalPnl: totalPnl.toFixed(8),
           totalRealizedPnl: realizedDec.toFixed(8),
           totalUnrealizedPnl: unrealized,
-          activeTraders: this.getActiveTraderCount(),
+          activeTraders: this.getOccupiedSlots(),
           maxTraders: this.traderConfig.maxTraders,
           topGainers: this.topGainers.slice(0, 20),
           tradingMode: this.mode,
@@ -503,8 +558,25 @@ export class TraderManager extends EventEmitter {
     ).length;
   }
 
+  /** Includes in-flight initializations (symbol reserved before traders map entry). */
+  getOccupiedSlots(): number {
+    return this.symbolToTrader.size;
+  }
+
+  getMaxTraders(): number {
+    return this.traderConfig.maxTraders;
+  }
+
   getTraderSummary(): TraderSummaryView[] {
     return [...this.traders.values()].map((t) => t.toSummary());
+  }
+
+  /** Push every active trader snapshot to dashboard clients. */
+  broadcastAllSnapshots(): void {
+    for (const trader of this.traders.values()) {
+      const event: DashboardEvent = { type: 'TRADER_SNAPSHOT', trader: trader.toSummary() };
+      this.emit('traderEvent', event);
+    }
   }
 
   getTopGainers(): Ticker24h[] {
