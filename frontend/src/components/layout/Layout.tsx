@@ -4,25 +4,21 @@ import {
   ListItemIcon, ListItemText, IconButton, Chip, useTheme,
 } from '@mui/material';
 import {
-  Dashboard, People, Receipt, AccountBalance, SwapHoriz,
-  BarChart, Settings, Article, PlayArrow, MonitorHeart, Menu,
+  Dashboard, People, Receipt, BarChart, Settings, Article, MonitorHeart, Menu,
 } from '@mui/icons-material';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { useSystemHealth } from '../../hooks/useQueries';
+import { useSystemHealth, useStatsSummary } from '../../hooks/useQueries';
 
-const DRAWER_WIDTH = 240;
+const DRAWER_WIDTH = 220;
 
 const navItems = [
   { label: 'Dashboard', path: '/', icon: <Dashboard /> },
   { label: 'Traders', path: '/traders', icon: <People /> },
   { label: 'Orders', path: '/orders', icon: <Receipt /> },
-  { label: 'Positions', path: '/positions', icon: <AccountBalance /> },
-  { label: 'Trades', path: '/trades', icon: <SwapHoriz /> },
   { label: 'Statistics', path: '/statistics', icon: <BarChart /> },
   { label: 'Configuration', path: '/config', icon: <Settings /> },
   { label: 'Logs', path: '/logs', icon: <Article /> },
-  { label: 'Simulation', path: '/simulation', icon: <PlayArrow /> },
-  { label: 'System Health', path: '/health', icon: <MonitorHeart /> },
+  { label: 'Health', path: '/health', icon: <MonitorHeart /> },
 ];
 
 interface LayoutProps {
@@ -35,12 +31,13 @@ export function Layout({ children }: LayoutProps): React.ReactElement {
   const navigate = useNavigate();
   const [mobileOpen, setMobileOpen] = useState(false);
   const { data: health } = useSystemHealth();
+  const { data: summary } = useStatsSummary();
 
   const drawer = (
     <Box>
       <Toolbar>
         <Typography variant="h6" fontWeight="bold" color="primary">
-          Futures Bot
+          Speed
         </Typography>
       </Toolbar>
       <List dense>
@@ -68,8 +65,11 @@ export function Layout({ children }: LayoutProps): React.ReactElement {
             <Menu />
           </IconButton>
           <Typography variant="h6" sx={{ flexGrow: 1 }}>
-            Binance Futures Trading Bot
+            Futures Bot
           </Typography>
+          {summary?.tradingMode != null && (
+            <Chip label={summary.tradingMode} size="small" color={summary.tradingMode === 'LIVE' ? 'error' : 'info'} sx={{ mr: 1 }} />
+          )}
           <Chip
             label={health?.status ?? 'connecting'}
             color={health?.status === 'healthy' ? 'success' : health?.status === 'degraded' ? 'warning' : 'error'}
@@ -77,7 +77,7 @@ export function Layout({ children }: LayoutProps): React.ReactElement {
             sx={{ mr: 1 }}
           />
           <Chip
-            label={health?.binanceWs ? 'WS Connected' : 'WS Disconnected'}
+            label={health?.binanceWs ? 'WS OK' : 'WS Down'}
             color={health?.binanceWs ? 'success' : 'error'}
             size="small"
             variant="outlined"

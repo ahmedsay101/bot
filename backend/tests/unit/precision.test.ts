@@ -9,7 +9,7 @@ import {
   calcShortUnrealizedPnl,
   calcLongUnrealizedPnl,
   calcFee,
-} from '../../../src/modules/utils/precision';
+} from '../../src/modules/utils/precision';
 
 describe('Precision utilities', () => {
   describe('roundToTickSize', () => {

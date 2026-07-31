@@ -1,4 +1,4 @@
-import { DeduplicationGuard, CircuitBreaker, withRetry } from '../../../src/modules/utils/retry';
+import { DeduplicationGuard, CircuitBreaker, withRetry } from '../../src/modules/utils/retry';
 
 describe('DeduplicationGuard', () => {
   it('returns false for new events', () => {

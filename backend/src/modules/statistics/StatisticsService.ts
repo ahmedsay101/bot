@@ -1,6 +1,7 @@
 import Decimal from 'decimal.js';
 import type { PrismaClient } from '@prisma/client';
-import type { BinanceClient } from '../binance/client';
+import type { EquityService } from '../calc/EquityService';
+import { calcAllocation, calcTotalPnl } from '../calc/allocation';
 import { createContextLogger } from '../logger';
 
 const log = createContextLogger('StatisticsService');
@@ -10,10 +11,11 @@ export interface GlobalStats {
   activeTraders: number;
   completedTraders: number;
   totalRealizedPnl: string;
+  totalUnrealizedPnl: string;
+  totalPnl: string;
   totalFees: string;
   dailyPnl: string;
   winRate: string;
-  // Equity breakdown
   totalEquity: string;
   equityPerTrader: string;
   positionEquity: string;
@@ -40,13 +42,13 @@ export interface TraderStats {
 export class StatisticsService {
   constructor(
     private readonly db: PrismaClient,
-    private readonly binanceClient: BinanceClient,
+    private readonly equityService: EquityService,
     private readonly mode: 'LIVE' | 'SIMULATION',
   ) {}
 
   async getGlobalStatistics(): Promise<GlobalStats> {
     const [traders, completedStats] = await Promise.all([
-      this.db.trader.findMany({ select: { status: true, realizedPnl: true } }),
+      this.db.trader.findMany({ select: { status: true, realizedPnl: true, unrealizedPnl: true } }),
       this.db.traderStatistics.findMany({ select: { realizedPnl: true, totalFees: true, hedgeWins: true, hedgeLosses: true } }),
     ]);
 
@@ -57,6 +59,12 @@ export class StatisticsService {
       (acc, t) => acc.plus(t.realizedPnl),
       new Decimal(0),
     );
+
+    const totalUnrealizedPnl = traders
+      .filter((t) => t.status === 'ACTIVE' || t.status === 'INITIALIZING' || t.status === 'PAUSED')
+      .reduce((acc, t) => acc.plus(t.unrealizedPnl), new Decimal(0));
+
+    const totalPnl = calcTotalPnl(totalRealizedPnl, totalUnrealizedPnl);
 
     const totalFees = completedStats.reduce(
       (acc, s) => acc.plus(s.totalFees),
@@ -70,7 +78,6 @@ export class StatisticsService {
       ? new Decimal(totalWins).div(totalHedges).mul(100).toFixed(2)
       : '0';
 
-    // Daily PnL: sum of realized PnL from trades today
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
 
@@ -87,41 +94,28 @@ export class StatisticsService {
     const maxTraders = cfg?.maxTraders ?? 1;
     const leverage = cfg?.leverage ?? 10;
 
-    let totalEquity: Decimal;
-    if (this.mode === 'SIMULATION') {
-      totalEquity = new Decimal('200').plus(totalRealizedPnl);
-    } else {
-      try {
-        const balances = await this.binanceClient.getAccountBalance();
-        const usdt = balances.find((b) => b.asset === 'USDT');
-        totalEquity = usdt != null ? new Decimal(usdt.balance) : new Decimal(0);
-      } catch {
-        totalEquity = new Decimal(0);
-      }
-    }
-
-    const equityPerTrader = maxTraders > 0 ? totalEquity.div(maxTraders) : totalEquity;
-    const positionEquity = equityPerTrader.div(2);
-    const positionNotional = positionEquity.mul(leverage);
+    const totalEquity = await this.equityService.getTotalEquity();
+    const allocation = calcAllocation(totalEquity, maxTraders, leverage);
 
     const stats: GlobalStats = {
       totalTraders: traders.length,
       activeTraders,
       completedTraders,
       totalRealizedPnl: totalRealizedPnl.toFixed(4),
+      totalUnrealizedPnl: totalUnrealizedPnl.toFixed(4),
+      totalPnl: totalPnl.toFixed(4),
       totalFees: totalFees.toFixed(4),
       dailyPnl: dailyPnl.toFixed(4),
       winRate,
-      totalEquity: totalEquity.toFixed(2),
-      equityPerTrader: equityPerTrader.toFixed(2),
-      positionEquity: positionEquity.toFixed(2),
-      positionNotional: positionNotional.toFixed(2),
+      totalEquity: allocation.totalEquity.toFixed(2),
+      equityPerTrader: allocation.traderEquity.toFixed(2),
+      positionEquity: allocation.positionAllocation.toFixed(2),
+      positionNotional: allocation.positionNotional.toFixed(2),
       maxTraders,
       leverage,
       tradingMode: this.mode,
     };
 
-    // Persist to global statistics table
     await this.db.globalStatistics.upsert({
       where: { id: 'singleton' },
       update: {

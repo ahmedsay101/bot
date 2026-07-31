@@ -17,7 +17,7 @@ const config: Config = {
   collectCoverageFrom: ['src/**/*.ts', '!src/**/*.d.ts', '!src/server.ts', '!src/worker.ts'],
   coverageDirectory: 'coverage',
   coverageReporters: ['text', 'lcov', 'clover'],
-  setupFilesAfterFramework: [],
+  setupFiles: ['<rootDir>/tests/setupEnv.ts'],
   testTimeout: 30000,
   verbose: true,
   clearMocks: true,

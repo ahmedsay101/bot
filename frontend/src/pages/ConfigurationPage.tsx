@@ -29,6 +29,10 @@ export function ConfigurationPage(): React.ReactElement {
   return (
     <Box>
       <Typography variant="h4" fontWeight="bold" mb={3}>Configuration</Typography>
+      <Alert severity="info" sx={{ mb: 2 }}>
+        Equity allocation is automatic: Testing = 200 USDT + realized PnL; Live = Binance Futures balance.
+        Each trader gets Equity / MaxTraders, split equally between Main Short and Hedge.
+      </Alert>
       {saved && <Alert severity="success" sx={{ mb: 2 }}>Configuration saved successfully</Alert>}
 
       <Card elevation={2}>
@@ -46,28 +50,13 @@ export function ConfigurationPage(): React.ReactElement {
             </Grid>
             <Grid item xs={12} sm={6} md={4}>
               <TextField
-                label="Initial Capital (USDT)"
-                value={current.initialCapital}
-                onChange={(e) => handleChange('initialCapital', e.target.value)}
-                fullWidth
-              />
-            </Grid>
-            <Grid item xs={12} sm={6} md={4}>
-              <TextField
-                label="Position Size (USDT)"
-                value={current.positionSize}
-                onChange={(e) => handleChange('positionSize', e.target.value)}
-                fullWidth
-              />
-            </Grid>
-            <Grid item xs={12} sm={6} md={4}>
-              <TextField
                 label="Leverage"
                 type="number"
                 value={current.leverage}
                 onChange={(e) => handleChange('leverage', parseInt(e.target.value, 10))}
                 fullWidth
                 inputProps={{ min: 1, max: 125 }}
+                helperText="Position notional = (Equity ÷ MaxTraders ÷ 2) × Leverage"
               />
             </Grid>
             <Grid item xs={12} sm={6} md={4}>

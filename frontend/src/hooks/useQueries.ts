@@ -17,7 +17,8 @@ export function useActiveTraders() {
   return useQuery({
     queryKey: queryKeys.activeTraders,
     queryFn: () => tradersApi.getActive().then((r) => r.data.data),
-    refetchInterval: 5000,
+    refetchInterval: 10000,
+    staleTime: 2000,
   });
 }
 
@@ -43,6 +44,7 @@ export function useGlobalStats() {
     queryKey: queryKeys.globalStats,
     queryFn: () => statisticsApi.getGlobal().then((r) => r.data.data),
     refetchInterval: 15000,
+    staleTime: 2000,
   });
 }
 
@@ -50,7 +52,8 @@ export function useStatsSummary() {
   return useQuery({
     queryKey: queryKeys.statsSummary,
     queryFn: () => statisticsApi.getSummary().then((r) => r.data.data),
-    refetchInterval: 5000,
+    refetchInterval: 10000,
+    staleTime: 2000,
   });
 }
 

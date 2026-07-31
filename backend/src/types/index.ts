@@ -107,9 +107,46 @@ export interface HedgeLevel {
   entryPrice: string;
   stopPrice: string;
   tpPrice: string;
+  /** Sized independently from main short via hedge allocation × leverage. */
+  quantity: string;
   // PENDING=not placed, ACTIVE=order in exchange, OPEN=position filled, HIT_TP/HIT_SL=closed
   status: 'PENDING' | 'ACTIVE' | 'OPEN' | 'HIT_TP' | 'HIT_SL' | 'CANCELED';
 }
+
+/** Compact trader view for REST + dashboard WebSocket snapshots. */
+export interface TraderSummaryView {
+  id: string;
+  symbol: string;
+  status: TraderStatus;
+  realizedPnl: string;
+  unrealizedPnl: string;
+  hedgeLevel: number;
+  entryPrice: string | null;
+  tpPrice: string | null;
+  markPrice: string;
+  shortQuantity: string | null;
+  hedgeLevels: HedgeLevel[];
+}
+
+export type DashboardEvent =
+  | { type: 'STATUS_CHANGED'; traderId: string; status: TraderStatus }
+  | { type: 'COMPLETED'; traderId: string; symbol: string }
+  | { type: 'FAILED'; traderId: string; symbol: string; error: string }
+  | { type: 'PNL_UPDATE'; traderId: string; realizedPnl: string; unrealizedPnl: string }
+  | { type: 'TRADER_SNAPSHOT'; trader: TraderSummaryView }
+  | {
+      type: 'SUMMARY';
+      data: {
+        totalEquity: string;
+        totalPnl: string;
+        totalRealizedPnl: string;
+        totalUnrealizedPnl: string;
+        activeTraders: number;
+        maxTraders: number;
+        topGainers: Ticker24h[];
+        tradingMode: TraderMode;
+      };
+    };
 
 export interface TraderState {
   id: string;

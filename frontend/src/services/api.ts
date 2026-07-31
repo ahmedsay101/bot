@@ -86,6 +86,7 @@ export interface HedgeLevelInfo {
   entryPrice: string;
   tpPrice: string;
   stopPrice: string;
+  quantity?: string;
   status: 'PENDING' | 'ACTIVE' | 'OPEN' | 'HIT_TP' | 'HIT_SL' | 'CANCELED';
 }
 
@@ -99,6 +100,7 @@ export interface TraderSummary {
   entryPrice: string | null;
   tpPrice: string | null;
   markPrice: string;
+  shortQuantity?: string | null;
   hedgeLevels: HedgeLevelInfo[];
 }
 
@@ -157,6 +159,8 @@ export interface GlobalStats {
   activeTraders: number;
   completedTraders: number;
   totalRealizedPnl: string;
+  totalUnrealizedPnl?: string;
+  totalPnl?: string;
   totalFees: string;
   dailyPnl: string;
   winRate: string;
@@ -171,9 +175,16 @@ export interface GlobalStats {
 
 export interface StatsSummary {
   activeTraders: number;
+  maxTraders?: number;
   topGainers: Ticker[];
+  totalEquity?: string;
+  totalPnl?: string;
   totalRealizedPnl: string;
   totalUnrealizedPnl: string;
+  tradingMode?: string;
+  equityPerTrader?: string;
+  positionNotional?: string;
+  leverage?: number;
 }
 
 export interface Ticker {

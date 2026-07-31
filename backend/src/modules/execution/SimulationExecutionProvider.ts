@@ -8,6 +8,7 @@ import type {
   PositionInfo,
   SymbolInfo,
   OrderStatus,
+  OrderUpdate,
 } from '../../types';
 import { createContextLogger } from '../logger';
 import { sleep } from '../utils/retry';
@@ -44,7 +45,7 @@ export class SimulationExecutionProvider extends EventEmitter implements IExecut
 
   constructor(
     private readonly exchangeInfoProvider: () => Promise<SymbolInfo[]>,
-    private readonly restMarkPriceFetcher: (symbol: string) => Promise<string>,
+    private readonly restMarkPriceFetcher?: (symbol: string) => Promise<string>,
   ) {
     super();
   }
@@ -56,7 +57,6 @@ export class SimulationExecutionProvider extends EventEmitter implements IExecut
   }
 
   async placeOrder(req: OrderRequest): Promise<OrderResult> {
-    // Simulate network latency
     await sleep(this.simLatencyMs + Math.random() * 50);
 
     const symbolInfo = await this.getSymbolInfo(req.symbol);
@@ -65,11 +65,9 @@ export class SimulationExecutionProvider extends EventEmitter implements IExecut
     let fillPrice: string | undefined;
     let status: OrderStatus = 'NEW';
 
-    // Use cached WS price; for MARKET orders the cache is always populated by this point
     const markPrice = this.markPrices.get(req.symbol) ?? req.price;
 
     if (req.type === 'MARKET' && markPrice != null) {
-      // Apply slippage
       const slip = new Decimal(config.trading.slippage);
       const mark = new Decimal(markPrice);
       fillPrice = req.side === 'BUY'
@@ -77,10 +75,14 @@ export class SimulationExecutionProvider extends EventEmitter implements IExecut
         : mark.mul(new Decimal(1).minus(slip)).toFixed(symbolInfo.pricePrecision);
       status = 'FILLED';
 
-      // Track position
-      this.updatePosition(req.symbol, req.side === 'BUY' ? 'LONG' : 'SHORT', fillPrice, adjustedQty, req.reduceOnly ?? false);
+      this.updatePosition(
+        req.symbol,
+        req.side === 'BUY' ? 'LONG' : 'SHORT',
+        fillPrice,
+        adjustedQty,
+        req.reduceOnly ?? false,
+      );
     } else {
-      // LIMIT / STOP_LIMIT / TAKE_PROFIT — will be triggered when price crosses
       status = 'NEW';
     }
 
@@ -110,10 +112,7 @@ export class SimulationExecutionProvider extends EventEmitter implements IExecut
     log.debug('Sim order placed', { clientId: req.clientOrderId, status, fillPrice });
 
     if (status === 'FILLED') {
-      // Emit fill event to simulate user data stream
-      setTimeout(() => {
-        this.emit('orderFill', result);
-      }, this.simLatencyMs);
+      setTimeout(() => this.emitOrderFill(result), this.simLatencyMs);
     }
 
     return result;
@@ -122,8 +121,15 @@ export class SimulationExecutionProvider extends EventEmitter implements IExecut
   async cancelOrder(req: CancelOrderRequest): Promise<void> {
     await sleep(this.simLatencyMs);
     const order = this.orders.get(req.clientOrderId);
-    if (order == null) throw new Error(`Sim order ${req.clientOrderId} not found`);
-    if (!order.isOpen) throw new Error(`Sim order ${req.clientOrderId} is not open`);
+    if (order == null) {
+      // Idempotent cancel — already gone is fine for strategy code
+      log.debug('Sim cancel ignored — order not found', { clientId: req.clientOrderId });
+      return;
+    }
+    if (!order.isOpen) {
+      log.debug('Sim cancel ignored — order not open', { clientId: req.clientOrderId });
+      return;
+    }
     order.isOpen = false;
     order.result.status = 'CANCELED';
     log.debug('Sim order cancelled', { clientId: req.clientOrderId });
@@ -173,7 +179,6 @@ export class SimulationExecutionProvider extends EventEmitter implements IExecut
       quantity,
       reduceOnly: true,
     });
-    this.removePosition(symbol, side);
     return result;
   }
 
@@ -188,7 +193,9 @@ export class SimulationExecutionProvider extends EventEmitter implements IExecut
   async getMarkPrice(symbol: string): Promise<string> {
     const cached = this.markPrices.get(symbol);
     if (cached != null) return cached;
-    // WebSocket hasn't delivered a price yet — fetch from REST and cache it
+    if (this.restMarkPriceFetcher == null) {
+      throw new Error(`No mark price available for ${symbol}`);
+    }
     const price = await this.restMarkPriceFetcher(symbol);
     this.markPrices.set(symbol, price);
     return price;
@@ -212,33 +219,44 @@ export class SimulationExecutionProvider extends EventEmitter implements IExecut
       if (!order.isOpen || order.req.symbol !== symbol) continue;
 
       let triggered = false;
-      let fillAt = markPrice; // default: fill at mark (market)
+      let fillAt = markPrice;
 
       const { type, side, price, stopPrice } = order.req;
 
       if (type === 'STOP_LIMIT' && stopPrice != null) {
-        // Fill at mark (price improvement over limit); limit only caps worst-case
         const stop = new Decimal(stopPrice);
-        if (side === 'BUY'  && mark.gte(stop)) triggered = true;
-        if (side === 'SELL' && mark.lte(stop)) triggered = true;
-        // fillAt stays as markPrice
-
+        if (side === 'BUY' && mark.gte(stop)) {
+          triggered = true;
+          // Limit is worst-case: BUY fills at min(mark, limit)
+          if (price != null) {
+            const limit = new Decimal(price);
+            fillAt = Decimal.min(mark, limit).toFixed();
+          }
+        }
+        if (side === 'SELL' && mark.lte(stop)) {
+          triggered = true;
+          if (price != null) {
+            const limit = new Decimal(price);
+            fillAt = Decimal.max(mark, limit).toFixed();
+          }
+        }
       } else if (type === 'STOP_MARKET' && stopPrice != null) {
-        // Trigger when mark crosses stopPrice; fill at mark
         const stop = new Decimal(stopPrice);
-        if (side === 'BUY'  && mark.gte(stop)) triggered = true;
+        if (side === 'BUY' && mark.gte(stop)) triggered = true;
         if (side === 'SELL' && mark.lte(stop)) triggered = true;
-
       } else if ((type === 'TAKE_PROFIT' || type === 'TAKE_PROFIT_MARKET') && stopPrice != null) {
-        // BUY take-profit = close a SHORT  → fires when price DROPS to target
-        // SELL take-profit = close a LONG  → fires when price RISES to target
         const tp = new Decimal(stopPrice);
-        if (side === 'BUY'  && mark.lte(tp)) { triggered = true; if (type === 'TAKE_PROFIT') fillAt = price ?? markPrice; }
-        if (side === 'SELL' && mark.gte(tp)) { triggered = true; if (type === 'TAKE_PROFIT') fillAt = price ?? markPrice; }
-
+        if (side === 'BUY' && mark.lte(tp)) {
+          triggered = true;
+          if (type === 'TAKE_PROFIT' && price != null) fillAt = price;
+        }
+        if (side === 'SELL' && mark.gte(tp)) {
+          triggered = true;
+          if (type === 'TAKE_PROFIT' && price != null) fillAt = price;
+        }
       } else if (type === 'LIMIT' && price != null) {
         const lp = new Decimal(price);
-        if (side === 'BUY'  && mark.lte(lp)) { triggered = true; fillAt = price; }
+        if (side === 'BUY' && mark.lte(lp)) { triggered = true; fillAt = price; }
         if (side === 'SELL' && mark.gte(lp)) { triggered = true; fillAt = price; }
       }
 
@@ -252,22 +270,17 @@ export class SimulationExecutionProvider extends EventEmitter implements IExecut
     const symbolInfo = this.symbolInfoCache.get(order.req.symbol);
     if (symbolInfo == null) return;
 
-    // Simulate partial fill randomly (5% chance)
-    const isPartial = Math.random() < 0.05;
-    const filledQty = isPartial
-      ? new Decimal(order.req.quantity).mul(0.5).toFixed(symbolInfo.quantityPrecision)
-      : order.req.quantity;
-
+    const filledQty = order.req.quantity;
     const fee = calcFee(fillPrice, filledQty, config.trading.feeRate).toFixed(8);
 
-    order.result.status = isPartial ? 'PARTIALLY_FILLED' : 'FILLED';
+    order.result.status = 'FILLED';
     order.result.filledQuantity = filledQty;
     order.result.avgFillPrice = fillPrice;
     order.result.fee = fee;
     order.result.filledAt = new Date();
-    order.isOpen = isPartial;
+    order.isOpen = false;
 
-    log.debug('Sim order triggered', { clientId, fillPrice, filledQty, isPartial });
+    log.debug('Sim order triggered', { clientId, fillPrice, filledQty });
 
     this.updatePosition(
       order.req.symbol,
@@ -277,30 +290,44 @@ export class SimulationExecutionProvider extends EventEmitter implements IExecut
       order.req.reduceOnly ?? false,
     );
 
-    setTimeout(() => {
-      this.emit('orderFill', { ...order.result });
-    }, this.simLatencyMs);
-
-    // Handle partial fill remainder
-    if (isPartial) {
-      setTimeout(() => {
-        const remainQty = new Decimal(order.req.quantity).minus(filledQty).toFixed(symbolInfo.quantityPrecision);
-        order.result.status = 'FILLED';
-        order.result.filledQuantity = order.req.quantity;
-        order.isOpen = false;
-        this.updatePosition(order.req.symbol, order.req.side === 'BUY' ? 'LONG' : 'SHORT', fillPrice, remainQty, order.req.reduceOnly ?? false);
-        this.emit('orderFill', { ...order.result });
-      }, this.simLatencyMs + 200);
-    }
+    setTimeout(() => this.emitOrderFill({ ...order.result }), this.simLatencyMs);
   }
 
-  private updatePosition(symbol: string, side: 'LONG' | 'SHORT', fillPrice: string, quantity: string, reduceOnly: boolean): void {
+  private emitOrderFill(result: OrderResult): void {
+    this.emit('orderFill', result);
+
+    const update: OrderUpdate = {
+      clientOrderId: result.clientOrderId,
+      exchangeOrderId: result.exchangeOrderId,
+      symbol: result.symbol,
+      status: result.status,
+      filledQuantity: result.filledQuantity,
+      avgFillPrice: result.avgFillPrice,
+      fee: result.fee,
+      feeCurrency: result.feeCurrency,
+      timestamp: Date.now(),
+    };
+    this.emit('orderUpdate', update);
+  }
+
+  /**
+   * Update simulated positions.
+   * reduceOnly closes the OPPOSING position side (BUY reduce closes SHORT, SELL reduce closes LONG).
+   */
+  private updatePosition(
+    symbol: string,
+    orderSide: 'LONG' | 'SHORT',
+    fillPrice: string,
+    quantity: string,
+    reduceOnly: boolean,
+  ): void {
     const positions = this.positions.get(symbol) ?? [];
 
     if (reduceOnly) {
-      const idx = positions.findIndex((p) => p.side === side);
+      const closeSide: 'LONG' | 'SHORT' = orderSide === 'LONG' ? 'SHORT' : 'LONG';
+      const idx = positions.findIndex((p) => p.side === closeSide);
       if (idx >= 0) {
-        const pos = positions[idx];
+        const pos = positions[idx]!;
         const newQty = new Decimal(pos.quantity).minus(quantity);
         if (newQty.lte(0)) {
           positions.splice(idx, 1);
@@ -309,7 +336,7 @@ export class SimulationExecutionProvider extends EventEmitter implements IExecut
         }
       }
     } else {
-      const existing = positions.find((p) => p.side === side);
+      const existing = positions.find((p) => p.side === orderSide);
       if (existing != null) {
         const totalQty = new Decimal(existing.quantity).plus(quantity);
         const avgEntry = new Decimal(existing.entryPrice)
@@ -319,15 +346,16 @@ export class SimulationExecutionProvider extends EventEmitter implements IExecut
         existing.quantity = totalQty.toFixed(8);
         existing.entryPrice = avgEntry.toFixed(8);
       } else {
-        positions.push({ symbol, side, entryPrice: fillPrice, quantity, leverage: config.trading.leverage });
+        positions.push({
+          symbol,
+          side: orderSide,
+          entryPrice: fillPrice,
+          quantity,
+          leverage: config.trading.leverage,
+        });
       }
     }
 
-    this.positions.set(symbol, positions);
-  }
-
-  private removePosition(symbol: string, side: 'LONG' | 'SHORT'): void {
-    const positions = (this.positions.get(symbol) ?? []).filter((p) => p.side !== side);
     this.positions.set(symbol, positions);
   }
 }

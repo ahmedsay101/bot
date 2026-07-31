@@ -33,17 +33,25 @@ export function StatisticsPage(): React.ReactElement {
       <Grid container spacing={2} mb={3}>
         <Grid item xs={6} sm={3}>
           <Card elevation={2}><CardContent>
-            <Typography variant="body2" color="text.secondary">Total Realized PnL</Typography>
-            <Typography variant="h5" color={parseFloat(stats?.totalRealizedPnl ?? '0') >= 0 ? 'success.main' : 'error.main'} fontWeight="bold">
-              ${parseFloat(stats?.totalRealizedPnl ?? '0').toFixed(2)}
+            <Typography variant="body2" color="text.secondary">Equity</Typography>
+            <Typography variant="h5" fontWeight="bold">
+              ${parseFloat(stats?.totalEquity ?? '0').toFixed(2)}
             </Typography>
           </CardContent></Card>
         </Grid>
         <Grid item xs={6} sm={3}>
           <Card elevation={2}><CardContent>
-            <Typography variant="body2" color="text.secondary">Daily PnL</Typography>
-            <Typography variant="h5" color={parseFloat(stats?.dailyPnl ?? '0') >= 0 ? 'success.main' : 'error.main'} fontWeight="bold">
-              ${parseFloat(stats?.dailyPnl ?? '0').toFixed(2)}
+            <Typography variant="body2" color="text.secondary">Total PnL</Typography>
+            <Typography variant="h5" color={parseFloat(stats?.totalPnl ?? stats?.totalRealizedPnl ?? '0') >= 0 ? 'success.main' : 'error.main'} fontWeight="bold">
+              ${parseFloat(stats?.totalPnl ?? stats?.totalRealizedPnl ?? '0').toFixed(2)}
+            </Typography>
+          </CardContent></Card>
+        </Grid>
+        <Grid item xs={6} sm={3}>
+          <Card elevation={2}><CardContent>
+            <Typography variant="body2" color="text.secondary">Active Traders</Typography>
+            <Typography variant="h5" color="primary.main" fontWeight="bold">
+              {stats?.activeTraders ?? 0} / {stats?.maxTraders ?? 0}
             </Typography>
           </CardContent></Card>
         </Grid>
@@ -51,14 +59,6 @@ export function StatisticsPage(): React.ReactElement {
           <Card elevation={2}><CardContent>
             <Typography variant="body2" color="text.secondary">Win Rate</Typography>
             <Typography variant="h5" color="primary.main" fontWeight="bold">{stats?.winRate ?? '0'}%</Typography>
-          </CardContent></Card>
-        </Grid>
-        <Grid item xs={6} sm={3}>
-          <Card elevation={2}><CardContent>
-            <Typography variant="body2" color="text.secondary">Total Fees Paid</Typography>
-            <Typography variant="h5" color="warning.main" fontWeight="bold">
-              ${parseFloat(stats?.totalFees ?? '0').toFixed(2)}
-            </Typography>
           </CardContent></Card>
         </Grid>
       </Grid>

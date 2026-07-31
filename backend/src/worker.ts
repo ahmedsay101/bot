@@ -7,6 +7,7 @@ import { PrismaClient } from '@prisma/client';
 import { logger } from './modules/logger';
 import { BinanceClient } from './modules/binance/client';
 import { StatisticsService } from './modules/statistics/StatisticsService';
+import { EquityService } from './modules/calc/EquityService';
 import { startWorkers, stopWorkers } from './modules/jobs/workers';
 import { scheduleRecurringJobs, closeQueues } from './modules/jobs/queues';
 
@@ -22,7 +23,8 @@ async function bootstrap(): Promise<void> {
   await binanceClient.initialize();
 
   const mode = (process.env.TRADING_MODE ?? 'SIMULATION') as 'LIVE' | 'SIMULATION';
-  const statisticsService = new StatisticsService(db, binanceClient, mode);
+  const equityService = new EquityService(db, binanceClient, mode);
+  const statisticsService = new StatisticsService(db, equityService, mode);
 
   // Dummy trader manager for worker (workers only need stats + health)
   const dummyManager = {
