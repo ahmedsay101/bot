@@ -209,7 +209,11 @@ export class TraderManager extends EventEmitter {
       for (let i = 0; i < Math.min(slotsNeeded, eligibleGainers.length); i++) {
         const ticker = eligibleGainers[i];
         if (ticker == null) break;
-        await this.createTrader(ticker.symbol);
+        try {
+          await this.createTrader(ticker.symbol);
+        } catch (err) {
+          log.error(`Failed to create trader for ${ticker.symbol}`, { error: String(err) });
+        }
       }
     } catch (err) {
       log.error('Error refreshing trader slots', { error: String(err) });
@@ -260,8 +264,12 @@ export class TraderManager extends EventEmitter {
     this.traders.set(traderId, trader);
     this.symbolToTrader.set(symbol, traderId);
 
-    // Subscribe to mark price
-    await this.wsManager.subscribeMarkPrice(symbol);
+    // Subscribe to mark price — failure is non-fatal; getMarkPrice falls back to REST
+    try {
+      await this.wsManager.subscribeMarkPrice(symbol);
+    } catch (err) {
+      log.warn(`Price feed subscription failed for ${symbol}, falling back to REST`, { error: String(err) });
+    }
 
     try {
       await trader.initialize();
@@ -269,6 +277,9 @@ export class TraderManager extends EventEmitter {
       log.error(`Failed to initialize trader for ${symbol}`, { error: String(err) });
       this.traders.delete(traderId);
       this.symbolToTrader.delete(symbol);
+      // Clean up dangling WS subscription if it was opened
+      const stream = `${symbol.toLowerCase()}@markPrice@1s`;
+      this.wsManager.unsubscribe(stream).catch(() => {});
       await this.db.trader.update({
         where: { id: traderId },
         data: { status: 'FAILED' },
