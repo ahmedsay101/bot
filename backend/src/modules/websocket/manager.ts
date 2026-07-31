@@ -22,6 +22,7 @@ interface StreamSubscription {
 
 export class WebSocketManager extends EventEmitter {
   private subscriptions = new Map<string, StreamSubscription>();
+  private reconnecting = new Set<string>(); // prevents concurrent reconnects per key
   private listenKey: string | null = null;
   private listenKeyTimer: NodeJS.Timeout | null = null;
   private readonly wsBaseUrl: string;
@@ -35,6 +36,7 @@ export class WebSocketManager extends EventEmitter {
 
   async subscribeMarkPrice(symbol: string): Promise<void> {
     const stream = `${symbol.toLowerCase()}@markPrice@1s`;
+    if (this.subscriptions.has(stream)) return; // already subscribed, no duplicate
     await this.openStream(stream, this.handleMarkPrice.bind(this));
     log.info(`Subscribed to mark price for ${symbol}`);
   }
@@ -77,18 +79,42 @@ export class WebSocketManager extends EventEmitter {
     url: string,
     handler: (data: Record<string, unknown>) => void,
   ): Promise<void> {
+    // Close any existing connection for this key — prevents orphaned ping intervals
+    const existing = this.subscriptions.get(key);
+    if (existing != null) {
+      clearInterval(existing.pingInterval);
+      existing.ws.removeAllListeners();
+      existing.ws.terminate();
+      this.subscriptions.delete(key);
+    }
+
     return new Promise((resolve, reject) => {
       const ws = new WebSocket(url);
 
+      const connectTimeout = setTimeout(() => {
+        ws.removeAllListeners();
+        ws.terminate();
+        reject(new Error(`WS connect timeout for ${key}`));
+      }, 15000);
+
       const onOpen = (): void => {
-        log.debug(`WS opened: ${key}`);
         clearTimeout(connectTimeout);
+        log.debug(`WS opened: ${key}`);
 
         const ping = setInterval(() => {
-          if (sub.isAlive) {
-            sub.isAlive = false;
+          // Check that this interval belongs to the current connection for this key
+          const cur = this.subscriptions.get(key);
+          if (cur == null || cur.ws !== ws) { clearInterval(ping); return; }
+
+          if (cur.isAlive) {
+            cur.isAlive = false;
             ws.ping();
           } else {
+            // Self-clear before reconnecting — prevents double-reconnect with onClose
+            clearInterval(ping);
+            cur.ws.removeAllListeners('close');
+            cur.ws.terminate();
+            this.subscriptions.delete(key);
             log.warn(`WS heartbeat missed for ${key} — reconnecting`);
             void this.reconnectStream(key, url, handler);
           }
@@ -105,18 +131,21 @@ export class WebSocketManager extends EventEmitter {
       };
 
       const onClose = (code: number, reason: Buffer): void => {
-        log.warn(`WS closed for ${key}: code=${code} reason=${reason.toString()}`);
         const sub = this.subscriptions.get(key);
-        if (sub != null) clearInterval(sub.pingInterval);
-        this.subscriptions.delete(key);
-        if (!this.isShuttingDown) {
-          void this.reconnectStream(key, url, handler);
+        // Only handle if this is still the active connection
+        if (sub != null && sub.ws === ws) {
+          clearInterval(sub.pingInterval);
+          this.subscriptions.delete(key);
+          if (!this.isShuttingDown && !this.reconnecting.has(key)) {
+            log.warn(`WS closed for ${key}: code=${code} ${reason.toString()} — reconnecting`);
+            void this.reconnectStream(key, url, handler);
+          }
         }
       };
 
       const onPong = (): void => {
         const sub = this.subscriptions.get(key);
-        if (sub != null) sub.isAlive = true;
+        if (sub != null && sub.ws === ws) sub.isAlive = true;
       };
 
       ws.on('open', onOpen);
@@ -132,11 +161,6 @@ export class WebSocketManager extends EventEmitter {
           log.error('WS message parse error', { error: String(err) });
         }
       });
-
-      const connectTimeout = setTimeout(() => {
-        ws.terminate();
-        reject(new Error(`WS connect timeout for ${key}`));
-      }, 15000);
     });
   }
 
@@ -145,24 +169,26 @@ export class WebSocketManager extends EventEmitter {
     url: string,
     handler: (data: Record<string, unknown>) => void,
   ): Promise<void> {
-    const sub = this.subscriptions.get(key);
-    const attempts = (sub?.reconnectAttempts ?? 0) + 1;
-    const delay = Math.min(1000 * Math.pow(2, attempts - 1), 30000);
+    if (this.reconnecting.has(key) || this.isShuttingDown) return;
+    this.reconnecting.add(key);
 
-    log.info(`Reconnecting WS ${key} in ${delay}ms (attempt ${attempts})`);
-    await sleep(delay);
-
-    if (!this.isShuttingDown) {
+    let attempts = 0;
+    while (!this.isShuttingDown) {
+      attempts++;
+      const delay = Math.min(1000 * Math.pow(2, attempts - 1), 30000);
+      log.info(`Reconnecting WS ${key} in ${delay}ms (attempt ${attempts})`);
+      await sleep(delay);
+      if (this.isShuttingDown) break;
       try {
         await this.openStreamByUrl(key, url, handler);
-        const newSub = this.subscriptions.get(key);
-        if (newSub != null) newSub.reconnectAttempts = 0;
+        this.reconnecting.delete(key);
         this.emit('reconnected', key);
+        return;
       } catch (err) {
-        log.error(`Reconnect failed for ${key}`, { error: String(err) });
-        void this.reconnectStream(key, url, handler);
+        log.error(`Reconnect attempt ${attempts} failed for ${key}`, { error: String(err) });
       }
     }
+    this.reconnecting.delete(key);
   }
 
   private handleMarkPrice(data: Record<string, unknown>): void {
