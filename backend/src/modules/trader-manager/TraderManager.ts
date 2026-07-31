@@ -352,8 +352,6 @@ export class TraderManager extends EventEmitter {
       hedgeLevels: t.getHedgeLevels(),
     }));
   }
-    }));
-  }
 
   getTopGainers(): Ticker24h[] {
     return this.topGainers.slice(0, 20);
