@@ -9,6 +9,7 @@ import { SimulationExecutionProvider } from './modules/execution/SimulationExecu
 import { TraderManager } from './modules/trader-manager/TraderManager';
 import { StatisticsService } from './modules/statistics/StatisticsService';
 import { AccountLedger } from './modules/calc/AccountLedger';
+import { resetTradingData } from './modules/db/resetTradingData';
 import { createApp } from './app';
 import { scheduleRecurringJobs, closeQueues } from './modules/jobs/queues';
 import { startWorkers, stopWorkers } from './modules/jobs/workers';
@@ -22,6 +23,16 @@ async function bootstrap(): Promise<void> {
   const db = new PrismaClient({ log: config.node.env === 'development' ? ['warn', 'error'] : ['error'] });
   await db.$connect();
   log.info('Database connected');
+
+  // Fresh start: drop prior traders/orders/PnL so restore cannot resurrect stale state
+  if (config.trading.resetDbOnStart) {
+    if (config.trading.mode === 'LIVE') {
+      log.warn(
+        'RESET_DB_ON_START=true in LIVE — clearing local DB only (Binance positions/orders are NOT cancelled)',
+      );
+    }
+    await resetTradingData(db);
+  }
 
   // Keep DB config aligned with runtime env so UI never shows "5 / 3"
   await db.configuration.upsert({

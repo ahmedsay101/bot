@@ -70,5 +70,6 @@ Created → Short Opened → Hedge Ladder Active → Trading → Short TP Hit �
 - Persistent state + restart recovery
 - Runtime config PATCH hot-applies to TraderManager
 - Boot syncs all Configuration fields from env (default `MAX_TRADERS=1`)
+- `RESET_DB_ON_START=true` (default) wipes traders/orders/positions/trades + resets sim ledger to 200 on every boot
 - RiskManager validates every placed order
 - No duplicated business logic

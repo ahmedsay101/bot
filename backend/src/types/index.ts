@@ -135,12 +135,26 @@ export interface TraderConfig {
 export interface HedgeLevel {
   level: number;
   entryPrice: string;
+  /**
+   * Position stop-loss price = previous completed level (short entry for L1,
+   * previous hedge TP fill for L2+). NOT the STOP-LIMIT trigger (that equals entry).
+   */
   stopPrice: string;
+  /** Explicit previous-level anchor (always equals stopPrice; kept for clarity/UI). */
+  previousLevelPrice: string;
   tpPrice: string;
   /** Sized independently from main short via hedge allocation × leverage. */
   quantity: string;
-  // PENDING=not placed, ACTIVE=order in exchange, OPEN=position filled, HIT_TP/HIT_SL=closed
-  status: 'PENDING' | 'ACTIVE' | 'OPEN' | 'HIT_TP' | 'HIT_SL' | 'CANCELED';
+  /**
+   * Strategy phase (engine SSOT):
+   * PENDING   — STOP-LIMIT resting; stop not reached
+   * TRIGGERED — stop hit; limit order active
+   * OPEN      — long position filled
+   * HIT_TP / HIT_SL / CANCELED — terminal
+   */
+  status: 'PENDING' | 'TRIGGERED' | 'OPEN' | 'HIT_TP' | 'HIT_SL' | 'CANCELED';
+  /** Entry STOP-LIMIT order status from the order book (mirrors OrderStatus). */
+  entryOrderStatus?: OrderStatus | null;
 }
 
 /** Compact trader view for REST + dashboard WebSocket snapshots. */
@@ -168,6 +182,8 @@ export interface TraderSummaryView {
   /** Distance from mark to short TP as fraction of entry (positive = still above TP for short) */
   distanceToTpPct: string | null;
   distanceToTpAbs: string | null;
+  /** realized + unrealized — computed only in the engine */
+  totalPnl: string;
   hedgeUnrealizedPnl: string;
   orders: Array<{
     clientOrderId: string;
@@ -187,7 +203,7 @@ export type DashboardEvent =
   | { type: 'STATUS_CHANGED'; traderId: string; status: TraderStatus }
   | { type: 'COMPLETED'; traderId: string; symbol: string }
   | { type: 'FAILED'; traderId: string; symbol: string; error: string }
-  | { type: 'PNL_UPDATE'; traderId: string; realizedPnl: string; unrealizedPnl: string }
+  | { type: 'PNL_UPDATE'; traderId: string; realizedPnl: string; unrealizedPnl: string; totalPnl: string }
   | { type: 'TRADER_SNAPSHOT'; trader: TraderSummaryView }
   | {
       type: 'SUMMARY';

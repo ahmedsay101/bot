@@ -48,16 +48,6 @@ function pct(v: string | null | undefined): string {
   return `${n >= 0 ? '+' : ''}${n.toFixed(2)}%`;
 }
 
-function distLabel(mark: string, target: string | null | undefined): string {
-  if (target == null) return '—';
-  const m = parseFloat(mark);
-  const t = parseFloat(target);
-  if (!isFinite(m) || !isFinite(t) || t === 0) return '—';
-  const abs = m - t;
-  const p = (abs / t) * 100;
-  return `${abs >= 0 ? '+' : ''}${abs.toFixed(4)} (${p >= 0 ? '+' : ''}${p.toFixed(2)}%)`;
-}
-
 type LadderRung = {
   key: string;
   price: number;
@@ -68,76 +58,93 @@ type LadderRung = {
   detail?: string;
 };
 
-/** Price-ordered vertical strategy ladder (high → low). Same on mobile and desktop. */
+function orderStatus(
+  orders: TraderOrderView[] | undefined,
+  pred: (o: TraderOrderView) => boolean,
+): string | null {
+  const o = (orders ?? []).find(pred);
+  return o?.status ?? null;
+}
+
+/**
+ * Strategy ladder — renders engine hedgeLevels + order statuses only.
+ * Never invents TRIGGERED from a separate "ACTIVE" phase.
+ */
 function StrategyLadder({ trader }: { trader: TraderSummary }): React.ReactElement {
   const mark = parseFloat(trader.markPrice) || 0;
   const rungs: LadderRung[] = [];
 
+  const shortTpState =
+    orderStatus(trader.orders, (o) => o.role === 'SHORT' && (o.type === 'TAKE_PROFIT' || o.type === 'TAKE_PROFIT_MARKET'))
+    ?? 'PENDING';
+
   if (trader.tpPrice != null) {
+    const dist =
+      trader.distanceToTpAbs != null
+        ? `${px(trader.distanceToTpAbs)} (${pct(trader.distanceToTpPct)})`
+        : undefined;
     rungs.push({
       key: 'short-tp',
       price: parseFloat(trader.tpPrice) || 0,
-      label: 'Short TP',
-      state: 'PENDING',
+      label: 'Main Short TP',
+      state: shortTpState,
       accent: '#4caf50',
-      detail: `Dist ${distLabel(trader.markPrice, trader.tpPrice)}`,
+      detail: dist != null ? `Dist ${dist}` : undefined,
     });
   }
 
   for (const h of trader.hedgeLevels) {
-    if (h.status === 'HIT_TP' || h.status === 'HIT_SL' || h.status === 'CANCELED') {
+    const phase = h.status;
+    const entryOrderState = h.entryOrderStatus ?? phase;
+    const slPrice = h.previousLevelPrice ?? h.stopPrice;
+
+    if (phase === 'HIT_TP' || phase === 'HIT_SL' || phase === 'CANCELED') {
       rungs.push({
-        key: `hist-${h.level}-${h.status}`,
+        key: `hist-${h.level}-${phase}`,
         price: parseFloat(h.entryPrice) || 0,
-        label: `Hedge L${h.level} ${h.status === 'HIT_TP' ? '✓ TP' : h.status === 'HIT_SL' ? '✗ SL' : '×'}`,
-        state: h.status,
-        accent: h.status === 'HIT_TP' ? '#66bb6a' : '#ef5350',
-        detail: `Entry ${px(h.entryPrice)}`,
+        label: `Hedge L${h.level}`,
+        state: phase,
+        accent: phase === 'HIT_TP' ? '#66bb6a' : '#ef5350',
+        detail: `Entry ${px(h.entryPrice)} · SL ${px(slPrice)}`,
       });
       continue;
     }
 
-    if (h.status === 'OPEN') {
-      rungs.push({
-        key: `htp-${h.level}`,
-        price: parseFloat(h.tpPrice) || 0,
-        label: `Hedge L${h.level} TP`,
-        state: 'OPEN',
-        accent: '#8bc34a',
-        detail: `Dist ${distLabel(trader.markPrice, h.tpPrice)}`,
-      });
-      rungs.push({
-        key: `hent-${h.level}`,
-        price: parseFloat(h.entryPrice) || 0,
-        label: `Hedge L${h.level} Entry`,
-        state: 'OPEN',
-        accent: '#ff9800',
-      });
-      rungs.push({
-        key: `hsl-${h.level}`,
-        price: parseFloat(h.stopPrice) || 0,
-        label: `Hedge L${h.level} SL`,
-        state: 'OPEN',
-        accent: '#f44336',
-        detail: `Dist ${distLabel(trader.markPrice, h.stopPrice)}`,
-      });
-    } else if (h.status === 'PENDING' || h.status === 'ACTIVE') {
-      rungs.push({
-        key: `hpend-${h.level}`,
-        price: parseFloat(h.entryPrice) || 0,
-        label: `Hedge L${h.level} Entry`,
-        state: h.status === 'ACTIVE' ? 'TRIGGERED' : 'PENDING',
-        accent: '#ff9800',
-        detail: `Dist ${distLabel(trader.markPrice, h.entryPrice)}`,
-      });
-    }
+    // Pending stop-limit / triggered limit / open position — always show SL (previous level)
+    rungs.push({
+      key: `htp-${h.level}`,
+      price: parseFloat(h.tpPrice) || 0,
+      label: `Hedge L${h.level} TP`,
+      state: phase === 'OPEN' ? 'OPEN' : 'ARMED',
+      accent: '#8bc34a',
+    });
+    rungs.push({
+      key: `hent-${h.level}`,
+      price: parseFloat(h.entryPrice) || 0,
+      label: phase === 'PENDING'
+        ? `Hedge L${h.level} Entry (Stop-Limit)`
+        : phase === 'TRIGGERED'
+          ? `Hedge L${h.level} Entry (Limit Active)`
+          : `Hedge L${h.level} Entry`,
+      state: phase === 'OPEN' ? 'FILLED' : phase,
+      accent: phase === 'TRIGGERED' ? '#ffb74d' : '#ff9800',
+      detail: `Order ${entryOrderState}`,
+    });
+    rungs.push({
+      key: `hsl-${h.level}`,
+      price: parseFloat(slPrice) || 0,
+      label: `Hedge L${h.level} Stop Loss`,
+      state: phase === 'OPEN' ? 'OPEN' : 'ARMED',
+      accent: '#f44336',
+      detail: 'Previous level',
+    });
   }
 
   if (trader.entryPrice != null) {
     rungs.push({
       key: 'short-entry',
       price: parseFloat(trader.entryPrice) || 0,
-      label: 'Short Entry',
+      label: 'Main Short',
       state: 'FILLED',
       accent: '#2196f3',
     });
@@ -146,7 +153,7 @@ function StrategyLadder({ trader }: { trader: TraderSummary }): React.ReactEleme
   rungs.push({
     key: 'mark',
     price: mark,
-    label: '▸ Market',
+    label: '▸ Current Price',
     state: 'LIVE',
     accent: '#fff',
     isMark: true,
@@ -201,7 +208,7 @@ function StrategyLadder({ trader }: { trader: TraderSummary }): React.ReactEleme
             <Chip
               label={r.state}
               size="small"
-              sx={{ height: 22, fontSize: 10, minWidth: 64, flexShrink: 0 }}
+              sx={{ height: 22, fontSize: 10, minWidth: 72, flexShrink: 0 }}
               variant={r.isMark ? 'filled' : 'outlined'}
             />
           </Box>
@@ -226,22 +233,28 @@ function OrderStrip({ orders }: { orders?: TraderOrderView[] }): React.ReactElem
         ORDERS · open {open.length} · closed {closed.length}
       </Typography>
       <Stack spacing={0.4} sx={{ mt: 0.5 }}>
-        {(open.length ? open : list.slice(-6)).map((o) => (
-          <Box
-            key={o.clientOrderId}
-            sx={{
-              display: 'flex', flexWrap: 'wrap', gap: 0.5, alignItems: 'center',
-              py: 0.35, minHeight: 32,
-            }}
-          >
-            <Chip label={o.role} size="small" sx={{ height: 20, fontSize: 10 }} />
-            <Typography variant="caption" fontFamily="monospace">{o.type}</Typography>
-            <Typography variant="caption" color="text.secondary">
-              {px(o.price ?? o.stopPrice)}
-            </Typography>
-            <Chip label={o.status} size="small" variant="outlined" sx={{ height: 20, fontSize: 10, ml: 'auto' }} />
-          </Box>
-        ))}
+        {(open.length ? open : list.slice(-6)).map((o) => {
+          const isStopLimit = o.type === 'STOP_LIMIT';
+          const priceLabel = isStopLimit
+            ? `trigger ${px(o.stopPrice ?? o.price)}`
+            : px(o.price ?? o.stopPrice);
+          return (
+            <Box
+              key={o.clientOrderId}
+              sx={{
+                display: 'flex', flexWrap: 'wrap', gap: 0.5, alignItems: 'center',
+                py: 0.35, minHeight: 32,
+              }}
+            >
+              <Chip label={o.role} size="small" sx={{ height: 20, fontSize: 10 }} />
+              <Typography variant="caption" fontFamily="monospace">{o.type}</Typography>
+              <Typography variant="caption" color="text.secondary">
+                {priceLabel}
+              </Typography>
+              <Chip label={o.status} size="small" variant="outlined" sx={{ height: 20, fontSize: 10, ml: 'auto' }} />
+            </Box>
+          );
+        })}
         {list.length === 0 && (
           <Typography variant="caption" color="text.secondary">No orders tracked yet</Typography>
         )}
@@ -251,12 +264,13 @@ function OrderStrip({ orders }: { orders?: TraderOrderView[] }): React.ReactElem
 }
 
 function TraderCard({ trader }: { trader: TraderSummary }): React.ReactElement {
-  const profit = parseFloat(trader.realizedPnl) + parseFloat(trader.unrealizedPnl);
+  // Engine SSOT — never sum realized+unrealized on the client when totalPnl is present
+  const totalPnl = trader.totalPnl ?? String(parseFloat(trader.realizedPnl) + parseFloat(trader.unrealizedPnl));
   const activeHedge = trader.hedgeLevels.find((h: HedgeLevelInfo) => h.status === 'OPEN');
-  const pendingHedge = trader.hedgeLevels.find(
-    (h: HedgeLevelInfo) => h.status === 'PENDING' || h.status === 'ACTIVE',
+  const workingHedge = trader.hedgeLevels.find(
+    (h: HedgeLevelInfo) => h.status === 'PENDING' || h.status === 'TRIGGERED',
   );
-  const currentHedge = activeHedge ?? pendingHedge;
+  const currentHedge = activeHedge ?? workingHedge;
 
   return (
     <Card sx={{ border: '1px solid', borderColor: 'divider', height: '100%', overflow: 'hidden' }}>
@@ -275,8 +289,8 @@ function TraderCard({ trader }: { trader: TraderSummary }): React.ReactElement {
             />
             <Chip label={`Hedge #${trader.hedgeLevel}`} size="small" variant="outlined" sx={{ height: 24, fontSize: 11 }} />
           </Box>
-          <Typography fontWeight={800} sx={{ color: col(profit), fontSize: { xs: 16, sm: 18 }, whiteSpace: 'nowrap' }}>
-            {pnl(profit)}
+          <Typography fontWeight={800} sx={{ color: col(totalPnl), fontSize: { xs: 16, sm: 18 }, whiteSpace: 'nowrap' }}>
+            {pnl(totalPnl)}
           </Typography>
         </Box>
 
@@ -289,10 +303,11 @@ function TraderCard({ trader }: { trader: TraderSummary }): React.ReactElement {
           }}
         >
           <Stat label="Price" value={`$${px(trader.markPrice)}`} />
-          <Stat label="Total P/L" value={pnl(profit)} color={col(profit)} />
-          <Stat label="Short PnL" value={pnl(trader.shortUnrealizedPnl ?? trader.unrealizedPnl)} color={col(trader.shortUnrealizedPnl ?? '0')} />
+          <Stat label="Total P/L" value={pnl(totalPnl)} color={col(totalPnl)} />
+          <Stat label="Short PnL" value={pnl(trader.shortUnrealizedPnl ?? '0')} color={col(trader.shortUnrealizedPnl ?? '0')} />
           <Stat label="Hedge PnL" value={pnl(trader.hedgeUnrealizedPnl ?? '0')} color={col(trader.hedgeUnrealizedPnl ?? '0')} />
           <Stat label="Realized" value={pnl(trader.realizedPnl)} color={col(trader.realizedPnl)} />
+          <Stat label="Unrealized" value={pnl(trader.unrealizedPnl)} color={col(trader.unrealizedPnl)} />
           <Stat label="To Short TP" value={pct(trader.distanceToTpPct)} />
         </Box>
 
@@ -304,7 +319,14 @@ function TraderCard({ trader }: { trader: TraderSummary }): React.ReactElement {
           <Stat label="Entry" value={`$${px(trader.entryPrice)}`} />
           <Stat label="Take Profit" value={`$${px(trader.tpPrice)}`} />
           <Stat label="Qty" value={trader.shortQuantity ?? '—'} />
-          <Stat label="Dist to TP" value={distLabel(trader.markPrice, trader.tpPrice)} />
+          <Stat
+            label="Dist to TP"
+            value={
+              trader.distanceToTpAbs != null
+                ? `${px(trader.distanceToTpAbs)} (${pct(trader.distanceToTpPct)})`
+                : '—'
+            }
+          />
         </Box>
 
         {/* Current hedge */}
@@ -314,9 +336,12 @@ function TraderCard({ trader }: { trader: TraderSummary }): React.ReactElement {
             <Stat label="Number" value={`#${currentHedge.level}`} />
             <Stat label="State" value={currentHedge.status} />
             <Stat label="Entry" value={`$${px(currentHedge.entryPrice)}`} />
-            <Stat label="Stop Loss" value={`$${px(currentHedge.stopPrice)}`} />
+            <Stat label="Stop Loss" value={`$${px(currentHedge.previousLevelPrice ?? currentHedge.stopPrice)}`} />
             <Stat label="Take Profit" value={`$${px(currentHedge.tpPrice)}`} />
             <Stat label="Qty" value={currentHedge.quantity ?? '—'} />
+            {currentHedge.entryOrderStatus != null && (
+              <Stat label="Entry Order" value={currentHedge.entryOrderStatus} />
+            )}
           </Box>
         ) : (
           <Typography variant="caption" color="text.secondary" sx={{ display: 'block', my: 1 }}>No active hedge</Typography>

@@ -126,6 +126,85 @@ describe('Trader complete lifecycle', () => {
     ledger = createMockLedger();
   });
 
+  it('keeps first hedge PENDING with SL = short entry (previous level)', async () => {
+    provider.onPriceUpdate('BTCUSDT', '100');
+
+    const trader = new Trader(
+      'trader-hedge-pending',
+      'BTCUSDT',
+      'SIMULATION',
+      provider,
+      traderConfig,
+      db as never,
+      ledger as never,
+    );
+    provider.on('orderUpdate', (u) => {
+      void trader.onOrderUpdate(u);
+    });
+
+    await trader.initialize();
+    await wait(200);
+
+    const summary = trader.toSummary();
+    const hedge = summary.hedgeLevels.find((h) => h.level === 1);
+    expect(hedge).toBeDefined();
+    expect(hedge!.status).toBe('PENDING');
+    expect(hedge!.entryOrderStatus === 'PENDING' || hedge!.entryOrderStatus === 'NEW').toBe(true);
+
+    const shortEntry = trader.getShortEntryPrice()!;
+    expect(hedge!.stopPrice).toBe(shortEntry);
+    expect(hedge!.previousLevelPrice).toBe(shortEntry);
+    // STOP-LIMIT trigger equals entry — must NOT equal position SL when distance > 0
+    expect(hedge!.entryPrice).not.toBe(hedge!.stopPrice);
+    expect(parseFloat(hedge!.entryPrice)).toBeGreaterThan(parseFloat(hedge!.stopPrice));
+
+    // Ladder / orders consistency: open STOP_LIMIT is PENDING, not TRIGGERED
+    const entryOrder = summary.orders.find(
+      (o) => o.role === 'HEDGE' && o.type === 'STOP_LIMIT' && o.hedgeLevel === 1,
+    );
+    expect(entryOrder).toBeDefined();
+    expect(entryOrder!.status).toBe('PENDING');
+    expect(entryOrder!.status).toBe(hedge!.status === 'PENDING' ? 'PENDING' : entryOrder!.status);
+
+    trader.destroy();
+  });
+
+  it('promotes hedge to TRIGGERED only after stop is hit', async () => {
+    provider.onPriceUpdate('BTCUSDT', '100');
+
+    const trader = new Trader(
+      'trader-hedge-trigger',
+      'BTCUSDT',
+      'SIMULATION',
+      provider,
+      traderConfig,
+      db as never,
+      ledger as never,
+    );
+    provider.on('orderUpdate', (u) => {
+      void trader.onOrderUpdate(u);
+    });
+
+    await trader.initialize();
+    await wait(200);
+
+    const hedge = trader.getHedgeLevels().find((h) => h.level === 1)!;
+    expect(hedge.status).toBe('PENDING');
+
+    // Drive mark to hedge entry stop (BUY STOP: mark >= entry)
+    provider.onPriceUpdate('BTCUSDT', hedge.entryPrice);
+    await wait(400);
+
+    const after = trader.getHedgeLevels().find((h) => h.level === 1)!;
+    // May be TRIGGERED (limit active) or OPEN (filled if mark crossed limit)
+    expect(['TRIGGERED', 'OPEN', 'HIT_TP', 'HIT_SL'].includes(after.status)).toBe(true);
+    expect(after.status).not.toBe('PENDING');
+    // Position SL remains previous level (short entry)
+    expect(after.stopPrice).toBe(trader.getShortEntryPrice());
+
+    trader.destroy();
+  });
+
   it('runs Created → Short → Hedge → Short TP → Completed with realized PnL', async () => {
     provider.onPriceUpdate('BTCUSDT', '100');
 

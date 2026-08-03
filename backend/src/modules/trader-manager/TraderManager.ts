@@ -344,6 +344,7 @@ export class TraderManager extends EventEmitter {
     id: string;
     positionSize: string;
     currentHedgeLevel: number;
+    shortEntryPrice: string | null;
     hedgeEntryPrice: string | null;
     hedgeTpPrice: string | null;
     hedgeStopPrice: string | null;
@@ -402,34 +403,48 @@ export class TraderManager extends EventEmitter {
       const entryFilled = entryOrder?.status === 'FILLED' || entryOrder?.status === 'PARTIALLY_FILLED';
       const tpFilled = tpOrder?.status === 'FILLED';
       const slFilled = slOrder?.status === 'FILLED';
+      const entryTriggered = entryOrder?.status === 'TRIGGERED';
 
       let status: HedgeLevel['status'] = 'PENDING';
       if (tpFilled) status = 'HIT_TP';
       else if (slFilled) status = 'HIT_SL';
       else if (entryFilled) status = 'OPEN';
-      else if (entryOrder != null && OPEN_ORDER_STATUSES.includes(entryOrder.status as OrderStatus)) status = 'ACTIVE';
+      else if (entryTriggered) status = 'TRIGGERED';
+      // Resting STOP-LIMIT (PENDING/NEW) stays PENDING — never map to TRIGGERED
+
+      // Position SL = previous level. NEVER use entryOrder.stopPrice (that is the entry trigger).
+      const previousLevel =
+        slOrder?.stopPrice
+        ?? dbTrader.hedgeStopPrice
+        ?? dbTrader.shortEntryPrice
+        ?? '0';
 
       hedgeLevels.push({
         level,
         entryPrice: entryOrder?.price ?? dbTrader.hedgeEntryPrice ?? '0',
-        stopPrice: slOrder?.stopPrice ?? entryOrder?.stopPrice ?? dbTrader.hedgeStopPrice ?? '0',
+        stopPrice: previousLevel,
+        previousLevelPrice: previousLevel,
         tpPrice: tpOrder?.price ?? tpOrder?.stopPrice ?? dbTrader.hedgeTpPrice ?? '0',
         quantity: entryOrder?.filledQuantity && entryOrder.filledQuantity !== '0'
           ? entryOrder.filledQuantity
           : entryOrder?.quantity ?? shortQuantity ?? '0',
         status,
+        entryOrderStatus: (entryOrder?.status as OrderStatus) ?? null,
       });
     }
 
     // If no hedge orders reconstructed but trader has hedge metadata, seed level 1
     if (hedgeLevels.length === 0 && dbTrader.hedgeEntryPrice != null) {
+      const previousLevel = dbTrader.hedgeStopPrice ?? dbTrader.shortEntryPrice ?? '0';
       hedgeLevels.push({
         level: Math.max(1, dbTrader.currentHedgeLevel),
         entryPrice: dbTrader.hedgeEntryPrice,
-        stopPrice: dbTrader.hedgeStopPrice ?? '0',
+        stopPrice: previousLevel,
+        previousLevelPrice: previousLevel,
         tpPrice: dbTrader.hedgeTpPrice ?? '0',
         quantity: shortQuantity ?? '0',
-        status: 'ACTIVE',
+        status: 'PENDING',
+        entryOrderStatus: null,
       });
     }
 
@@ -635,7 +650,12 @@ export class TraderManager extends EventEmitter {
     }
 
     const traderId = uuidv4();
-    log.info(`Creating new trader ${traderId} for ${symbol}`);
+    log.info(`[LIFECYCLE] TRADER_SLOT_CREATE`, {
+      traderId,
+      symbol,
+      occupied: this.getOccupiedSlots(),
+      maxTraders: this.traderConfig.maxTraders,
+    });
 
     const allocation = await this.accountLedger.getAllocation(
       this.traderConfig.maxTraders,
@@ -677,9 +697,15 @@ export class TraderManager extends EventEmitter {
     try {
       await trader.initialize();
       this.traders.set(traderId, trader);
+      log.info(`[LIFECYCLE] TRADER_SLOT_ACTIVE`, {
+        traderId,
+        symbol,
+        occupied: this.getOccupiedSlots(),
+        maxTraders: this.traderConfig.maxTraders,
+      });
       await this.broadcastSummary(true);
     } catch (err) {
-      log.error(`Failed to initialize trader for ${symbol}`, { error: String(err) });
+      log.error(`[LIFECYCLE] TRADER_SLOT_FAILED`, { traderId, symbol, error: String(err) });
       this.symbolToTrader.delete(symbol);
       this.wsManager.unsubscribe(`${symbol.toLowerCase()}@markPrice@1s`).catch(() => {});
       await this.db.trader.update({
@@ -696,13 +722,14 @@ export class TraderManager extends EventEmitter {
         this.symbolToTrader.delete(event.symbol);
         this.orderQueues.delete(event.traderId);
         trader.destroy();
-        log.info(`Trader slot freed for ${event.symbol}`);
+        log.info(`[LIFECYCLE] SLOT_RELEASED`, { symbol: event.symbol, traderId: event.traderId });
         this.emit('traderEvent', event as DashboardEvent);
         void this.broadcastSummary(true);
         // Always refill immediately — bypass refreshInFlight by waiting then forcing
         if (this.isRunning && !this.isPaused) {
           // Clear in-flight gate so replacement is not deferred to next interval
           this.refreshInFlight = false;
+          log.info(`[LIFECYCLE] REPLACEMENT_SEARCH`, { freedSymbol: event.symbol });
           await this.refreshAndFillSlots();
         }
         return;

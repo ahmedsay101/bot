@@ -14,6 +14,7 @@ interface DashboardMessage {
   status?: string;
   realizedPnl?: string;
   unrealizedPnl?: string;
+  totalPnl?: string;
   trader?: TraderSummary;
   data?: {
     balance?: string;
@@ -134,6 +135,7 @@ export function useWebSocket(): void {
                       ...t,
                       realizedPnl: msg.realizedPnl ?? t.realizedPnl,
                       unrealizedPnl: msg.unrealizedPnl ?? t.unrealizedPnl,
+                      totalPnl: msg.totalPnl ?? t.totalPnl,
                     }
                   : t,
               ),

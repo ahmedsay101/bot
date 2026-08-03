@@ -34,7 +34,7 @@ export type TraderEvent =
   | { type: 'STATUS_CHANGED'; traderId: string; status: TraderStatus }
   | { type: 'COMPLETED'; traderId: string; symbol: string }
   | { type: 'FAILED'; traderId: string; symbol: string; error: string }
-  | { type: 'PNL_UPDATE'; traderId: string; realizedPnl: string; unrealizedPnl: string }
+  | { type: 'PNL_UPDATE'; traderId: string; realizedPnl: string; unrealizedPnl: string; totalPnl: string }
   | { type: 'TRADER_SNAPSHOT'; trader: TraderSummaryView };
 
 export class Trader extends EventEmitter {
@@ -118,9 +118,15 @@ export class Trader extends EventEmitter {
 
     this.markPrice = await this.executionProvider.getMarkPrice(this.symbol);
 
+    this.lifecycle('TRADER_CREATE', { mode: this.mode });
     await this.openShort();
     await this.setStatus('ACTIVE');
-    log.info(`Trader ${this.id} initialized for ${this.symbol} at entry ${this.shortEntryPrice ?? '?'}`);
+    this.lifecycle('TRADER_ACTIVE', {
+      shortEntry: this.shortEntryPrice,
+      shortTp: this.shortTpPrice,
+      shortQty: this.shortQuantity,
+      hedgeLevel: this.currentHedgeLevel,
+    });
   }
 
   /** Restore a trader from persisted state (called on restart). */
@@ -154,7 +160,13 @@ export class Trader extends EventEmitter {
     this.shortTpPrice = state.shortTpPrice;
     this.shortQuantity = state.shortQuantity;
     this.currentHedgeLevel = state.currentHedgeLevel;
-    this.hedgeLevels = state.hedgeLevels;
+    this.hedgeLevels = state.hedgeLevels.map((h) => ({
+      ...h,
+      previousLevelPrice: h.previousLevelPrice || h.stopPrice,
+      stopPrice: h.previousLevelPrice || h.stopPrice,
+      // Legacy ACTIVE (order resting) → PENDING
+      status: (h.status as string) === 'ACTIVE' ? 'PENDING' : h.status,
+    }));
     this.status = state.status;
     this.realizedPnl = new Decimal(state.realizedPnl);
     this.unrealizedPnl = new Decimal(state.unrealizedPnl);
@@ -190,6 +202,7 @@ export class Trader extends EventEmitter {
 
   /** Full teardown — remove listeners after slot release. */
   destroy(): void {
+    this.lifecycle('TRADER_DESTROYED');
     this.isDestroyed = true;
     this.removeAllListeners();
   }
@@ -218,7 +231,7 @@ export class Trader extends EventEmitter {
       avg: update.avgFillPrice,
     });
 
-    // Persist TRIGGERED (stop hit, limit now live) without opening a position
+    // Non-fill working statuses — only TRIGGERED advances hedge phase (not NEW/PENDING)
     if (update.status === 'TRIGGERED' || update.status === 'NEW' || update.status === 'PENDING') {
       this.touchOrderView(update.clientOrderId, { status: update.status });
       await this.db.order.updateMany({
@@ -227,12 +240,20 @@ export class Trader extends EventEmitter {
       });
       if (update.clientOrderId === this.activeHedgeClientOrderId) {
         const hl = this.hedgeLevels.find((h) => h.level === this.currentHedgeLevel);
-        if (hl != null && hl.status === 'PENDING') {
-          hl.status = 'ACTIVE';
-          this.emitSnapshot();
+        if (hl != null) {
+          hl.entryOrderStatus = update.status;
+          // STOP-LIMIT: only mark TRIGGERED when the stop is actually hit
+          if (update.status === 'TRIGGERED' && (hl.status === 'PENDING')) {
+            hl.status = 'TRIGGERED';
+            this.lifecycle('HEDGE_STOP_TRIGGERED', {
+              level: hl.level,
+              entry: hl.entryPrice,
+              mark: this.markPrice,
+            });
+            this.emitSnapshot();
+          }
         }
       }
-      // TRIGGERED / NEW / PENDING are not fills
       return;
     }
 
@@ -442,9 +463,10 @@ export class Trader extends EventEmitter {
   private async placeInitialHedge(): Promise<void> {
     if (this.symbolInfo == null || this.shortEntryPrice == null) return;
 
+    // Strategy: Entry = short×(1+d), SL = short (previous level), TP = entry×(1+tp%)
+    const previousLevel = adjustPrice(this.shortEntryPrice, this.symbolInfo);
     const hedgeEntry = calcHedgeEntry(this.shortEntryPrice, this.traderConfig.hedgeDistance);
     const hedgeTp = calcHedgeTp(hedgeEntry.toFixed(), this.traderConfig.hedgeTpPercent);
-    const hedgeStop = new Decimal(this.shortEntryPrice);
     const entryAdj = adjustPrice(hedgeEntry, this.symbolInfo);
 
     const notional = await this.resolvePositionNotional();
@@ -453,14 +475,25 @@ export class Trader extends EventEmitter {
     const hedgeLevel: HedgeLevel = {
       level: 1,
       entryPrice: entryAdj,
-      stopPrice: adjustPrice(hedgeStop, this.symbolInfo),
+      stopPrice: previousLevel,
+      previousLevelPrice: previousLevel,
       tpPrice: adjustPrice(hedgeTp, this.symbolInfo),
       quantity: qty,
       status: 'PENDING',
+      entryOrderStatus: null,
     };
 
     this.hedgeLevels.push(hedgeLevel);
     this.currentHedgeLevel = 1;
+
+    this.lifecycle('HEDGE_CREATE', {
+      level: 1,
+      entry: hedgeLevel.entryPrice,
+      stopLoss: hedgeLevel.stopPrice,
+      previousLevel: hedgeLevel.previousLevelPrice,
+      tp: hedgeLevel.tpPrice,
+      qty: hedgeLevel.quantity,
+    });
 
     await this.placeHedgeOrder(hedgeLevel);
   }
@@ -474,10 +507,17 @@ export class Trader extends EventEmitter {
       hedgeLevel.quantity = calcQuantityFromNotional(notional, hedgeLevel.entryPrice, this.symbolInfo);
     }
 
+    // Ensure SL anchor is never confused with STOP-LIMIT trigger
+    if (!hedgeLevel.previousLevelPrice || hedgeLevel.previousLevelPrice === '0') {
+      hedgeLevel.previousLevelPrice = hedgeLevel.stopPrice;
+    }
+    hedgeLevel.stopPrice = hedgeLevel.previousLevelPrice;
+
     const clientOrderId = `hedge_${this.id}_lvl${hedgeLevel.level}_${Date.now()}`;
     this.activeHedgeClientOrderId = clientOrderId;
     this.pendingOrders.add(clientOrderId);
 
+    // STOP-LIMIT trigger = entry (buy when mark >= entry). Position SL is separate (stopPrice).
     const result = await withRetry(
       () =>
         this.placeValidated({
@@ -496,16 +536,27 @@ export class Trader extends EventEmitter {
       { maxAttempts: this.traderConfig.retryLimit, delayMs: 500 },
     );
 
-    hedgeLevel.status = 'ACTIVE';
+    // Stay PENDING until the stop is hit — do NOT mark TRIGGERED/ACTIVE on accept
+    hedgeLevel.status = 'PENDING';
+    hedgeLevel.entryOrderStatus = result.status === 'TRIGGERED' ? 'TRIGGERED' : 'PENDING';
+    if (result.status === 'TRIGGERED') {
+      hedgeLevel.status = 'TRIGGERED';
+    }
+
     await this.persistOrder(result, 'HEDGE', hedgeLevel.level);
     await this.persistTraderState();
     this.emitSnapshot();
 
-    log.info(`Hedge L${hedgeLevel.level} placed for ${this.symbol}`, {
+    this.lifecycle('HEDGE_STOP_LIMIT_PLACED', {
+      level: hedgeLevel.level,
       entry: hedgeLevel.entryPrice,
-      stop: hedgeLevel.stopPrice,
+      positionSl: hedgeLevel.stopPrice,
+      previousLevel: hedgeLevel.previousLevelPrice,
       tp: hedgeLevel.tpPrice,
       qty: hedgeLevel.quantity,
+      orderStatus: hedgeLevel.entryOrderStatus,
+      hedgePhase: hedgeLevel.status,
+      clientId: clientOrderId,
     });
   }
 
@@ -517,7 +568,15 @@ export class Trader extends EventEmitter {
     if (hedgeLevel.status === 'OPEN' || hedgeLevel.status === 'HIT_TP' || hedgeLevel.status === 'HIT_SL') return;
 
     hedgeLevel.status = 'OPEN';
+    hedgeLevel.entryOrderStatus = 'FILLED';
     if (update.filledQuantity) hedgeLevel.quantity = update.filledQuantity;
+    this.lifecycle('HEDGE_FILLED_OPEN', {
+      level: hedgeLevel.level,
+      fill: update.avgFillPrice,
+      qty: hedgeLevel.quantity,
+      positionSl: hedgeLevel.stopPrice,
+      tp: hedgeLevel.tpPrice,
+    });
 
     const openFee = calcFee(update.avgFillPrice, hedgeLevel.quantity, this.traderConfig.feeRate);
     this.realizedPnl = this.realizedPnl.minus(openFee);
@@ -610,14 +669,23 @@ export class Trader extends EventEmitter {
     const newLevel: HedgeLevel = {
       level: hedgeLevel.level,
       entryPrice: hedgeLevel.entryPrice,
-      stopPrice: hedgeLevel.stopPrice,
+      stopPrice: hedgeLevel.previousLevelPrice || hedgeLevel.stopPrice,
+      previousLevelPrice: hedgeLevel.previousLevelPrice || hedgeLevel.stopPrice,
       tpPrice: hedgeLevel.tpPrice,
       quantity: hedgeLevel.quantity,
       status: 'PENDING',
+      entryOrderStatus: null,
     };
 
     const idx = this.hedgeLevels.findIndex((h) => h.level === hedgeLevel.level);
     if (idx >= 0) this.hedgeLevels[idx] = newLevel;
+
+    this.lifecycle('HEDGE_RECREATE_AFTER_SL', {
+      level: newLevel.level,
+      entry: newLevel.entryPrice,
+      stopLoss: newLevel.stopPrice,
+      previousLevel: newLevel.previousLevelPrice,
+    });
 
     await this.placeHedgeOrder(newLevel);
     this.emitPnlUpdate();
@@ -662,17 +730,29 @@ export class Trader extends EventEmitter {
     const notional = await this.resolvePositionNotional();
     const nextQty = calcQuantityFromNotional(notional, entryAdj, this.symbolInfo!);
 
+    // Next hedge SL = previous completed level (this hedge's TP fill)
+    const previousLevel = adjustPrice(update.avgFillPrice, this.symbolInfo!);
     const nextLevel: HedgeLevel = {
       level: hedgeLevel.level + 1,
       entryPrice: entryAdj,
-      stopPrice: update.avgFillPrice,
+      stopPrice: previousLevel,
+      previousLevelPrice: previousLevel,
       tpPrice: adjustPrice(nextTp, this.symbolInfo!),
       quantity: nextQty,
       status: 'PENDING',
+      entryOrderStatus: null,
     };
 
     this.hedgeLevels.push(nextLevel);
     this.currentHedgeLevel = nextLevel.level;
+
+    this.lifecycle('HEDGE_PROGRESS', {
+      level: nextLevel.level,
+      entry: nextLevel.entryPrice,
+      stopLoss: nextLevel.stopPrice,
+      previousLevel: nextLevel.previousLevelPrice,
+      tp: nextLevel.tpPrice,
+    });
 
     await this.placeHedgeOrder(nextLevel);
     await this.persistTraderState();
@@ -789,9 +869,7 @@ export class Trader extends EventEmitter {
       symbol: this.symbol,
     } satisfies TraderEvent);
 
-    log.info(`Trader ${this.id} COMPLETED for ${this.symbol}`, {
-      realizedPnl: this.realizedPnl.toFixed(4),
-    });
+    this.lifecycle('TRADER_COMPLETED', { realizedPnl: this.realizedPnl.toFixed(8) });
   }
 
   async pause(): Promise<void> {
@@ -838,11 +916,14 @@ export class Trader extends EventEmitter {
   }
 
   private emitPnlUpdate(): void {
+    const realized = this.realizedPnl.toFixed(8);
+    const unrealized = this.unrealizedPnl.toFixed(8);
     this.emit('traderEvent', {
       type: 'PNL_UPDATE',
       traderId: this.id,
-      realizedPnl: this.realizedPnl.toFixed(8),
-      unrealizedPnl: this.unrealizedPnl.toFixed(8),
+      realizedPnl: realized,
+      unrealizedPnl: unrealized,
+      totalPnl: this.realizedPnl.plus(this.unrealizedPnl).toFixed(8),
     } satisfies TraderEvent);
   }
 
@@ -866,7 +947,7 @@ export class Trader extends EventEmitter {
 
   private async persistTraderState(): Promise<void> {
     const activeHedge = this.hedgeLevels.find(
-      (h) => h.status === 'ACTIVE' || h.status === 'OPEN' || h.status === 'PENDING',
+      (h) => h.status === 'TRIGGERED' || h.status === 'OPEN' || h.status === 'PENDING',
     );
 
     await this.db.trader.update({
@@ -1084,7 +1165,7 @@ export class Trader extends EventEmitter {
     const openStatuses = new Set(['PENDING', 'NEW', 'TRIGGERED', 'PARTIALLY_FILLED']);
     const openOrders = orderList.filter((o) => openStatuses.has(o.status)).length;
     const closedOrders = orderList.filter((o) => !openStatuses.has(o.status)).length;
-    const pendingOrders = this.hedgeLevels.filter((h) => h.status === 'PENDING' || h.status === 'ACTIVE').length
+    const pendingOrders = this.hedgeLevels.filter((h) => h.status === 'PENDING' || h.status === 'TRIGGERED').length
       + (this.shortTpClientOrderId != null && this.status === 'ACTIVE' && this.pendingOrders.has(this.shortTpClientOrderId) ? 1 : 0);
 
     let distanceToTpPct: string | null = null;
@@ -1100,6 +1181,20 @@ export class Trader extends EventEmitter {
     }
 
     const hedgeLosses = this.hedgeLevels.filter((h) => h.status === 'HIT_SL').length;
+    const totalPnl = this.realizedPnl.plus(this.unrealizedPnl);
+
+    // Attach live entry-order status from order book (SSOT for ladder/orders consistency)
+    const hedgeLevels = this.hedgeLevels.map((h) => {
+      const entryOrder = [...this.orderViews.values()].find(
+        (o) => o.role === 'HEDGE' && o.hedgeLevel === h.level && o.type === 'STOP_LIMIT',
+      );
+      return {
+        ...h,
+        previousLevelPrice: h.previousLevelPrice || h.stopPrice,
+        stopPrice: h.previousLevelPrice || h.stopPrice,
+        entryOrderStatus: entryOrder?.status ?? h.entryOrderStatus ?? null,
+      };
+    });
 
     return {
       id: this.id,
@@ -1109,6 +1204,7 @@ export class Trader extends EventEmitter {
       unrealizedPnl: this.unrealizedPnl.toFixed(8),
       shortUnrealizedPnl: shortUnrealized.toFixed(8),
       hedgeUnrealizedPnl: hedgeUnrealized.toFixed(8),
+      totalPnl: totalPnl.toFixed(8),
       hedgeLevel: this.currentHedgeLevel,
       hedgeLosses,
       hedgeWins: this.hedgeLevels.filter((h) => h.status === 'HIT_TP').length,
@@ -1124,8 +1220,18 @@ export class Trader extends EventEmitter {
       distanceToTpPct,
       distanceToTpAbs,
       orders: orderList,
-      hedgeLevels: this.hedgeLevels.map((h) => ({ ...h })),
+      hedgeLevels,
     };
+  }
+
+  /** Structured lifecycle logs for end-to-end trader tracing. */
+  private lifecycle(event: string, data: Record<string, unknown> = {}): void {
+    log.info(`[LIFECYCLE] ${event}`, {
+      traderId: this.id,
+      symbol: this.symbol,
+      traderStatus: this.status,
+      ...data,
+    });
   }
 
   getStatus(): TraderStatus { return this.status; }

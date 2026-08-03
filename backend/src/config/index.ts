@@ -45,6 +45,8 @@ interface AppConfig {
     retryLimit: number;
     feeRate: string;
     slippage: string;
+    /** When true, wipe traders/orders/ledger on every boot (fresh start). */
+    resetDbOnStart: boolean;
   };
   logging: {
     level: string;
@@ -82,6 +84,8 @@ const schema = Joi.object({
   RETRY_LIMIT: Joi.number().integer().min(1).max(20).default(5),
   FEE_RATE: Joi.string().default('0.0004'),
   SLIPPAGE: Joi.string().default('0.0001'),
+  // Wipe trading history on every boot (default on for clean debug runs)
+  RESET_DB_ON_START: Joi.boolean().default(true),
   LOG_LEVEL: Joi.string().valid('error', 'warn', 'info', 'debug').default('info'),
   LOG_DIR: Joi.string().default('logs'),
 });
@@ -136,6 +140,7 @@ function loadConfig(): AppConfig {
       retryLimit: env.RETRY_LIMIT as number,
       feeRate: env.FEE_RATE as string,
       slippage: env.SLIPPAGE as string,
+      resetDbOnStart: env.RESET_DB_ON_START as boolean,
     },
     logging: {
       level: env.LOG_LEVEL as string,

@@ -146,7 +146,8 @@ All trading parameters are configurable via environment variables or the `/api/c
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `MAX_TRADERS` | 5 | Maximum concurrent traders |
+| `RESET_DB_ON_START` | true | Wipe trading history + reset sim balance on every boot |
+| `MAX_TRADERS` | 1 | Maximum concurrent traders |
 | `INITIAL_CAPITAL` | 1000 | Initial capital per trader (USDT) |
 | `POSITION_SIZE` | 100 | Position size in USDT |
 | `LEVERAGE` | 10 | Futures leverage multiplier |

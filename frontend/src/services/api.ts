@@ -85,9 +85,14 @@ export interface HedgeLevelInfo {
   level: number;
   entryPrice: string;
   tpPrice: string;
+  /** Position SL = previous completed level (engine SSOT). Not the STOP-LIMIT trigger. */
   stopPrice: string;
+  previousLevelPrice?: string;
   quantity?: string;
-  status: 'PENDING' | 'ACTIVE' | 'OPEN' | 'HIT_TP' | 'HIT_SL' | 'CANCELED';
+  /** Engine hedge phase — never invent TRIGGERED from ACTIVE. */
+  status: 'PENDING' | 'TRIGGERED' | 'OPEN' | 'HIT_TP' | 'HIT_SL' | 'CANCELED';
+  /** Mirrors the STOP-LIMIT OrderStatus from the order book. */
+  entryOrderStatus?: string | null;
 }
 
 export interface TraderOrderView {
@@ -110,6 +115,8 @@ export interface TraderSummary {
   unrealizedPnl: string;
   shortUnrealizedPnl?: string;
   hedgeUnrealizedPnl?: string;
+  /** Engine: realized + unrealized — do not recompute on the client. */
+  totalPnl?: string;
   hedgeLevel: number;
   hedgeLosses?: number;
   hedgeWins?: number;
