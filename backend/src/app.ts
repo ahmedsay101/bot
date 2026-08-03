@@ -51,7 +51,7 @@ export function createApp(
   app.use('/api/trades', createTradesRouter(db));
   app.use('/api/statistics', createStatisticsRouter(statisticsService, traderManager));
   app.use('/api/system', createSystemRouter(db, binanceClient, wsManager));
-  app.use('/api/config', createConfigRouter(db));
+  app.use('/api/config', createConfigRouter(db, traderManager));
 
   // Error handling
   app.use(notFoundHandler);
@@ -72,6 +72,14 @@ export function createApp(
     };
 
     traderManager.on('traderEvent', pushUpdate);
+
+    // Immediate full state — no waiting for the 1s timer
+    try {
+      traderManager.broadcastAllSnapshots();
+      void traderManager.broadcastSummary(true);
+    } catch (err) {
+      log.warn('Failed to push snapshot on WS connect', { error: String(err) });
+    }
 
     ws.on('close', () => {
       traderManager.off('traderEvent', pushUpdate);

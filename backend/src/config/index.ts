@@ -69,7 +69,7 @@ const schema = Joi.object({
   BINANCE_TESTNET: Joi.boolean().default(false),
   JWT_SECRET: Joi.string().min(32).required(),
   TRADING_MODE: Joi.string().valid('LIVE', 'SIMULATION').default('SIMULATION'),
-  MAX_TRADERS: Joi.number().integer().min(1).max(50).default(3),
+  MAX_TRADERS: Joi.number().integer().min(1).max(50).default(1),
   INITIAL_CAPITAL: Joi.string().default('1000'),
   POSITION_SIZE: Joi.string().default('100'),
   LEVERAGE: Joi.number().integer().min(1).max(125).default(10),

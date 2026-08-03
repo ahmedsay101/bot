@@ -9,8 +9,11 @@ export function createStatisticsRouter(
   const router = Router();
 
   router.get('/', async (_req, res) => {
+    const runtime = traderManager.getRuntimeConfig();
     const stats = await statisticsService.getGlobalStatistics(
       traderManager.getTotalUnrealizedPnl(),
+      [],
+      { maxTraders: runtime.maxTraders, leverage: runtime.leverage },
     );
     res.json({ success: true, data: stats });
   });
@@ -25,8 +28,11 @@ export function createStatisticsRouter(
   });
 
   router.get('/summary', async (_req, res) => {
+    const runtime = traderManager.getRuntimeConfig();
     const stats = await statisticsService.getGlobalStatistics(
       traderManager.getTotalUnrealizedPnl(),
+      [],
+      { maxTraders: runtime.maxTraders, leverage: runtime.leverage },
     );
     const maxTraders = traderManager.getMaxTraders();
     res.json({

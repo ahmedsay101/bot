@@ -124,10 +124,10 @@ describe('SimulationExecutionProvider — Binance-aligned', () => {
       hedgeLevel: 1,
       quantity: '0.01',
       stopPrice: '90',
-      reduceOnly: true,
+      positionSide: 'LONG',
     });
 
-    // Open long first so reduceOnly has something to close
+    // Open long first so STOP_MARKET can close the LONG leg
     await provider.placeOrder({
       traderId: 't',
       clientOrderId: 'long1',
@@ -137,6 +137,7 @@ describe('SimulationExecutionProvider — Binance-aligned', () => {
       role: 'HEDGE',
       hedgeLevel: 1,
       quantity: '0.01',
+      positionSide: 'LONG',
     });
 
     provider.onPriceUpdate('BTCUSDT', '89');
@@ -156,6 +157,7 @@ describe('SimulationExecutionProvider — Binance-aligned', () => {
       role: 'SHORT',
       hedgeLevel: 0,
       quantity: '0.01',
+      positionSide: 'SHORT',
     });
 
     const updates: OrderUpdate[] = [];
@@ -172,7 +174,7 @@ describe('SimulationExecutionProvider — Binance-aligned', () => {
       quantity: '0.01',
       price: '80',
       stopPrice: '80',
-      reduceOnly: true,
+      positionSide: 'SHORT',
     });
 
     provider.onPriceUpdate('BTCUSDT', '80');

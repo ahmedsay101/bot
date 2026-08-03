@@ -218,6 +218,114 @@ export class SimulationExecutionProvider extends EventEmitter implements IExecut
       .map((o) => ({ ...o.result }));
   }
 
+  /**
+   * Rebuild sim book + positions after process restart so open conditionals
+   * continue to trigger on mark ticks (critical for trader completion).
+   */
+  rehydrate(params: {
+    positions: Array<{
+      symbol: string;
+      side: 'LONG' | 'SHORT';
+      entryPrice: string;
+      quantity: string;
+      leverage?: number;
+    }>;
+    orders: Array<{
+      clientOrderId: string;
+      traderId: string;
+      symbol: string;
+      side: 'BUY' | 'SELL';
+      type: OrderRequest['type'];
+      role: OrderRequest['role'];
+      hedgeLevel: number;
+      quantity: string;
+      filledQuantity?: string;
+      price?: string | null;
+      stopPrice?: string | null;
+      status: OrderStatus;
+      positionSide?: 'LONG' | 'SHORT' | 'BOTH';
+    }>;
+  }): void {
+    for (const p of params.positions) {
+      if (new Decimal(p.quantity).lte(0)) continue;
+      const list = this.positions.get(p.symbol) ?? [];
+      const existing = list.find((x) => x.side === p.side);
+      if (existing != null) {
+        existing.quantity = p.quantity;
+        existing.entryPrice = p.entryPrice;
+        existing.notional = new Decimal(p.entryPrice).mul(p.quantity).toFixed(8);
+      } else {
+        list.push({
+          symbol: p.symbol,
+          side: p.side,
+          entryPrice: p.entryPrice,
+          quantity: p.quantity,
+          leverage: p.leverage ?? config.trading.leverage,
+          notional: new Decimal(p.entryPrice).mul(p.quantity).toFixed(8),
+        });
+        this.positions.set(p.symbol, list);
+      }
+    }
+
+    for (const o of params.orders) {
+      if (o.status === 'FILLED' || o.status === 'CANCELED' || o.status === 'REJECTED' || o.status === 'EXPIRED') {
+        continue;
+      }
+      const filled = new Decimal(o.filledQuantity || '0');
+      const remaining = Decimal.max(new Decimal(0), new Decimal(o.quantity).minus(filled));
+      if (remaining.lte(0)) continue;
+
+      let phase: SimPhase = 'PENDING';
+      if (o.status === 'TRIGGERED' || o.status === 'NEW' || o.status === 'PARTIALLY_FILLED') {
+        phase = 'TRIGGERED';
+      } else if (o.type === 'LIMIT') {
+        phase = 'TRIGGERED';
+      }
+
+      const req: OrderRequest = {
+        traderId: o.traderId,
+        clientOrderId: o.clientOrderId,
+        symbol: o.symbol,
+        side: o.side,
+        type: o.type,
+        role: o.role,
+        hedgeLevel: o.hedgeLevel,
+        quantity: o.quantity,
+        price: o.price ?? undefined,
+        stopPrice: o.stopPrice ?? undefined,
+        positionSide: o.positionSide,
+      };
+
+      this.orders.set(o.clientOrderId, {
+        req,
+        result: {
+          clientOrderId: o.clientOrderId,
+          exchangeOrderId: `sim_rehydrated_${o.clientOrderId}`,
+          symbol: o.symbol,
+          side: o.side,
+          type: o.type,
+          status: o.status === 'PARTIALLY_FILLED' ? 'PARTIALLY_FILLED' : phase === 'TRIGGERED' && o.type !== 'LIMIT' && o.status !== 'NEW' ? 'TRIGGERED' : o.status,
+          quantity: o.quantity,
+          price: o.price ?? null,
+          stopPrice: o.stopPrice ?? null,
+          filledQuantity: filled.toFixed(),
+          avgFillPrice: null,
+          fee: '0',
+          feeCurrency: 'USDT',
+          createdAt: new Date(),
+          filledAt: null,
+        },
+        phase,
+        remainingQty: remaining.toFixed(),
+      });
+    }
+
+    log.info('Sim book rehydrated', {
+      positions: params.positions.length,
+      orders: this.orders.size,
+    });
+  }
+
   async closePosition(symbol: string, side: 'LONG' | 'SHORT', quantity: string): Promise<OrderResult> {
     return this.placeOrder({
       traderId: '',

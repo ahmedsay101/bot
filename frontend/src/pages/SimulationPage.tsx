@@ -29,7 +29,7 @@ export function SimulationPage(): React.ReactElement {
             <li><Typography variant="body2">Simulates 50–100ms execution latency</Typography></li>
             <li><Typography variant="body2">Applies configured slippage to market orders</Typography></li>
             <li><Typography variant="body2">Charges configured fee rates on fills</Typography></li>
-            <li><Typography variant="body2">Simulates 5% partial fill rate on trigger orders</Typography></li>
+            <li><Typography variant="body2">Simulates ~25% partial fill rate on fills (remainder completes shortly after)</Typography></li>
             <li><Typography variant="body2">Triggers STOP_LIMIT / TAKE_PROFIT orders when price crosses</Typography></li>
           </Box>
         </CardContent>

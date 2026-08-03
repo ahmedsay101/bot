@@ -32,6 +32,16 @@ function isLeveragedToken(symbol: string): boolean {
 
 const OPEN_ORDER_STATUSES: OrderStatus[] = ['PENDING', 'NEW', 'TRIGGERED', 'PARTIALLY_FILLED'];
 
+/** Infer BUY/SELL when DB row lacks side (legacy) from role + type. */
+function inferOrderSide(o: { side?: string; role: string; type: string }): 'BUY' | 'SELL' {
+  if (o.side === 'BUY' || o.side === 'SELL') return o.side;
+  if (o.role === 'SHORT') {
+    return o.type === 'MARKET' ? 'SELL' : 'BUY'; // open short = SELL; TP = BUY
+  }
+  // HEDGE: entry STOP_LIMIT = BUY; TP/SL = SELL
+  return o.type === 'STOP_LIMIT' ? 'BUY' : 'SELL';
+}
+
 export class TraderManager extends EventEmitter {
   private traders = new Map<string, Trader>();
   private symbolToTrader = new Map<string, string>();
@@ -43,6 +53,10 @@ export class TraderManager extends EventEmitter {
   private isPaused = false;
   private lastSummaryAt = 0;
   private refreshInFlight = false;
+  /** Serialize order updates per trader to prevent double-complete races. */
+  private orderQueues = new Map<string, Promise<void>>();
+  private boundPriceHandler: ((u: PriceUpdate) => void) | null = null;
+  private boundOrderHandler: ((u: OrderUpdate) => void) | null = null;
 
   constructor(
     private readonly executionProvider: IExecutionProvider,
@@ -69,14 +83,20 @@ export class TraderManager extends EventEmitter {
       await this.wsManager.subscribeMultipleMarkPrices(symbols);
     }
 
-    this.wsManager.on('priceUpdate', (update: PriceUpdate) => this.onPriceUpdate(update));
-    this.wsManager.on('orderUpdate', (update: OrderUpdate) => void this.handleOrderUpdate(update));
+    this.boundPriceHandler = (update: PriceUpdate) => this.onPriceUpdate(update);
+    this.boundOrderHandler = (update: OrderUpdate) => void this.handleOrderUpdate(update);
+    this.wsManager.on('priceUpdate', this.boundPriceHandler);
+    this.wsManager.on('orderUpdate', this.boundOrderHandler);
 
     try {
       const listenKey = await this.createListenKey();
       await this.wsManager.subscribeUserDataStream(listenKey);
     } catch (err) {
       log.error('Failed to subscribe to user data stream', { error: String(err) });
+      // LIVE cannot complete/trade without fill notifications
+      if (this.mode === 'LIVE') {
+        throw new Error(`LIVE mode requires user-data stream: ${String(err)}`);
+      }
     }
 
     await this.refreshAndFillSlots();
@@ -113,6 +133,20 @@ export class TraderManager extends EventEmitter {
       clearInterval(this.pricePollTimer);
       this.pricePollTimer = null;
     }
+    if (this.boundPriceHandler != null) {
+      this.wsManager.off('priceUpdate', this.boundPriceHandler);
+      this.boundPriceHandler = null;
+    }
+    if (this.boundOrderHandler != null) {
+      this.wsManager.off('orderUpdate', this.boundOrderHandler);
+      this.boundOrderHandler = null;
+    }
+    for (const trader of this.traders.values()) {
+      trader.destroy();
+    }
+    this.traders.clear();
+    this.symbolToTrader.clear();
+    this.orderQueues.clear();
     await this.wsManager.shutdown();
     log.info('TraderManager stopped');
   }
@@ -136,15 +170,66 @@ export class TraderManager extends EventEmitter {
   async emergencyStop(): Promise<void> {
     log.warn('EMERGENCY STOP triggered');
     this.isRunning = false;
-    if (this.refreshTimer != null) clearInterval(this.refreshTimer);
-    if (this.summaryTimer != null) clearInterval(this.summaryTimer);
-    if (this.pricePollTimer != null) clearInterval(this.pricePollTimer);
-    for (const trader of this.traders.values()) {
+    if (this.refreshTimer != null) {
+      clearInterval(this.refreshTimer);
+      this.refreshTimer = null;
+    }
+    if (this.summaryTimer != null) {
+      clearInterval(this.summaryTimer);
+      this.summaryTimer = null;
+    }
+    if (this.pricePollTimer != null) {
+      clearInterval(this.pricePollTimer);
+      this.pricePollTimer = null;
+    }
+    for (const trader of [...this.traders.values()]) {
       try {
         await trader.emergencyStop();
       } catch (err) {
         log.error(`Emergency stop failed for trader ${trader.getId()}`, { error: String(err) });
       }
+      trader.destroy();
+    }
+    this.traders.clear();
+    this.symbolToTrader.clear();
+    this.orderQueues.clear();
+    void this.broadcastSummary(true);
+  }
+
+  /** Hot-apply config from API without restart. */
+  applyRuntimeConfig(patch: Record<string, unknown>): void {
+    const cfg = this.traderConfig as unknown as Record<string, unknown>;
+    const keys = [
+      'maxTraders', 'initialCapital', 'positionSize', 'leverage', 'marginMode',
+      'hedgeDistance', 'hedgeTpPercent', 'hedgeSlPercent', 'shortTpPercent',
+      'refreshInterval', 'retryLimit', 'feeRate', 'slippage',
+    ] as const;
+    for (const k of keys) {
+      if (k in patch && patch[k] != null) cfg[k] = patch[k];
+    }
+    // Cap extras if maxTraders decreased
+    if (this.traders.size > this.traderConfig.maxTraders) {
+      void this.enforceMaxTradersCap();
+    }
+    log.info('Runtime config applied', { maxTraders: this.traderConfig.maxTraders });
+  }
+
+  getRuntimeConfig(): TraderConfig {
+    return { ...this.traderConfig };
+  }
+
+  private async enforceMaxTradersCap(): Promise<void> {
+    const ordered = [...this.traders.values()];
+    const extras = ordered.slice(this.traderConfig.maxTraders);
+    for (const t of extras) {
+      try {
+        await t.emergencyStop();
+      } catch (err) {
+        log.error(`Failed stopping excess trader ${t.getId()}`, { error: String(err) });
+      }
+      t.destroy();
+      this.traders.delete(t.getId());
+      this.symbolToTrader.delete(t.getSymbol());
     }
   }
 
@@ -154,7 +239,15 @@ export class TraderManager extends EventEmitter {
     if (traderId == null) return;
     const trader = this.traders.get(traderId);
     if (trader == null) return;
-    await trader.onOrderUpdate(update);
+
+    const prev = this.orderQueues.get(traderId) ?? Promise.resolve();
+    const next = prev
+      .then(() => trader.onOrderUpdate(update))
+      .catch((err) => {
+        log.error(`Order update failed for trader ${traderId}`, { error: String(err) });
+      });
+    this.orderQueues.set(traderId, next);
+    await next;
   }
 
   private async restoreTraders(): Promise<void> {
@@ -201,11 +294,22 @@ export class TraderManager extends EventEmitter {
           shortTpClientOrderId: restored.shortTpClientOrderId,
           activeHedgeClientOrderId: restored.activeHedgeClientOrderId,
           hedgeOrderIds: restored.hedgeOrderIds,
+          orderViews: restored.orderViews,
         });
+
+        // Rebuild simulation book so open TPs/hedges still trigger after restart
+        if (this.mode === 'SIMULATION') {
+          this.rehydrateSimulation(dbTrader, restored);
+        }
 
         this.wireTraderEvents(trader);
         this.traders.set(trader.getId(), trader);
         this.symbolToTrader.set(dbTrader.symbol, trader.getId());
+
+        // Crash mid-complete → finish cleanup + free slot
+        if (dbTrader.status === 'COMPLETING') {
+          await trader.resumeCompleting();
+        }
 
         log.info(`Restored trader ${trader.getId()} for ${dbTrader.symbol}`);
       } catch (err) {
@@ -248,6 +352,7 @@ export class TraderManager extends EventEmitter {
       type: string;
       status: string;
       role: string;
+      side?: string;
       hedgeLevel: number;
       quantity: string;
       price: string | null;
@@ -262,6 +367,17 @@ export class TraderManager extends EventEmitter {
     shortTpClientOrderId: string | null;
     activeHedgeClientOrderId: string | null;
     hedgeOrderIds: Array<{ level: number; tpClientId: string; slClientId: string }>;
+    orderViews: Array<{
+      clientOrderId: string;
+      role: import('../../types').HedgeRole;
+      type: import('../../types').OrderType;
+      status: OrderStatus;
+      side: import('../../types').OrderSide;
+      price: string | null;
+      stopPrice: string | null;
+      hedgeLevel: number;
+      quantity: string;
+    }>;
   } {
     const orders = dbTrader.orders;
     const shortMarket = [...orders].reverse().find((o) => o.role === 'SHORT' && o.type === 'MARKET');
@@ -340,6 +456,18 @@ export class TraderManager extends EventEmitter {
       o.role === 'HEDGE' && o.type === 'STOP_LIMIT' && OPEN_ORDER_STATUSES.includes(o.status as OrderStatus),
     );
 
+    const orderViews = orders.map((o) => ({
+      clientOrderId: o.clientOrderId,
+      role: o.role as import('../../types').HedgeRole,
+      type: o.type as import('../../types').OrderType,
+      status: o.status as OrderStatus,
+      side: inferOrderSide(o),
+      price: o.price,
+      stopPrice: o.stopPrice,
+      hedgeLevel: o.hedgeLevel,
+      quantity: o.quantity,
+    }));
+
     return {
       shortQuantity,
       hedgeLevels,
@@ -348,7 +476,104 @@ export class TraderManager extends EventEmitter {
       shortTpClientOrderId: shortTp?.clientOrderId ?? null,
       activeHedgeClientOrderId: activeHedge?.clientOrderId ?? null,
       hedgeOrderIds,
+      orderViews,
     };
+  }
+
+  /** Rebuild sim positions + open conditionals after restart. */
+  private rehydrateSimulation(
+    dbTrader: {
+      id: string;
+      symbol: string;
+      shortEntryPrice: string | null;
+      leverage: number;
+      orders: Array<{
+        clientOrderId: string;
+        type: string;
+        status: string;
+        role: string;
+        side?: string;
+        hedgeLevel: number;
+        quantity: string;
+        filledQuantity: string;
+        price: string | null;
+        stopPrice: string | null;
+      }>;
+    },
+    restored: {
+      shortQuantity: string | null;
+      hedgeLevels: HedgeLevel[];
+    },
+  ): void {
+    const sim = this.executionProvider as {
+      rehydrate?: (p: {
+        positions: Array<{ symbol: string; side: 'LONG' | 'SHORT'; entryPrice: string; quantity: string; leverage?: number }>;
+        orders: Array<{
+          clientOrderId: string;
+          traderId: string;
+          symbol: string;
+          side: 'BUY' | 'SELL';
+          type: import('../../types').OrderType;
+          role: import('../../types').HedgeRole;
+          hedgeLevel: number;
+          quantity: string;
+          filledQuantity?: string;
+          price?: string | null;
+          stopPrice?: string | null;
+          status: OrderStatus;
+          positionSide?: 'LONG' | 'SHORT' | 'BOTH';
+        }>;
+      }) => void;
+    };
+    if (sim.rehydrate == null) return;
+
+    const positions: Array<{ symbol: string; side: 'LONG' | 'SHORT'; entryPrice: string; quantity: string; leverage?: number }> = [];
+    if (dbTrader.shortEntryPrice != null && restored.shortQuantity != null && restored.shortQuantity !== '0') {
+      // Short still open unless COMPLETING with TP already filled — restore book conservatively
+      const shortTpFilled = dbTrader.orders.some(
+        (o) => o.role === 'SHORT' && (o.type === 'TAKE_PROFIT' || o.type === 'TAKE_PROFIT_MARKET') && o.status === 'FILLED',
+      );
+      if (!shortTpFilled) {
+        positions.push({
+          symbol: dbTrader.symbol,
+          side: 'SHORT',
+          entryPrice: dbTrader.shortEntryPrice,
+          quantity: restored.shortQuantity,
+          leverage: dbTrader.leverage,
+        });
+      }
+    }
+    for (const hl of restored.hedgeLevels) {
+      if (hl.status === 'OPEN' && hl.quantity !== '0') {
+        positions.push({
+          symbol: dbTrader.symbol,
+          side: 'LONG',
+          entryPrice: hl.entryPrice,
+          quantity: hl.quantity,
+          leverage: dbTrader.leverage,
+        });
+      }
+    }
+
+    const openOrders = dbTrader.orders
+      .filter((o) => OPEN_ORDER_STATUSES.includes(o.status as OrderStatus))
+      .map((o) => ({
+        clientOrderId: o.clientOrderId,
+        traderId: dbTrader.id,
+        symbol: dbTrader.symbol,
+        side: inferOrderSide(o),
+        type: o.type as import('../../types').OrderType,
+        role: o.role as import('../../types').HedgeRole,
+        hedgeLevel: o.hedgeLevel,
+        quantity: o.quantity,
+        filledQuantity: o.filledQuantity,
+        price: o.price,
+        stopPrice: o.stopPrice,
+        status: o.status as OrderStatus,
+        positionSide: (o.role === 'SHORT' ? 'SHORT' : 'LONG') as 'LONG' | 'SHORT',
+      }));
+
+    sim.rehydrate({ positions, orders: openOrders });
   }
 
   private async refreshAndFillSlots(): Promise<void> {
@@ -469,18 +694,30 @@ export class TraderManager extends EventEmitter {
       if (event.type === 'COMPLETED') {
         this.traders.delete(event.traderId);
         this.symbolToTrader.delete(event.symbol);
+        this.orderQueues.delete(event.traderId);
+        trader.destroy();
         log.info(`Trader slot freed for ${event.symbol}`);
+        this.emit('traderEvent', event as DashboardEvent);
+        void this.broadcastSummary(true);
+        // Always refill immediately — bypass refreshInFlight by waiting then forcing
         if (this.isRunning && !this.isPaused) {
+          // Clear in-flight gate so replacement is not deferred to next interval
+          this.refreshInFlight = false;
           await this.refreshAndFillSlots();
         }
-      } else if (event.type === 'FAILED') {
+        return;
+      }
+
+      if (event.type === 'FAILED') {
         this.traders.delete(event.traderId);
         this.symbolToTrader.delete(event.symbol);
+        this.orderQueues.delete(event.traderId);
+        trader.destroy();
       }
 
       this.emit('traderEvent', event as DashboardEvent);
 
-      if (event.type === 'COMPLETED' || event.type === 'FAILED' || event.type === 'STATUS_CHANGED') {
+      if (event.type === 'FAILED' || event.type === 'STATUS_CHANGED') {
         void this.broadcastSummary(true);
       }
     });

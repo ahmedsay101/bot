@@ -90,6 +90,18 @@ export interface HedgeLevelInfo {
   status: 'PENDING' | 'ACTIVE' | 'OPEN' | 'HIT_TP' | 'HIT_SL' | 'CANCELED';
 }
 
+export interface TraderOrderView {
+  clientOrderId: string;
+  role: string;
+  type: string;
+  status: string;
+  side: string;
+  price: string | null;
+  stopPrice: string | null;
+  hedgeLevel: number;
+  quantity: string;
+}
+
 export interface TraderSummary {
   id: string;
   symbol: string;
@@ -97,9 +109,11 @@ export interface TraderSummary {
   realizedPnl: string;
   unrealizedPnl: string;
   shortUnrealizedPnl?: string;
+  hedgeUnrealizedPnl?: string;
   hedgeLevel: number;
   hedgeLosses?: number;
   hedgeWins?: number;
+  hedgeRecreates?: number;
   entryPrice: string | null;
   tpPrice: string | null;
   shortSl?: null;
@@ -107,6 +121,10 @@ export interface TraderSummary {
   shortQuantity?: string | null;
   openOrders?: number;
   pendingOrders?: number;
+  closedOrders?: number;
+  distanceToTpPct?: string | null;
+  distanceToTpAbs?: string | null;
+  orders?: TraderOrderView[];
   hedgeLevels: HedgeLevelInfo[];
 }
 

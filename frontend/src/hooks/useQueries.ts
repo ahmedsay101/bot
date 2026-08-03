@@ -55,9 +55,32 @@ export function useStatsSummary() {
     queryKey: queryKeys.statsSummary,
     queryFn: async () => {
       const data = await statisticsApi.getSummary().then((r) => r.data.data);
-      // Keep trader cards in sync even if dashboard WS is down
+      // Merge traders by id — WS snapshot wins for live ladder/PnL/orders
       if (data.traders != null) {
-        qc.setQueryData(queryKeys.activeTraders, data.traders);
+        qc.setQueryData(queryKeys.activeTraders, (prev: import('../services/api').TraderSummary[] | undefined) => {
+          if (prev == null || prev.length === 0) return data.traders;
+          const byId = new Map(prev.map((t) => [t.id, t]));
+          const restIds = new Set(data.traders!.map((t) => t.id));
+          const merged = data.traders!.map((rest) => {
+            const live = byId.get(rest.id);
+            if (live == null) return rest;
+            const liveMark = parseFloat(live.markPrice);
+            // Prefer WS fields when mark is live; keep REST status if terminal
+            if (liveMark > 0) {
+              return {
+                ...rest,
+                ...live,
+                status: rest.status === 'COMPLETED' || rest.status === 'FAILED' ? rest.status : live.status,
+              };
+            }
+            return rest;
+          });
+          // Keep any WS-only traders not yet in REST (race after spawn)
+          for (const live of prev) {
+            if (!restIds.has(live.id)) merged.push(live);
+          }
+          return merged;
+        });
       }
       return data;
     },
@@ -97,11 +120,18 @@ export function useConfig() {
   });
 }
 
+function invalidateTraderCaches(qc: ReturnType<typeof useQueryClient>): void {
+  void qc.invalidateQueries({ queryKey: queryKeys.traders });
+  void qc.invalidateQueries({ queryKey: queryKeys.activeTraders });
+  void qc.invalidateQueries({ queryKey: queryKeys.statsSummary });
+  void qc.invalidateQueries({ queryKey: queryKeys.globalStats });
+}
+
 export function usePauseTraders() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: () => tradersApi.pause(),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: queryKeys.traders }),
+    onSuccess: () => invalidateTraderCaches(qc),
   });
 }
 
@@ -109,7 +139,7 @@ export function useResumeTraders() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: () => tradersApi.resume(),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: queryKeys.traders }),
+    onSuccess: () => invalidateTraderCaches(qc),
   });
 }
 
@@ -117,7 +147,7 @@ export function useEmergencyStop() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: () => tradersApi.emergencyStop(),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: queryKeys.traders }),
+    onSuccess: () => invalidateTraderCaches(qc),
   });
 }
 

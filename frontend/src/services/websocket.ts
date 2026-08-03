@@ -122,7 +122,7 @@ export function useWebSocket(): void {
                 t.id === msg.traderId ? { ...t, status: msg.status ?? t.status } : t,
               ),
             );
-            void qc.invalidateQueries({ queryKey: queryKeys.activeTraders });
+            // Do not invalidate — avoids REST clobbering fresher WS snapshots
             return;
           }
 

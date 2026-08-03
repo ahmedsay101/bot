@@ -41,10 +41,7 @@ export function calcAvailableMargin(equity: Decimal | string, usedMargin: Decima
   return Decimal.max(new Decimal(0), new Decimal(equity).minus(usedMargin));
 }
 
-/**
- * @deprecated Prefer calcTotalMaintenanceMargin (bracket formula).
- * Kept for callers that only have usedMargin — approximates as usedMargin/leverage.
- */
+/** Fallback when only usedMargin is known (prefer calcTotalMaintenanceMargin). */
 export function calcMaintenanceMargin(usedMargin: Decimal | string, leverage: number): Decimal {
   const lev = Math.max(1, leverage);
   return new Decimal(usedMargin).div(lev);

@@ -163,6 +163,23 @@ export interface TraderSummaryView {
   shortQuantity: string | null;
   openOrders: number;
   pendingOrders: number;
+  closedOrders: number;
+  hedgeRecreates: number;
+  /** Distance from mark to short TP as fraction of entry (positive = still above TP for short) */
+  distanceToTpPct: string | null;
+  distanceToTpAbs: string | null;
+  hedgeUnrealizedPnl: string;
+  orders: Array<{
+    clientOrderId: string;
+    role: HedgeRole;
+    type: OrderType;
+    status: OrderStatus;
+    side: OrderSide;
+    price: string | null;
+    stopPrice: string | null;
+    hedgeLevel: number;
+    quantity: string;
+  }>;
   hedgeLevels: HedgeLevel[];
 }
 

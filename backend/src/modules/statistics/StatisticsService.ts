@@ -50,7 +50,11 @@ export class StatisticsService {
     private readonly mode: 'LIVE' | 'SIMULATION',
   ) {}
 
-  async getGlobalStatistics(liveUnrealized = '0', openNotionals: string[] = []): Promise<GlobalStats> {
+  async getGlobalStatistics(
+    liveUnrealized = '0',
+    openNotionals: string[] = [],
+    runtime?: { maxTraders?: number; leverage?: number },
+  ): Promise<GlobalStats> {
     const [traders, completedStats] = await Promise.all([
       this.db.trader.findMany({ select: { status: true, realizedPnl: true, unrealizedPnl: true } }),
       this.db.traderStatistics.findMany({ select: { totalFees: true, hedgeWins: true, hedgeLosses: true } }),
@@ -66,8 +70,8 @@ export class StatisticsService {
     const unrealized = liveUnrealized !== '0' ? liveUnrealized : dbUnrealized.toFixed(8);
 
     const cfg = await this.db.configuration.findUnique({ where: { id: 'singleton' } });
-    const maxTraders = cfg?.maxTraders ?? Number(process.env.MAX_TRADERS ?? 3);
-    const leverage = cfg?.leverage ?? Number(process.env.LEVERAGE ?? 10);
+    const maxTraders = runtime?.maxTraders ?? cfg?.maxTraders ?? Number(process.env.MAX_TRADERS ?? 1);
+    const leverage = runtime?.leverage ?? cfg?.leverage ?? Number(process.env.LEVERAGE ?? 10);
 
     const snap = await this.accountLedger.getSnapshot({
       unrealizedPnl: unrealized,
