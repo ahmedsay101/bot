@@ -83,21 +83,24 @@ export class WebSocketManager extends EventEmitter {
     const existing = this.subscriptions.get(key);
     if (existing != null) {
       clearInterval(existing.pingInterval);
-      existing.ws.removeAllListeners();
-      existing.ws.terminate();
+      this.safeTerminate(existing.ws);
       this.subscriptions.delete(key);
     }
 
     return new Promise((resolve, reject) => {
       const ws = new WebSocket(url);
+      let settled = false;
 
       const connectTimeout = setTimeout(() => {
-        ws.removeAllListeners();
-        ws.terminate();
+        if (settled) return;
+        settled = true;
+        this.safeTerminate(ws);
         reject(new Error(`WS connect timeout for ${key}`));
       }, 15000);
 
       const onOpen = (): void => {
+        if (settled) return;
+        settled = true;
         clearTimeout(connectTimeout);
         log.debug(`WS opened: ${key}`);
 
@@ -108,13 +111,12 @@ export class WebSocketManager extends EventEmitter {
 
           if (cur.isAlive) {
             cur.isAlive = false;
-            ws.ping();
+            try { ws.ping(); } catch { /* ignore */ }
           } else {
             // Self-clear before reconnecting — prevents double-reconnect with onClose
             clearInterval(ping);
-            cur.ws.removeAllListeners('close');
-            cur.ws.terminate();
             this.subscriptions.delete(key);
+            this.safeTerminate(ws);
             log.warn(`WS heartbeat missed for ${key} — reconnecting`);
             void this.reconnectStream(key, url, handler);
           }
@@ -126,8 +128,17 @@ export class WebSocketManager extends EventEmitter {
       };
 
       const onError = (err: Error): void => {
+        // Ignore terminate-during-CONNECTING noise
+        if (err.message.includes('closed before the connection was established')) {
+          log.debug(`WS early-close for ${key}`);
+          return;
+        }
         log.error(`WS error for ${key}: ${err.message}`);
-        if (!this.subscriptions.has(key)) reject(err);
+        if (!settled && !this.subscriptions.has(key)) {
+          settled = true;
+          clearTimeout(connectTimeout);
+          reject(err);
+        }
       };
 
       const onClose = (code: number, reason: Buffer): void => {
@@ -324,6 +335,27 @@ export class WebSocketManager extends EventEmitter {
     // Unknown — treat as NEW so we don't drop the update entirely
     log.warn('Unknown Binance order status', { status: raw });
     return 'NEW';
+  }
+
+  /**
+   * Terminate without throwing when the socket is still CONNECTING.
+   * The `ws` package can throw "WebSocket was closed before the connection was established"
+   * which previously crashed the process via uncaughtException.
+   */
+  private safeTerminate(ws: WebSocket): void {
+    try {
+      ws.removeAllListeners('open');
+      ws.removeAllListeners('message');
+      ws.removeAllListeners('close');
+      ws.removeAllListeners('pong');
+      // Swallow late error events from terminate-during-CONNECTING
+      ws.on('error', () => {});
+      if (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN) {
+        ws.terminate();
+      }
+    } catch (err) {
+      log.debug('safeTerminate ignored error', { error: String(err) });
+    }
   }
 
   private scheduleListenKeyRenewal(): void {

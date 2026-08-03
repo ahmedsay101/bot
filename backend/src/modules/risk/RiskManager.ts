@@ -22,12 +22,26 @@ export class RiskManager {
       throw new RiskValidationError(`Duplicate order: ${req.clientOrderId}`);
     }
 
-    // Price precision guard
-    if (req.price != null) {
+    // Price / stopPrice must be strictly positive when present (catches tick-truncated zeros)
+    if (req.price != null && req.price !== '') {
       const priceDecimal = new Decimal(req.price);
-      if (priceDecimal.lte(0)) {
+      if (!priceDecimal.isFinite() || priceDecimal.lte(0)) {
         throw new RiskValidationError(`Invalid price: ${req.price}`);
       }
+    }
+    if (req.stopPrice != null && req.stopPrice !== '') {
+      const stopDecimal = new Decimal(req.stopPrice);
+      if (!stopDecimal.isFinite() || stopDecimal.lte(0)) {
+        throw new RiskValidationError(`Invalid stopPrice: ${req.stopPrice}`);
+      }
+    }
+
+    // Conditional orders must have a usable trigger
+    if (
+      (req.type === 'STOP_LIMIT' || req.type === 'STOP_MARKET' || req.type === 'TAKE_PROFIT' || req.type === 'TAKE_PROFIT_MARKET')
+      && (req.stopPrice == null || new Decimal(req.stopPrice).lte(0))
+    ) {
+      throw new RiskValidationError(`Missing/invalid stopPrice for ${req.type}`);
     }
 
     // Quantity guard
@@ -39,9 +53,10 @@ export class RiskManager {
       throw new RiskValidationError(`Quantity ${req.quantity} below minimum ${symbolInfo.minQty}`);
     }
 
-    // Notional guard
-    if (req.price != null) {
-      validateNotional(req.price, req.quantity, symbolInfo);
+    // Notional guard (use stop as proxy when limit price absent)
+    const refPrice = req.price ?? req.stopPrice;
+    if (refPrice != null) {
+      validateNotional(refPrice, req.quantity, symbolInfo);
     }
 
     // Available balance check for new positions (not reduce-only)

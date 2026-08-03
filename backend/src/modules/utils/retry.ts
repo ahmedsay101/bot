@@ -16,7 +16,16 @@ export interface RetryOptions {
 export async function withRetry<T>(fn: () => Promise<T>, opts: RetryOptions): Promise<T> {
   const backoff = opts.backoffFactor ?? 2;
   const maxDelay = opts.maxDelayMs ?? 30000;
-  const shouldRetry = opts.retryOn ?? (() => true);
+  // Risk / validation errors are deterministic — never retry
+  const shouldRetry = opts.retryOn ?? ((err: unknown) => {
+    if (!(err instanceof Error)) return true;
+    if (err.name === 'RiskValidationError') return false;
+    if (err.message.startsWith('Invalid price')) return false;
+    if (err.message.startsWith('Invalid stopPrice')) return false;
+    if (err.message.includes('rounds to zero')) return false;
+    if (err.message.includes('Formatted price is zero')) return false;
+    return true;
+  });
 
   let delay = opts.delayMs;
 

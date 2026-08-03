@@ -2,6 +2,8 @@ import Decimal from 'decimal.js';
 import {
   roundToTickSize,
   roundToStepSize,
+  adjustPrice,
+  countDecimals,
   calcShortTp,
   calcHedgeEntry,
   calcHedgeTp,
@@ -10,6 +12,7 @@ import {
   calcLongUnrealizedPnl,
   calcFee,
 } from '../../src/modules/utils/precision';
+import type { SymbolInfo } from '../../src/types';
 
 describe('Precision utilities', () => {
   describe('roundToTickSize', () => {
@@ -29,6 +32,39 @@ describe('Precision utilities', () => {
     it('rounds down to step', () => {
       expect(roundToStepSize('1.999', '0.001').toFixed(3)).toBe('1.999');
       expect(roundToStepSize('1.9994', '0.001').toFixed(3)).toBe('1.999');
+    });
+  });
+
+  describe('adjustPrice micro-priced alts', () => {
+    const bicoLike: SymbolInfo = {
+      symbol: 'BICOUSDT',
+      baseAsset: 'BICO',
+      quoteAsset: 'USDT',
+      // Deliberately low pricePrecision vs tick — previously truncated to 0.00
+      pricePrecision: 2,
+      quantityPrecision: 0,
+      tickSize: '0.0000001',
+      stepSize: '1',
+      minQty: '1',
+      minNotional: '5',
+      maxLeverage: 25,
+      contractType: 'PERPETUAL',
+      status: 'TRADING',
+    };
+
+    it('countDecimals reads tick size', () => {
+      expect(countDecimals('0.0000001')).toBe(7);
+      expect(countDecimals('0.01')).toBe(2);
+    });
+
+    it('does not truncate micro prices to zero when pricePrecision < tick decimals', () => {
+      const adjusted = adjustPrice('0.0142700', bicoLike);
+      expect(parseFloat(adjusted)).toBeGreaterThan(0);
+      expect(adjusted).toBe('0.0142700');
+    });
+
+    it('throws on non-positive input', () => {
+      expect(() => adjustPrice('0', bicoLike)).toThrow(/Invalid price/);
     });
   });
 

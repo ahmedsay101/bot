@@ -165,6 +165,11 @@ async function bootstrap(): Promise<void> {
   });
 
   process.on('uncaughtException', (err) => {
+    // Known race from ws.terminate() while CONNECTING — log and keep running
+    if (err.message?.includes('closed before the connection was established')) {
+      log.warn('Suppressed WS early-close exception', { error: err.message });
+      return;
+    }
     log.error('Uncaught exception', { error: err.message, stack: err.stack });
     process.exit(1);
   });

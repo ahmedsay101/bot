@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import fetch from 'node-fetch';
 import type { Response } from 'node-fetch';
+import Decimal from 'decimal.js';
 import { config } from '../../config';
 import { createContextLogger } from '../logger';
 import { withRetry, CircuitBreaker } from '../utils/retry';
@@ -228,17 +229,31 @@ export class BinanceClient {
       .map((s) => {
         const priceFilter = s.filters.find((f) => f.filterType === 'PRICE_FILTER');
         const lotFilter = s.filters.find((f) => f.filterType === 'LOT_SIZE');
-        const notionalFilter = s.filters.find((f) => f.filterType === 'MIN_NOTIONAL');
+        // Futures may use MIN_NOTIONAL or NOTIONAL
+        const notionalFilter = s.filters.find(
+          (f) => f.filterType === 'MIN_NOTIONAL' || f.filterType === 'NOTIONAL',
+        );
+        // Prefer exchange tickSize; never default to 0.01 (zeros micro-priced alts)
+        const tickFromPrecision = s.pricePrecision > 0
+          ? new Decimal(10).pow(-s.pricePrecision).toFixed()
+          : '0.00000001';
+        const tickSize = priceFilter?.tickSize && priceFilter.tickSize !== '0'
+          ? priceFilter.tickSize
+          : tickFromPrecision;
+        const minNotional =
+          notionalFilter?.notional
+          ?? (notionalFilter as { minNotional?: string } | undefined)?.minNotional
+          ?? '5';
         return {
           symbol: s.symbol,
           baseAsset: s.baseAsset,
           quoteAsset: s.quoteAsset,
           pricePrecision: s.pricePrecision,
           quantityPrecision: s.quantityPrecision,
-          tickSize: priceFilter?.tickSize ?? '0.01',
+          tickSize,
           stepSize: lotFilter?.stepSize ?? '0.001',
           minQty: lotFilter?.minQty ?? '0.001',
-          minNotional: notionalFilter?.notional ?? '5',
+          minNotional,
           maxLeverage: 125,
           contractType: s.contractType,
           status: s.status,

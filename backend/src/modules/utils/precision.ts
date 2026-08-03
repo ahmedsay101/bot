@@ -25,7 +25,16 @@ export function roundToStepSize(qty: Decimal | string, stepSize: string): Decima
  * Format a price to the symbol's price precision.
  */
 export function formatPrice(price: Decimal | string, pricePrecision: number): string {
-  return new Decimal(price).toDecimalPlaces(pricePrecision, Decimal.ROUND_HALF_UP).toFixed(pricePrecision);
+  const precision = Math.max(0, pricePrecision);
+  return new Decimal(price).toDecimalPlaces(precision, Decimal.ROUND_HALF_UP).toFixed(precision);
+}
+
+/** Decimal places implied by a tick/step size (e.g. 0.00001 → 5). */
+export function countDecimals(value: string): number {
+  const normalized = new Decimal(value).toFixed();
+  const idx = normalized.indexOf('.');
+  if (idx === -1) return 0;
+  return normalized.length - idx - 1;
 }
 
 /**
@@ -37,10 +46,34 @@ export function formatQuantity(qty: Decimal | string, quantityPrecision: number)
 
 /**
  * Validate a price satisfies Binance filters and return the adjusted value.
+ * Uses max(pricePrecision, tickSize decimals) so micro-priced alts never truncate to 0.
  */
 export function adjustPrice(price: Decimal | string, symbolInfo: SymbolInfo): string {
-  const adjusted = roundToTickSize(new Decimal(price), symbolInfo.tickSize);
-  return formatPrice(adjusted, symbolInfo.pricePrecision);
+  const input = new Decimal(price);
+  if (!input.isFinite() || input.lte(0)) {
+    throw new Error(`Invalid price ${price} for ${symbolInfo.symbol}`);
+  }
+  const tick = new Decimal(symbolInfo.tickSize);
+  if (!tick.isFinite() || tick.lte(0)) {
+    throw new Error(`Invalid tickSize ${symbolInfo.tickSize} for ${symbolInfo.symbol}`);
+  }
+
+  const adjusted = roundToTickSize(input, symbolInfo.tickSize);
+  if (adjusted.lte(0)) {
+    throw new Error(
+      `Price ${price} rounds to zero with tickSize=${symbolInfo.tickSize} for ${symbolInfo.symbol}`,
+    );
+  }
+
+  // Binance pricePrecision can be smaller than tick decimals on some alts — never truncate below tick
+  const precision = Math.max(symbolInfo.pricePrecision, countDecimals(symbolInfo.tickSize));
+  const formatted = formatPrice(adjusted, precision);
+  if (new Decimal(formatted).lte(0)) {
+    throw new Error(
+      `Formatted price is zero for ${symbolInfo.symbol} (raw=${price}, tick=${symbolInfo.tickSize}, precision=${precision})`,
+    );
+  }
+  return formatted;
 }
 
 /**
