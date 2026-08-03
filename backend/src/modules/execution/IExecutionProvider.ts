@@ -26,6 +26,12 @@ export interface IExecutionProvider {
   /** Set margin mode for a symbol. */
   setMarginMode(symbol: string, marginMode: string): Promise<void>;
 
+  /**
+   * Enable/disable Hedge Mode (dual-side positions).
+   * Required because strategy holds SHORT + LONG hedge simultaneously.
+   */
+  setHedgeMode(enabled: boolean): Promise<void>;
+
   /** Get current mark price for a symbol. */
   getMarkPrice(symbol: string): Promise<string>;
 
@@ -34,4 +40,7 @@ export interface IExecutionProvider {
 
   /** Whether the provider is a simulation. */
   readonly isSimulation: boolean;
+
+  /** True when dual-side (hedge) mode is active. */
+  readonly hedgeModeEnabled: boolean;
 }

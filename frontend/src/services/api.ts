@@ -96,11 +96,17 @@ export interface TraderSummary {
   status: string;
   realizedPnl: string;
   unrealizedPnl: string;
+  shortUnrealizedPnl?: string;
   hedgeLevel: number;
+  hedgeLosses?: number;
+  hedgeWins?: number;
   entryPrice: string | null;
   tpPrice: string | null;
+  shortSl?: null;
   markPrice: string;
   shortQuantity?: string | null;
+  openOrders?: number;
+  pendingOrders?: number;
   hedgeLevels: HedgeLevelInfo[];
 }
 
@@ -158,13 +164,18 @@ export interface GlobalStats {
   totalTraders: number;
   activeTraders: number;
   completedTraders: number;
+  balance?: string;
+  equity?: string;
   totalRealizedPnl: string;
   totalUnrealizedPnl?: string;
   totalPnl?: string;
   totalFees: string;
   dailyPnl: string;
+  openPositionValue?: string;
+  usedMargin?: string;
+  availableMargin?: string;
   winRate: string;
-  totalEquity: string;
+  totalEquity?: string;
   equityPerTrader: string;
   positionEquity: string;
   positionNotional: string;
@@ -174,14 +185,22 @@ export interface GlobalStats {
 }
 
 export interface StatsSummary {
+  balance?: string;
+  equity?: string;
+  dailyPnl?: string;
   activeTraders: number;
   maxTraders?: number;
+  openPositions?: number;
+  openPositionValue?: string;
+  usedMargin?: string;
+  availableMargin?: string;
   topGainers: Ticker[];
   totalEquity?: string;
   totalPnl?: string;
   totalRealizedPnl: string;
   totalUnrealizedPnl: string;
   tradingMode?: string;
+  botStatus?: string;
   equityPerTrader?: string;
   positionNotional?: string;
   leverage?: number;

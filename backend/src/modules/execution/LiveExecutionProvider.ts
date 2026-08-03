@@ -11,17 +11,26 @@ export class LiveExecutionProvider implements IExecutionProvider {
 
   constructor(private readonly client: BinanceClient) {}
 
+  get hedgeModeEnabled(): boolean {
+    return this.client.hedgeModeEnabled;
+  }
+
   async placeOrder(req: OrderRequest): Promise<OrderResult> {
+    const withSide: OrderRequest = {
+      ...req,
+      positionSide: req.positionSide ?? (req.role === 'SHORT' ? 'SHORT' : 'LONG'),
+    };
     log.info('Placing live order', {
-      symbol: req.symbol,
-      side: req.side,
-      type: req.type,
-      qty: req.quantity,
-      price: req.price,
-      stopPrice: req.stopPrice,
-      clientId: req.clientOrderId,
+      symbol: withSide.symbol,
+      side: withSide.side,
+      type: withSide.type,
+      qty: withSide.quantity,
+      price: withSide.price,
+      stopPrice: withSide.stopPrice,
+      positionSide: withSide.positionSide,
+      clientId: withSide.clientOrderId,
     });
-    return this.client.placeOrder(req);
+    return this.client.placeOrder(withSide);
   }
 
   async cancelOrder(req: CancelOrderRequest): Promise<void> {
@@ -49,6 +58,10 @@ export class LiveExecutionProvider implements IExecutionProvider {
 
   async setMarginMode(symbol: string, marginMode: string): Promise<void> {
     await this.client.setMarginType(symbol, marginMode);
+  }
+
+  async setHedgeMode(enabled: boolean): Promise<void> {
+    await this.client.setHedgeMode(enabled);
   }
 
   async getMarkPrice(symbol: string): Promise<string> {

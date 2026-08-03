@@ -4,7 +4,31 @@ export type TraderStatus = 'INITIALIZING' | 'ACTIVE' | 'PAUSED' | 'COMPLETING' |
 export type TraderMode = 'LIVE' | 'SIMULATION';
 export type OrderSide = 'BUY' | 'SELL';
 export type OrderType = 'MARKET' | 'LIMIT' | 'STOP_LIMIT' | 'TAKE_PROFIT' | 'STOP_MARKET' | 'TAKE_PROFIT_MARKET';
-export type OrderStatus = 'PENDING' | 'NEW' | 'PARTIALLY_FILLED' | 'FILLED' | 'CANCELED' | 'REJECTED' | 'EXPIRED';
+/**
+ * Order lifecycle (Binance-aligned + TRIGGERED for stop→limit activation):
+ * PENDING → (stop touched) → TRIGGERED → FILLED | CANCELED | REJECTED | EXPIRED
+ * MARKET orders go straight to FILLED (or NEW briefly).
+ */
+export type OrderStatus =
+  | 'PENDING'
+  | 'NEW'
+  | 'TRIGGERED'
+  | 'PARTIALLY_FILLED'
+  | 'FILLED'
+  | 'CANCELED'
+  | 'REJECTED'
+  | 'EXPIRED';
+
+/** Human-readable phase for dashboard (derived from OrderStatus + position). */
+export type OrderLifecyclePhase =
+  | 'PENDING'
+  | 'TRIGGERED'
+  | 'FILLED'
+  | 'OPEN_POSITION'
+  | 'CLOSED'
+  | 'COMPLETED'
+  | 'CANCELLED'
+  | 'REJECTED';
 export type PositionSide = 'LONG' | 'SHORT' | 'BOTH';
 export type HedgeRole = 'SHORT' | 'HEDGE';
 export type MarginMode = 'ISOLATED' | 'CROSSED';
@@ -48,6 +72,12 @@ export interface OrderRequest {
   price?: string;
   stopPrice?: string;
   reduceOnly?: boolean;
+  /**
+   * Binance Hedge Mode: LONG | SHORT required.
+   * One-way Mode: BOTH (default).
+   * Derived from role when omitted: SHORT→SHORT, HEDGE→LONG.
+   */
+  positionSide?: PositionSide;
 }
 
 export interface OrderResult {
@@ -120,11 +150,19 @@ export interface TraderSummaryView {
   status: TraderStatus;
   realizedPnl: string;
   unrealizedPnl: string;
+  /** Main short unrealized only */
+  shortUnrealizedPnl: string;
   hedgeLevel: number;
+  hedgeLosses: number;
+  hedgeWins: number;
   entryPrice: string | null;
   tpPrice: string | null;
+  /** Main short has no SL by strategy design */
+  shortSl: null;
   markPrice: string;
   shortQuantity: string | null;
+  openOrders: number;
+  pendingOrders: number;
   hedgeLevels: HedgeLevel[];
 }
 
@@ -137,14 +175,21 @@ export type DashboardEvent =
   | {
       type: 'SUMMARY';
       data: {
-        totalEquity: string;
+        balance: string;
+        equity: string;
         totalPnl: string;
         totalRealizedPnl: string;
         totalUnrealizedPnl: string;
+        dailyPnl: string;
+        openPositionValue: string;
+        usedMargin: string;
+        availableMargin: string;
+        openPositions: number;
         activeTraders: number;
         maxTraders: number;
         topGainers: Ticker24h[];
         tradingMode: TraderMode;
+        botStatus: string;
       };
     };
 

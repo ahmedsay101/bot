@@ -16,14 +16,22 @@ interface DashboardMessage {
   unrealizedPnl?: string;
   trader?: TraderSummary;
   data?: {
+    balance?: string;
+    equity?: string;
     totalEquity?: string;
     totalPnl?: string;
     totalRealizedPnl?: string;
     totalUnrealizedPnl?: string;
+    dailyPnl?: string;
+    openPositionValue?: string;
+    usedMargin?: string;
+    availableMargin?: string;
+    openPositions?: number;
     activeTraders?: number;
     maxTraders?: number;
     topGainers?: Ticker[];
     tradingMode?: string;
+    botStatus?: string;
   };
 }
 
@@ -67,14 +75,23 @@ export function useWebSocket(): void {
           if (msg.type === 'SUMMARY' && msg.data != null) {
             const d = msg.data;
             qc.setQueryData<StatsSummary>(queryKeys.statsSummary, (prev) => ({
+              ...prev,
+              balance: d.balance ?? prev?.balance,
+              equity: d.equity ?? d.totalEquity ?? prev?.equity,
+              dailyPnl: d.dailyPnl ?? prev?.dailyPnl,
+              openPositionValue: d.openPositionValue ?? prev?.openPositionValue,
+              usedMargin: d.usedMargin ?? prev?.usedMargin,
+              availableMargin: d.availableMargin ?? prev?.availableMargin,
+              openPositions: d.openPositions ?? prev?.openPositions,
               activeTraders: d.activeTraders ?? prev?.activeTraders ?? 0,
               maxTraders: d.maxTraders ?? prev?.maxTraders ?? 0,
               topGainers: d.topGainers ?? prev?.topGainers ?? [],
-              totalEquity: d.totalEquity ?? prev?.totalEquity ?? '0',
+              totalEquity: d.equity ?? d.totalEquity ?? prev?.totalEquity ?? '0',
               totalPnl: d.totalPnl ?? prev?.totalPnl ?? '0',
               totalRealizedPnl: d.totalRealizedPnl ?? prev?.totalRealizedPnl ?? '0',
               totalUnrealizedPnl: d.totalUnrealizedPnl ?? prev?.totalUnrealizedPnl ?? '0',
               tradingMode: d.tradingMode ?? prev?.tradingMode,
+              botStatus: d.botStatus ?? prev?.botStatus,
               equityPerTrader: prev?.equityPerTrader,
               positionNotional: prev?.positionNotional,
               leverage: prev?.leverage,
@@ -84,10 +101,13 @@ export function useWebSocket(): void {
               if (prev == null) return prev;
               return {
                 ...prev,
-                totalEquity: d.totalEquity ?? prev.totalEquity,
+                balance: d.balance ?? prev.balance,
+                equity: d.equity ?? d.totalEquity ?? prev.equity,
+                totalEquity: d.equity ?? d.totalEquity ?? prev.totalEquity,
                 totalPnl: d.totalPnl ?? prev.totalPnl,
                 totalRealizedPnl: d.totalRealizedPnl ?? prev.totalRealizedPnl,
                 totalUnrealizedPnl: d.totalUnrealizedPnl ?? prev.totalUnrealizedPnl,
+                dailyPnl: d.dailyPnl ?? prev.dailyPnl,
                 activeTraders: d.activeTraders ?? prev.activeTraders,
                 maxTraders: d.maxTraders ?? prev.maxTraders,
                 tradingMode: d.tradingMode ?? prev.tradingMode,

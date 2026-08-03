@@ -21,48 +21,42 @@ Production-grade Binance Futures trading platform with Live and Testing modes sh
 - Hedge hitting TP creates the next hedge level.
 - Trader only ends when the original short reaches TP.
 - After completion, free the slot and spawn a new trader using the latest eligible top gainer.
+- Requires Hedge Mode (dual-side): SHORT + LONG held together via `positionSide`.
 
 ## Modes
 Live:
-- Real Binance prices, orders and account equity.
+- Real Binance prices, orders and account balances.
+- Conditionals via Algo Order API (`POST /fapi/v1/algoOrder`, `workingType=MARK_PRICE`).
+- Domain `STOP_LIMIT` → Binance `STOP`; hedge mode omits `reduceOnly`.
+- Account reconciled from Binance wallet / maintMargin / income.
 
 Testing:
-- Real Binance prices.
-- Fake execution for Market, Stop-Limit, TP, SL and order lifecycle.
-- Fixed equity = 200 USDT.
+- Real Binance mark prices (WebSocket + REST fallback).
+- Simulated execution — Binance-aligned order state machine.
+- STOP_LIMIT: PENDING → TRIGGERED (limit active) → FILLED when limit executable.
+- Partial fills: PARTIALLY_FILLED then remainder → FILLED.
+- Starting Balance = 200 USDT.
 - Same calculation engine as Live.
 
-## Equity
-Live equity comes from Binance Futures USDT wallet balance.
-Testing equity = 200 USDT + realized PnL.
-Trader allocation = Total Equity / MaxTraders.
-Each trader splits its allocation equally between Main Short and Hedge.
-Position notional = Allocation × Leverage.
-`positionSize` config is ignored for order sizing (equity formula is the only source of truth).
+## Account (single source of truth)
+- Balance = wallet cash after realized trades + fees
+- Realized PnL = cumulative closed-trade net PnL
+- Unrealized PnL = mark-to-market on open positions
+- Equity = Balance + Unrealized PnL
+- Used margin = sum(notional / leverage); Available = Equity − Used
+- Maintenance margin = Binance brackets (`notional × MMR − cum`) per leg
+- Position sizing uses Balance (not equity-with-unrealized)
+- Trader allocation = Balance / MaxTraders / 2 × Leverage per leg
 
 ## Dashboard
-Keep it simple:
-- Equity
-- Total PnL
-- Active traders
-- Top gainers
-- Trader cards
-
-Each trader should include a ladder/grid visualizing:
-- Current price
-- Main short
-- Main TP
-- Active hedge
-- Hedge SL
-- Hedge TP
-- Pending hedge levels
+- Balance, Equity, Today's PnL, Realized, Unrealized
+- Active traders, Open positions, Used/Available margin
+- Top gainers, Bot status, Live/Testing mode
+- Trader cards: strategy ladder (not candlesticks), hedge #, losses, orders
 
 ## Engineering
 - Docker only
-- Event-driven
-- Decimal.js
-- Persistent state
-- Restart recovery
-- No race conditions
+- Event-driven order book evaluation (no poll for triggers)
+- Decimal.js everywhere for money math
+- Persistent state + restart recovery
 - No duplicated business logic
-- No unhandled errors

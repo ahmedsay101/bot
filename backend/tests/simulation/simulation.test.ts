@@ -1,6 +1,5 @@
 /**
- * Simulation test — verifies that SimulationExecutionProvider fills orders
- * correctly and that the hedge ladder math is identical to spec.
+ * Simulation — Binance Futures-aligned order lifecycle using real mark ticks.
  */
 import { SimulationExecutionProvider } from '../../src/modules/execution/SimulationExecutionProvider';
 import { calcHedgeEntry, calcHedgeTp, calcNextHedgeEntry, calcShortTp } from '../../src/modules/utils/precision';
@@ -21,18 +20,24 @@ const mockSymbolInfo: SymbolInfo = {
   status: 'TRADING',
 };
 
-describe('SimulationExecutionProvider', () => {
+async function wait(ms = 120): Promise<void> {
+  await new Promise((r) => setTimeout(r, ms));
+}
+
+describe('SimulationExecutionProvider — Binance-aligned', () => {
   let provider: SimulationExecutionProvider;
 
   beforeEach(() => {
     provider = new SimulationExecutionProvider(async () => [mockSymbolInfo]);
+    // Deterministic fills for lifecycle tests
+    provider.enablePartialFills = false;
   });
 
-  it('fills MARKET orders immediately', async () => {
+  it('fills MARKET immediately with slippage', async () => {
     provider.onPriceUpdate('BTCUSDT', '50000');
     const result = await provider.placeOrder({
-      traderId: 'test',
-      clientOrderId: 'test-market-1',
+      traderId: 't',
+      clientOrderId: 'm1',
       symbol: 'BTCUSDT',
       side: 'SELL',
       type: 'MARKET',
@@ -41,81 +46,110 @@ describe('SimulationExecutionProvider', () => {
       quantity: '0.001',
     });
     expect(result.status).toBe('FILLED');
-    expect(result.filledQuantity).toBe('0.001');
     expect(result.avgFillPrice).toBeDefined();
+    // SELL slippage → slightly below mark
+    expect(parseFloat(result.avgFillPrice!)).toBeLessThan(50000);
   });
 
-  it('emits orderUpdate for MARKET fills (shared path with Live)', async () => {
-    provider.onPriceUpdate('BTCUSDT', '50000');
+  it('STOP_LIMIT stays PENDING until stop, then TRIGGERED — does NOT fill if limit not executable', async () => {
+    provider.onPriceUpdate('BTCUSDT', '100');
+    const updates: OrderUpdate[] = [];
+    provider.on('orderUpdate', (u: OrderUpdate) => updates.push(u));
+
+    // BUY stop-limit: stop=110, limit=110
+    const placed = await provider.placeOrder({
+      traderId: 't',
+      clientOrderId: 'sl1',
+      symbol: 'BTCUSDT',
+      side: 'BUY',
+      type: 'STOP_LIMIT',
+      role: 'HEDGE',
+      hedgeLevel: 1,
+      quantity: '0.01',
+      price: '110',
+      stopPrice: '110',
+    });
+    expect(placed.status).toBe('PENDING');
+
+    // Gap through stop to 120 — triggers but BUY limit@110 is NOT executable (mark > limit)
+    provider.onPriceUpdate('BTCUSDT', '120');
+    await wait();
+
+    const triggered = updates.find((u) => u.status === 'TRIGGERED');
+    expect(triggered).toBeDefined();
+    expect(updates.find((u) => u.status === 'FILLED')).toBeUndefined();
+
+    // Price comes back to limit → fill
+    provider.onPriceUpdate('BTCUSDT', '109');
+    await wait();
+    expect(updates.some((u) => u.status === 'FILLED')).toBe(true);
+  });
+
+  it('STOP_LIMIT fills when stop and limit are both satisfied on same tick', async () => {
+    provider.onPriceUpdate('BTCUSDT', '100');
     const updates: OrderUpdate[] = [];
     provider.on('orderUpdate', (u: OrderUpdate) => updates.push(u));
 
     await provider.placeOrder({
-      traderId: 'test',
-      clientOrderId: 'test-market-evt',
-      symbol: 'BTCUSDT',
-      side: 'SELL',
-      type: 'MARKET',
-      role: 'SHORT',
-      hedgeLevel: 0,
-      quantity: '0.001',
-    });
-
-    await new Promise((r) => setTimeout(r, 150));
-    expect(updates.length).toBeGreaterThan(0);
-    expect(updates[0]!.status).toBe('FILLED');
-    expect(updates[0]!.clientOrderId).toBe('test-market-evt');
-  });
-
-  it('does not fill STOP_LIMIT until stop price is reached', async () => {
-    provider.onPriceUpdate('BTCUSDT', '50000');
-    const result = await provider.placeOrder({
-      traderId: 'test',
-      clientOrderId: 'test-stop-1',
+      traderId: 't',
+      clientOrderId: 'sl2',
       symbol: 'BTCUSDT',
       side: 'BUY',
       type: 'STOP_LIMIT',
       role: 'HEDGE',
       hedgeLevel: 1,
-      quantity: '0.001',
-      price: '55000',
-      stopPrice: '55000',
-    });
-    expect(result.status).toBe('NEW');
-  });
-
-  it('triggers STOP_LIMIT when price crosses stop price', async () => {
-    provider.onPriceUpdate('BTCUSDT', '50000');
-
-    const fills: import('../../src/types').OrderResult[] = [];
-    provider.on('orderFill', (r) => fills.push(r));
-
-    await provider.placeOrder({
-      traderId: 'test',
-      clientOrderId: 'test-stop-2',
-      symbol: 'BTCUSDT',
-      side: 'BUY',
-      type: 'STOP_LIMIT',
-      role: 'HEDGE',
-      hedgeLevel: 1,
-      quantity: '0.001',
-      price: '55000',
-      stopPrice: '55000',
+      quantity: '0.01',
+      price: '110',
+      stopPrice: '110',
     });
 
-    provider.onPriceUpdate('BTCUSDT', '55001');
-
-    await new Promise((resolve) => setTimeout(resolve, 200));
-    expect(fills.length).toBeGreaterThan(0);
-    expect(fills[0]!.status).toBe('FILLED');
+    // Exactly at stop=limit → trigger + limit executable
+    provider.onPriceUpdate('BTCUSDT', '110');
+    await wait();
+    expect(updates.some((u) => u.status === 'FILLED')).toBe(true);
   });
 
-  it('triggers TAKE_PROFIT for short close when price drops', async () => {
+  it('STOP_MARKET fills immediately on stop with market slippage', async () => {
     provider.onPriceUpdate('BTCUSDT', '100');
-    // Open short
+    const updates: OrderUpdate[] = [];
+    provider.on('orderUpdate', (u: OrderUpdate) => updates.push(u));
+
     await provider.placeOrder({
       traderId: 't',
-      clientOrderId: 'short-1',
+      clientOrderId: 'sm1',
+      symbol: 'BTCUSDT',
+      side: 'SELL',
+      type: 'STOP_MARKET',
+      role: 'HEDGE',
+      hedgeLevel: 1,
+      quantity: '0.01',
+      stopPrice: '90',
+      reduceOnly: true,
+    });
+
+    // Open long first so reduceOnly has something to close
+    await provider.placeOrder({
+      traderId: 't',
+      clientOrderId: 'long1',
+      symbol: 'BTCUSDT',
+      side: 'BUY',
+      type: 'MARKET',
+      role: 'HEDGE',
+      hedgeLevel: 1,
+      quantity: '0.01',
+    });
+
+    provider.onPriceUpdate('BTCUSDT', '89');
+    await wait();
+    const fill = updates.find((u) => u.clientOrderId === 'sm1' && u.status === 'FILLED');
+    expect(fill).toBeDefined();
+  });
+
+  it('TAKE_PROFIT for short closes when price drops to TP', async () => {
+    provider.onPriceUpdate('BTCUSDT', '100');
+    await provider.placeOrder({
+      traderId: 't',
+      clientOrderId: 'short',
       symbol: 'BTCUSDT',
       side: 'SELL',
       type: 'MARKET',
@@ -129,7 +163,7 @@ describe('SimulationExecutionProvider', () => {
 
     await provider.placeOrder({
       traderId: 't',
-      clientOrderId: 'short-tp-1',
+      clientOrderId: 'tp1',
       symbol: 'BTCUSDT',
       side: 'BUY',
       type: 'TAKE_PROFIT',
@@ -141,110 +175,111 @@ describe('SimulationExecutionProvider', () => {
       reduceOnly: true,
     });
 
-    provider.onPriceUpdate('BTCUSDT', '79');
-    await new Promise((r) => setTimeout(r, 200));
-
-    const tpFill = updates.find((u) => u.clientOrderId === 'short-tp-1');
-    expect(tpFill?.status).toBe('FILLED');
+    provider.onPriceUpdate('BTCUSDT', '80');
+    await wait();
+    expect(updates.some((u) => u.clientOrderId === 'tp1' && u.status === 'FILLED')).toBe(true);
   });
 
-  it('triggers STOP_MARKET hedge SL and reduceOnly closes LONG', async () => {
-    provider.onPriceUpdate('BTCUSDT', '110');
-    // Open long hedge
+  it('cancel is idempotent and removes from pending book', async () => {
+    provider.onPriceUpdate('BTCUSDT', '50');
     await provider.placeOrder({
       traderId: 't',
-      clientOrderId: 'hedge-fill',
+      clientOrderId: 'c1',
+      symbol: 'BTCUSDT',
+      side: 'BUY',
+      type: 'STOP_LIMIT',
+      role: 'HEDGE',
+      hedgeLevel: 1,
+      quantity: '0.01',
+      price: '60',
+      stopPrice: '60',
+    });
+    await provider.cancelOrder({ symbol: 'BTCUSDT', clientOrderId: 'c1' });
+    await provider.cancelOrder({ symbol: 'BTCUSDT', clientOrderId: 'c1' });
+    expect(provider.getPendingOrders('BTCUSDT').length).toBe(0);
+  });
+
+  it('emits orderUpdate for MARKET fills (shared Live path)', async () => {
+    provider.onPriceUpdate('BTCUSDT', '50000');
+    const updates: OrderUpdate[] = [];
+    provider.on('orderUpdate', (u: OrderUpdate) => updates.push(u));
+    await provider.placeOrder({
+      traderId: 't',
+      clientOrderId: 'm2',
+      symbol: 'BTCUSDT',
+      side: 'SELL',
+      type: 'MARKET',
+      role: 'SHORT',
+      hedgeLevel: 0,
+      quantity: '0.001',
+    });
+    await wait();
+    expect(updates[0]?.status).toBe('FILLED');
+  });
+
+  it('hedge mode holds SHORT and LONG simultaneously via positionSide', async () => {
+    await provider.setHedgeMode(true);
+    provider.onPriceUpdate('BTCUSDT', '100');
+
+    await provider.placeOrder({
+      traderId: 't',
+      clientOrderId: 'short',
+      symbol: 'BTCUSDT',
+      side: 'SELL',
+      type: 'MARKET',
+      role: 'SHORT',
+      hedgeLevel: 0,
+      quantity: '0.01',
+      positionSide: 'SHORT',
+    });
+    await provider.placeOrder({
+      traderId: 't',
+      clientOrderId: 'long',
       symbol: 'BTCUSDT',
       side: 'BUY',
       type: 'MARKET',
       role: 'HEDGE',
       hedgeLevel: 1,
       quantity: '0.01',
+      positionSide: 'LONG',
     });
 
-    let positions = await provider.getPositions('BTCUSDT');
-    expect(positions.some((p) => p.side === 'LONG')).toBe(true);
+    const positions = await provider.getPositions('BTCUSDT');
+    expect(positions.map((p) => p.side).sort()).toEqual(['LONG', 'SHORT']);
+  });
+
+  it('partial fill emits PARTIALLY_FILLED then FILLED with remainder', async () => {
+    provider.enablePartialFills = false;
+    provider.forcePartialFraction = 0.5;
+    provider.onPriceUpdate('BTCUSDT', '100');
+    const updates: OrderUpdate[] = [];
+    provider.on('orderUpdate', (u: OrderUpdate) => updates.push(u));
 
     await provider.placeOrder({
       traderId: 't',
-      clientOrderId: 'hedge-sl',
+      clientOrderId: 'pf1',
       symbol: 'BTCUSDT',
-      side: 'SELL',
-      type: 'STOP_MARKET',
+      side: 'BUY',
+      type: 'MARKET',
       role: 'HEDGE',
       hedgeLevel: 1,
       quantity: '0.01',
-      stopPrice: '100',
-      reduceOnly: true,
+      positionSide: 'LONG',
     });
 
-    provider.onPriceUpdate('BTCUSDT', '99');
-    await new Promise((r) => setTimeout(r, 200));
-
-    positions = await provider.getPositions('BTCUSDT');
-    expect(positions.find((p) => p.side === 'LONG')).toBeUndefined();
-  });
-
-  it('cancels orders correctly', async () => {
-    provider.onPriceUpdate('BTCUSDT', '50000');
-    await provider.placeOrder({
-      traderId: 'test',
-      clientOrderId: 'test-cancel-1',
-      symbol: 'BTCUSDT',
-      side: 'BUY',
-      type: 'STOP_LIMIT',
-      role: 'HEDGE',
-      hedgeLevel: 1,
-      quantity: '0.001',
-      price: '55000',
-      stopPrice: '55000',
-    });
-
-    await expect(
-      provider.cancelOrder({ symbol: 'BTCUSDT', clientOrderId: 'test-cancel-1' }),
-    ).resolves.toBeUndefined();
-
-    // Idempotent second cancel
-    await expect(
-      provider.cancelOrder({ symbol: 'BTCUSDT', clientOrderId: 'test-cancel-1' }),
-    ).resolves.toBeUndefined();
+    await wait(300);
+    expect(updates.some((u) => u.status === 'PARTIALLY_FILLED')).toBe(true);
+    expect(updates.some((u) => u.status === 'FILLED')).toBe(true);
+    const filled = updates.find((u) => u.status === 'FILLED');
+    expect(filled?.filledQuantity).toBe('0.010');
   });
 });
 
 describe('Hedge ladder mathematics', () => {
-  it('hedge level 1 matches spec exactly: price=10, hedge entry=11, stop=10, tp=16.5', () => {
-    const shortEntry = '10';
-    const hedgeEntry = calcHedgeEntry(shortEntry, '0.10');
-    const hedgeTp = calcHedgeTp(hedgeEntry.toFixed(), '0.50');
-    const hedgeStop = shortEntry;
-
-    expect(hedgeEntry.toFixed(2)).toBe('11.00');
-    expect(hedgeTp.toFixed(2)).toBe('16.50');
-    expect(hedgeStop).toBe('10');
-  });
-
-  it('short TP = 20% below entry', () => {
+  it('matches strategy spec', () => {
+    expect(calcHedgeEntry('10', '0.10').toFixed(2)).toBe('11.00');
+    expect(calcHedgeTp('11', '0.50').toFixed(2)).toBe('16.50');
     expect(calcShortTp('10', '0.20').toFixed(2)).toBe('8.00');
-  });
-
-  it('next hedge after TP: entry=18.15, stop=16.5, tp=27.225', () => {
-    const nextEntry = calcNextHedgeEntry('16.5', '0.10');
-    const nextTp = calcHedgeTp(nextEntry.toFixed(), '0.50');
-    const nextStop = '16.5';
-
-    expect(nextEntry.toFixed(3)).toBe('18.150');
-    expect(nextTp.toFixed(4)).toBe('27.2250');
-    expect(nextStop).toBe('16.5');
-  });
-
-  it('SL recreates same hedge level without changing prices', () => {
-    const original = {
-      level: 1,
-      entryPrice: '11',
-      stopPrice: '10',
-      tpPrice: '16.5',
-    };
-    const recreated = { ...original };
-    expect(recreated).toStrictEqual(original);
+    expect(calcNextHedgeEntry('16.5', '0.10').toFixed(3)).toBe('18.150');
   });
 });

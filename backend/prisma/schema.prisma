@@ -42,6 +42,7 @@ enum OrderType {
 enum OrderStatus {
   PENDING
   NEW
+  TRIGGERED
   PARTIALLY_FILLED
   FILLED
   CANCELED
@@ -199,6 +200,21 @@ model GlobalStatistics {
   dailyPnl        String     @default("0")
   winRate         String     @default("0")
   lastUpdated     DateTime   @default(now())
+}
+
+/// Testing-mode account ledger (single wallet). Live mode uses Binance balances.
+model AccountLedger {
+  id              String   @id @default("singleton")
+  /// Wallet / cash balance after realized trades + fees
+  balance         String   @default("200")
+  /// Cumulative net realized PnL (after fees)
+  realizedPnl     String   @default("0")
+  /// Cumulative fees paid
+  totalFees       String   @default("0")
+  /// Day-keyed realized PnL for "today"
+  dailyPnl        String   @default("0")
+  dailyPnlDate    String   @default("")
+  updatedAt       DateTime @updatedAt
 }
 
 model Configuration {

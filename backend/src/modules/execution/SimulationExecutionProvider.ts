@@ -17,10 +17,20 @@ import { config } from '../../config';
 
 const log = createContextLogger('SimulationExecutionProvider');
 
+/**
+ * Binance-aligned conditional order phase:
+ * PENDING   — waiting for stopPrice (not in book yet)
+ * TRIGGERED — stop hit; LIMIT is active (STOP) or market fill imminent
+ * FILLED / CANCELED / REJECTED — terminal
+ */
+type SimPhase = 'PENDING' | 'TRIGGERED' | 'FILLED' | 'CANCELED' | 'REJECTED';
+
 interface SimOrder {
   req: OrderRequest;
   result: OrderResult;
-  isOpen: boolean;
+  phase: SimPhase;
+  /** Remaining qty for partial fills */
+  remainingQty: string;
 }
 
 interface SimPosition {
@@ -29,19 +39,35 @@ interface SimPosition {
   entryPrice: string;
   quantity: string;
   leverage: number;
+  notional: string;
 }
 
 /**
- * Simulates Binance Futures execution using real mark prices from WebSocket.
- * Identical calculations to live — only execution differs.
+ * Binance Futures execution simulator.
+ * Consumes REAL mark prices; only fills are simulated.
+ *
+ * STOP (STOP_LIMIT): stop → then LIMIT waits for executable price (NOT instant fill).
+ * STOP_MARKET / TAKE_PROFIT_MARKET: stop → immediate MARKET with slippage.
+ * TAKE_PROFIT: stop → then LIMIT at price.
+ * MARKET: immediate fill with slippage + fee.
+ *
+ * Trigger rules (workingType = MARK_PRICE), per Binance docs:
+ * STOP / STOP_MARKET:     BUY mark>=stop, SELL mark<=stop
+ * TAKE_PROFIT / TP_MARKET: BUY mark<=stop, SELL mark>=stop
+ * LIMIT BUY fills when mark <= price; LIMIT SELL when mark >= price
  */
 export class SimulationExecutionProvider extends EventEmitter implements IExecutionProvider {
   readonly isSimulation = true;
+  private hedgeMode = true;
   private orders = new Map<string, SimOrder>();
   private positions = new Map<string, SimPosition[]>();
   private symbolInfoCache = new Map<string, SymbolInfo>();
   private markPrices = new Map<string, string>();
-  private readonly simLatencyMs = 50;
+  private readonly simLatencyMs = 40;
+  /** When true, ~25% of fills go PARTIAL then complete (tests can disable). */
+  enablePartialFills = true;
+  /** If set (0–1), next fill uses this fraction then clears (for tests). */
+  forcePartialFraction: number | null = null;
 
   constructor(
     private readonly exchangeInfoProvider: () => Promise<SymbolInfo[]>,
@@ -50,104 +76,112 @@ export class SimulationExecutionProvider extends EventEmitter implements IExecut
     super();
   }
 
-  /** Called by the WebSocket manager when mark prices arrive. */
+  get hedgeModeEnabled(): boolean {
+    return this.hedgeMode;
+  }
+
+  async setHedgeMode(enabled: boolean): Promise<void> {
+    this.hedgeMode = enabled;
+    await sleep(5);
+  }
+
+  /** Event-driven: every mark tick evaluates the pending/triggered book. */
   onPriceUpdate(symbol: string, price: string): void {
     this.markPrices.set(symbol, price);
-    this.checkTriggers(symbol, price);
+    this.evaluateBook(symbol, price);
   }
 
   async placeOrder(req: OrderRequest): Promise<OrderResult> {
-    await sleep(this.simLatencyMs + Math.random() * 50);
+    await sleep(this.simLatencyMs + Math.random() * 40);
 
     const symbolInfo = await this.getSymbolInfo(req.symbol);
     const adjustedQty = adjustQuantity(req.quantity, symbolInfo);
-
-    let fillPrice: string | undefined;
-    let status: OrderStatus = 'NEW';
-
-    const markPrice = this.markPrices.get(req.symbol) ?? req.price;
-
-    if (req.type === 'MARKET' && markPrice != null) {
-      const slip = new Decimal(config.trading.slippage);
-      const mark = new Decimal(markPrice);
-      fillPrice = req.side === 'BUY'
-        ? mark.mul(new Decimal(1).plus(slip)).toFixed(symbolInfo.pricePrecision)
-        : mark.mul(new Decimal(1).minus(slip)).toFixed(symbolInfo.pricePrecision);
-      status = 'FILLED';
-
-      this.updatePosition(
-        req.symbol,
-        req.side === 'BUY' ? 'LONG' : 'SHORT',
-        fillPrice,
-        adjustedQty,
-        req.reduceOnly ?? false,
-      );
-    } else {
-      status = 'NEW';
-    }
-
-    const fee = fillPrice != null
-      ? calcFee(fillPrice, adjustedQty, config.trading.feeRate).toFixed(8)
-      : '0';
-
-    const result: OrderResult = {
-      clientOrderId: req.clientOrderId,
-      exchangeOrderId: `sim_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-      symbol: req.symbol,
-      side: req.side,
-      type: req.type,
-      status,
+    const normalized: OrderRequest = {
+      ...req,
       quantity: adjustedQty,
-      price: req.price != null ? adjustPrice(req.price, symbolInfo) : null,
-      stopPrice: req.stopPrice != null ? adjustPrice(req.stopPrice, symbolInfo) : null,
-      filledQuantity: status === 'FILLED' ? adjustedQty : '0',
-      avgFillPrice: fillPrice ?? null,
-      fee,
-      feeCurrency: 'USDT',
-      createdAt: new Date(),
-      filledAt: status === 'FILLED' ? new Date() : null,
+      price: req.price != null ? adjustPrice(req.price, symbolInfo) : undefined,
+      stopPrice: req.stopPrice != null ? adjustPrice(req.stopPrice, symbolInfo) : undefined,
     };
 
-    this.orders.set(req.clientOrderId, { req, result, isOpen: status === 'NEW' });
-    log.debug('Sim order placed', { clientId: req.clientOrderId, status, fillPrice });
+    const exchangeOrderId = `sim_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const baseResult: OrderResult = {
+      clientOrderId: normalized.clientOrderId,
+      exchangeOrderId,
+      symbol: normalized.symbol,
+      side: normalized.side,
+      type: normalized.type,
+      status: 'PENDING',
+      quantity: adjustedQty,
+      price: normalized.price ?? null,
+      stopPrice: normalized.stopPrice ?? null,
+      filledQuantity: '0',
+      avgFillPrice: null,
+      fee: '0',
+      feeCurrency: 'USDT',
+      createdAt: new Date(),
+      filledAt: null,
+    };
 
-    if (status === 'FILLED') {
-      setTimeout(() => this.emitOrderFill(result), this.simLatencyMs);
-    } else if (status === 'NEW') {
-      // If mark already crossed the trigger (e.g. price ran through), fill immediately
-      const mark = this.markPrices.get(req.symbol);
-      if (mark != null) this.checkTriggers(req.symbol, mark);
+    if (normalized.type === 'MARKET') {
+      const mark = this.requireMark(normalized.symbol, normalized.price);
+      const fillPrice = this.applySlippage(mark, normalized.side, symbolInfo);
+      const order: SimOrder = {
+        req: normalized,
+        result: baseResult,
+        phase: 'TRIGGERED',
+        remainingQty: adjustedQty,
+      };
+      this.orders.set(normalized.clientOrderId, order);
+      this.finalizeFill(normalized.clientOrderId, order, fillPrice, symbolInfo);
+      return { ...order.result };
     }
 
-    return result;
+    // Conditional / limit — enter PENDING (or NEW for plain LIMIT)
+    const isPlainLimit = normalized.type === 'LIMIT';
+    const order: SimOrder = {
+      req: normalized,
+      result: {
+        ...baseResult,
+        status: isPlainLimit ? 'NEW' : 'PENDING',
+      },
+      phase: isPlainLimit ? 'TRIGGERED' : 'PENDING',
+      remainingQty: adjustedQty,
+    };
+    this.orders.set(normalized.clientOrderId, order);
+    log.debug('Sim order accepted', {
+      clientId: normalized.clientOrderId,
+      type: normalized.type,
+      phase: order.phase,
+      stop: normalized.stopPrice,
+      price: normalized.price,
+    });
+
+    // Evaluate immediately against current mark (gap / already-through)
+    const mark = this.markPrices.get(normalized.symbol);
+    if (mark != null) this.evaluateBook(normalized.symbol, mark);
+
+    return { ...order.result };
   }
 
   async cancelOrder(req: CancelOrderRequest): Promise<void> {
     await sleep(this.simLatencyMs);
     const order = this.orders.get(req.clientOrderId);
-    if (order == null) {
-      // Idempotent cancel — already gone is fine for strategy code
-      log.debug('Sim cancel ignored — order not found', { clientId: req.clientOrderId });
-      return;
-    }
-    if (!order.isOpen) {
-      log.debug('Sim cancel ignored — order not open', { clientId: req.clientOrderId });
-      return;
-    }
-    order.isOpen = false;
+    if (order == null || order.phase === 'FILLED' || order.phase === 'CANCELED') return;
+    order.phase = 'CANCELED';
     order.result.status = 'CANCELED';
+    this.emitOrderUpdate(order.result);
     log.debug('Sim order cancelled', { clientId: req.clientOrderId });
   }
 
   async cancelAllOrders(symbol: string): Promise<void> {
     await sleep(this.simLatencyMs);
     for (const [, order] of this.orders) {
-      if (order.req.symbol === symbol && order.isOpen) {
-        order.isOpen = false;
+      if (order.req.symbol === symbol && (order.phase === 'PENDING' || order.phase === 'TRIGGERED')) {
+        order.phase = 'CANCELED';
         order.result.status = 'CANCELED';
+        this.emitOrderUpdate(order.result);
       }
     }
-    log.debug('Sim all orders cancelled', { symbol });
   }
 
   async getPositions(symbol: string): Promise<PositionInfo[]> {
@@ -170,45 +204,54 @@ export class SimulationExecutionProvider extends EventEmitter implements IExecut
     });
   }
 
+  getOpenNotionals(): string[] {
+    const out: string[] = [];
+    for (const positions of this.positions.values()) {
+      for (const p of positions) out.push(p.notional);
+    }
+    return out;
+  }
+
+  getPendingOrders(symbol?: string): OrderResult[] {
+    return [...this.orders.values()]
+      .filter((o) => (symbol == null || o.req.symbol === symbol) && (o.phase === 'PENDING' || o.phase === 'TRIGGERED'))
+      .map((o) => ({ ...o.result }));
+  }
+
   async closePosition(symbol: string, side: 'LONG' | 'SHORT', quantity: string): Promise<OrderResult> {
-    const closeSide = side === 'LONG' ? 'SELL' : 'BUY';
-    const result = await this.placeOrder({
+    return this.placeOrder({
       traderId: '',
       clientOrderId: `simclose_${symbol}_${Date.now()}`,
       symbol,
-      side: closeSide,
+      side: side === 'LONG' ? 'SELL' : 'BUY',
       type: 'MARKET',
-      role: 'HEDGE',
+      role: side === 'LONG' ? 'HEDGE' : 'SHORT',
       hedgeLevel: 0,
       quantity,
-      reduceOnly: true,
+      positionSide: this.hedgeMode ? side : 'BOTH',
+      reduceOnly: !this.hedgeMode,
     });
-    return result;
   }
 
   async setLeverage(_symbol: string, _leverage: number): Promise<void> {
-    await sleep(10);
+    await sleep(5);
   }
 
   async setMarginMode(_symbol: string, _marginMode: string): Promise<void> {
-    await sleep(10);
+    await sleep(5);
   }
 
   async getMarkPrice(symbol: string): Promise<string> {
     const cached = this.markPrices.get(symbol);
     if (cached != null) return cached;
-    if (this.restMarkPriceFetcher == null) {
-      throw new Error(`No mark price available for ${symbol}`);
-    }
+    if (this.restMarkPriceFetcher == null) throw new Error(`No mark price for ${symbol}`);
     const price = await this.restMarkPriceFetcher(symbol);
     this.markPrices.set(symbol, price);
     return price;
   }
 
   async getSymbolInfo(symbol: string): Promise<SymbolInfo> {
-    if (this.symbolInfoCache.has(symbol)) {
-      return this.symbolInfoCache.get(symbol)!;
-    }
+    if (this.symbolInfoCache.has(symbol)) return this.symbolInfoCache.get(symbol)!;
     const infos = await this.exchangeInfoProvider();
     for (const info of infos) this.symbolInfoCache.set(info.symbol, info);
     const found = this.symbolInfoCache.get(symbol);
@@ -216,90 +259,167 @@ export class SimulationExecutionProvider extends EventEmitter implements IExecut
     return found;
   }
 
-  private checkTriggers(symbol: string, markPrice: string): void {
+  // ── Book evaluation (event-driven) ───────────────────────────────────────
+
+  private evaluateBook(symbol: string, markPrice: string): void {
     const mark = new Decimal(markPrice);
 
     for (const [clientId, order] of this.orders) {
-      if (!order.isOpen || order.req.symbol !== symbol) continue;
-
-      let triggered = false;
-      let fillAt = markPrice;
+      if (order.req.symbol !== symbol) continue;
+      if (order.phase === 'FILLED' || order.phase === 'CANCELED' || order.phase === 'REJECTED') continue;
 
       const { type, side, price, stopPrice } = order.req;
 
-      if (type === 'STOP_LIMIT' && stopPrice != null) {
-        const stop = new Decimal(stopPrice);
-        if (side === 'BUY' && mark.gte(stop)) {
-          triggered = true;
-          // Limit is worst-case: BUY fills at min(mark, limit)
-          if (price != null) {
-            const limit = new Decimal(price);
-            fillAt = Decimal.min(mark, limit).toFixed();
+      // Phase 1: PENDING → TRIGGERED when stop condition met
+      if (order.phase === 'PENDING' && stopPrice != null) {
+        if (this.isStopTriggered(type, side, mark, new Decimal(stopPrice))) {
+          if (type === 'STOP_MARKET' || type === 'TAKE_PROFIT_MARKET') {
+            // Immediate market execution
+            const symbolInfo = this.symbolInfoCache.get(symbol);
+            if (symbolInfo == null) continue;
+            const fillPrice = this.applySlippage(markPrice, side, symbolInfo);
+            this.finalizeFill(clientId, order, fillPrice, symbolInfo);
+            continue;
           }
+
+          // STOP_LIMIT (STOP) / TAKE_PROFIT → activate limit, do NOT fill yet
+          order.phase = 'TRIGGERED';
+          order.result.status = 'TRIGGERED';
+          this.emitOrderUpdate(order.result);
+          log.debug('Sim order TRIGGERED (limit now active)', {
+            clientId,
+            type,
+            stop: stopPrice,
+            limit: price,
+            mark: markPrice,
+          });
         }
-        if (side === 'SELL' && mark.lte(stop)) {
-          triggered = true;
-          if (price != null) {
-            const limit = new Decimal(price);
-            fillAt = Decimal.max(mark, limit).toFixed();
-          }
-        }
-      } else if (type === 'STOP_MARKET' && stopPrice != null) {
-        const stop = new Decimal(stopPrice);
-        if (side === 'BUY' && mark.gte(stop)) triggered = true;
-        if (side === 'SELL' && mark.lte(stop)) triggered = true;
-      } else if ((type === 'TAKE_PROFIT' || type === 'TAKE_PROFIT_MARKET') && stopPrice != null) {
-        const tp = new Decimal(stopPrice);
-        if (side === 'BUY' && mark.lte(tp)) {
-          triggered = true;
-          if (type === 'TAKE_PROFIT' && price != null) fillAt = price;
-        }
-        if (side === 'SELL' && mark.gte(tp)) {
-          triggered = true;
-          if (type === 'TAKE_PROFIT' && price != null) fillAt = price;
-        }
-      } else if (type === 'LIMIT' && price != null) {
-        const lp = new Decimal(price);
-        if (side === 'BUY' && mark.lte(lp)) { triggered = true; fillAt = price; }
-        if (side === 'SELL' && mark.gte(lp)) { triggered = true; fillAt = price; }
       }
 
-      if (triggered) {
-        this.fillOrder(clientId, order, fillAt);
+      // Phase 2: TRIGGERED limit — wait until limit is executable
+      if (order.phase === 'TRIGGERED') {
+        const limitPrice = price ?? stopPrice;
+        if (limitPrice == null) continue;
+        if (this.isLimitExecutable(side, mark, new Decimal(limitPrice))) {
+          const symbolInfo = this.symbolInfoCache.get(symbol);
+          if (symbolInfo == null) continue;
+          // Fill at limit (price improvement: BUY min(mark,limit), SELL max)
+          const fillAt = side === 'BUY'
+            ? Decimal.min(mark, new Decimal(limitPrice)).toFixed()
+            : Decimal.max(mark, new Decimal(limitPrice)).toFixed();
+          this.finalizeFill(clientId, order, fillAt, symbolInfo);
+        }
       }
     }
   }
 
-  private fillOrder(clientId: string, order: SimOrder, fillPrice: string): void {
-    const symbolInfo = this.symbolInfoCache.get(order.req.symbol);
-    if (symbolInfo == null) return;
+  /** Binance STOP / STOP_MARKET vs TAKE_PROFIT / TAKE_PROFIT_MARKET trigger. */
+  private isStopTriggered(type: OrderRequest['type'], side: OrderRequest['side'], mark: Decimal, stop: Decimal): boolean {
+    const isTakeProfit = type === 'TAKE_PROFIT' || type === 'TAKE_PROFIT_MARKET';
+    if (isTakeProfit) {
+      // BUY TP: mark <= stop; SELL TP: mark >= stop
+      return side === 'BUY' ? mark.lte(stop) : mark.gte(stop);
+    }
+    // STOP / STOP_LIMIT / STOP_MARKET: BUY mark >= stop; SELL mark <= stop
+    return side === 'BUY' ? mark.gte(stop) : mark.lte(stop);
+  }
 
-    const filledQty = order.req.quantity;
-    const fee = calcFee(fillPrice, filledQty, config.trading.feeRate).toFixed(8);
+  private isLimitExecutable(side: OrderRequest['side'], mark: Decimal, limit: Decimal): boolean {
+    return side === 'BUY' ? mark.lte(limit) : mark.gte(limit);
+  }
 
-    order.result.status = 'FILLED';
-    order.result.filledQuantity = filledQty;
-    order.result.avgFillPrice = fillPrice;
-    order.result.fee = fee;
-    order.result.filledAt = new Date();
-    order.isOpen = false;
+  private finalizeFill(clientId: string, order: SimOrder, fillPrice: string, symbolInfo: SymbolInfo): void {
+    const remaining = new Decimal(order.remainingQty);
+    if (remaining.lte(0)) return;
 
-    log.debug('Sim order triggered', { clientId, fillPrice, filledQty });
+    // Partial fill: leave remainder for next tick
+    let fillFraction: number | null = null;
+    if (this.forcePartialFraction != null && remaining.gt(symbolInfo.minQty)) {
+      fillFraction = this.forcePartialFraction;
+      this.forcePartialFraction = null;
+    } else if (
+      this.enablePartialFills &&
+      remaining.gt(symbolInfo.minQty) &&
+      Math.random() < 0.25
+    ) {
+      fillFraction = 0.5;
+    }
+
+    let fillQty = remaining;
+    if (fillFraction != null) {
+      fillQty = remaining.mul(fillFraction);
+      fillQty = new Decimal(adjustQuantity(fillQty.toFixed(), symbolInfo));
+      if (fillQty.lte(0) || fillQty.gte(remaining)) fillQty = remaining;
+    }
+
+    const prevFilled = new Decimal(order.result.filledQuantity || '0');
+    const newFilledTotal = prevFilled.plus(fillQty);
+    const fee = calcFee(fillPrice, fillQty.toFixed(), config.trading.feeRate);
+    const prevFee = new Decimal(order.result.fee || '0');
+    const avgPx = new Decimal(fillPrice)
+      .toDecimalPlaces(symbolInfo.pricePrecision)
+      .toFixed(symbolInfo.pricePrecision);
+
+    const isComplete = newFilledTotal.gte(new Decimal(order.req.quantity).mul('0.999'));
+    const status: OrderStatus = isComplete ? 'FILLED' : 'PARTIALLY_FILLED';
+
+    order.remainingQty = Decimal.max(new Decimal(0), remaining.minus(fillQty)).toFixed(symbolInfo.quantityPrecision);
+    order.result = {
+      ...order.result,
+      status,
+      filledQuantity: newFilledTotal.toFixed(symbolInfo.quantityPrecision),
+      avgFillPrice: avgPx,
+      fee: prevFee.plus(fee).toFixed(8),
+      filledAt: isComplete ? new Date() : order.result.filledAt,
+    };
+    order.phase = isComplete ? 'FILLED' : 'TRIGGERED';
 
     this.updatePosition(
       order.req.symbol,
       order.req.side === 'BUY' ? 'LONG' : 'SHORT',
-      fillPrice,
-      filledQty,
+      avgPx,
+      fillQty.toFixed(symbolInfo.quantityPrecision),
       order.req.reduceOnly ?? false,
+      order.req.positionSide,
     );
 
-    setTimeout(() => this.emitOrderFill({ ...order.result }), this.simLatencyMs);
+    log.debug(`Sim order ${status}`, {
+      clientId,
+      fillPrice,
+      fillQty: fillQty.toFixed(),
+      remaining: order.remainingQty,
+      type: order.req.type,
+    });
+
+    setTimeout(() => this.emitOrderUpdate({ ...order.result }), this.simLatencyMs);
+
+    // Complete remainder shortly after (liquidity catches up)
+    if (!isComplete) {
+      setTimeout(() => {
+        if (order.phase !== 'FILLED' && order.phase !== 'CANCELED') {
+          this.finalizeFill(clientId, order, fillPrice, symbolInfo);
+        }
+      }, this.simLatencyMs + 80);
+    }
   }
 
-  private emitOrderFill(result: OrderResult): void {
-    this.emit('orderFill', result);
+  private applySlippage(markPrice: string, side: OrderRequest['side'], symbolInfo: SymbolInfo): string {
+    const slip = new Decimal(config.trading.slippage);
+    const mark = new Decimal(markPrice);
+    const raw = side === 'BUY'
+      ? mark.mul(new Decimal(1).plus(slip))
+      : mark.mul(new Decimal(1).minus(slip));
+    return raw.toDecimalPlaces(symbolInfo.pricePrecision, Decimal.ROUND_HALF_UP).toFixed(symbolInfo.pricePrecision);
+  }
 
+  private requireMark(symbol: string, fallback?: string): string {
+    const mark = this.markPrices.get(symbol) ?? fallback;
+    if (mark == null) throw new Error(`No mark price for ${symbol}`);
+    return mark;
+  }
+
+  private emitOrderUpdate(result: OrderResult): void {
+    this.emit('orderFill', result);
     const update: OrderUpdate = {
       clientOrderId: result.clientOrderId,
       exchangeOrderId: result.exchangeOrderId,
@@ -314,18 +434,55 @@ export class SimulationExecutionProvider extends EventEmitter implements IExecut
     this.emit('orderUpdate', update);
   }
 
-  /**
-   * Update simulated positions.
-   * reduceOnly closes the OPPOSING position side (BUY reduce closes SHORT, SELL reduce closes LONG).
-   */
   private updatePosition(
     symbol: string,
     orderSide: 'LONG' | 'SHORT',
     fillPrice: string,
     quantity: string,
     reduceOnly: boolean,
+    positionSide?: 'LONG' | 'SHORT' | 'BOTH',
   ): void {
     const positions = this.positions.get(symbol) ?? [];
+
+    // Hedge mode: positionSide identifies the leg; BUY/SELL increases or decreases it
+    if (this.hedgeMode && (positionSide === 'LONG' || positionSide === 'SHORT')) {
+      const isIncrease =
+        (positionSide === 'LONG' && orderSide === 'LONG') ||
+        (positionSide === 'SHORT' && orderSide === 'SHORT');
+      const existing = positions.find((p) => p.side === positionSide);
+      if (isIncrease) {
+        if (existing != null) {
+          const totalQty = new Decimal(existing.quantity).plus(quantity);
+          const avgEntry = new Decimal(existing.entryPrice)
+            .mul(existing.quantity)
+            .plus(new Decimal(fillPrice).mul(quantity))
+            .div(totalQty);
+          existing.quantity = totalQty.toFixed(8);
+          existing.entryPrice = avgEntry.toFixed(8);
+          existing.notional = totalQty.mul(avgEntry).toFixed(8);
+        } else {
+          positions.push({
+            symbol,
+            side: positionSide,
+            entryPrice: fillPrice,
+            quantity,
+            leverage: config.trading.leverage,
+            notional: new Decimal(fillPrice).mul(quantity).toFixed(8),
+          });
+        }
+      } else if (existing != null) {
+        const newQty = new Decimal(existing.quantity).minus(quantity);
+        if (newQty.lte(0)) {
+          const idx = positions.indexOf(existing);
+          positions.splice(idx, 1);
+        } else {
+          existing.quantity = newQty.toFixed(8);
+          existing.notional = newQty.mul(existing.entryPrice).toFixed(8);
+        }
+      }
+      this.positions.set(symbol, positions);
+      return;
+    }
 
     if (reduceOnly) {
       const closeSide: 'LONG' | 'SHORT' = orderSide === 'LONG' ? 'SHORT' : 'LONG';
@@ -333,10 +490,10 @@ export class SimulationExecutionProvider extends EventEmitter implements IExecut
       if (idx >= 0) {
         const pos = positions[idx]!;
         const newQty = new Decimal(pos.quantity).minus(quantity);
-        if (newQty.lte(0)) {
-          positions.splice(idx, 1);
-        } else {
+        if (newQty.lte(0)) positions.splice(idx, 1);
+        else {
           pos.quantity = newQty.toFixed(8);
+          pos.notional = newQty.mul(pos.entryPrice).toFixed(8);
         }
       }
     } else {
@@ -349,6 +506,7 @@ export class SimulationExecutionProvider extends EventEmitter implements IExecut
           .div(totalQty);
         existing.quantity = totalQty.toFixed(8);
         existing.entryPrice = avgEntry.toFixed(8);
+        existing.notional = totalQty.mul(avgEntry).toFixed(8);
       } else {
         positions.push({
           symbol,
@@ -356,6 +514,7 @@ export class SimulationExecutionProvider extends EventEmitter implements IExecut
           entryPrice: fillPrice,
           quantity,
           leverage: config.trading.leverage,
+          notional: new Decimal(fillPrice).mul(quantity).toFixed(8),
         });
       }
     }

@@ -8,7 +8,7 @@ import { LiveExecutionProvider } from './modules/execution/LiveExecutionProvider
 import { SimulationExecutionProvider } from './modules/execution/SimulationExecutionProvider';
 import { TraderManager } from './modules/trader-manager/TraderManager';
 import { StatisticsService } from './modules/statistics/StatisticsService';
-import { EquityService } from './modules/calc/EquityService';
+import { AccountLedger } from './modules/calc/AccountLedger';
 import { createApp } from './app';
 import { scheduleRecurringJobs, closeQueues } from './modules/jobs/queues';
 import { startWorkers, stopWorkers } from './modules/jobs/workers';
@@ -79,7 +79,8 @@ async function bootstrap(): Promise<void> {
     mode: config.trading.mode,
   };
 
-  const equityService = new EquityService(db, binanceClient, config.trading.mode);
+  const accountLedger = new AccountLedger(db, binanceClient, config.trading.mode);
+  await accountLedger.ensureLoaded();
 
   let executionProvider: LiveExecutionProvider | SimulationExecutionProvider;
   let simProvider: SimulationExecutionProvider | null = null;
@@ -96,10 +97,10 @@ async function bootstrap(): Promise<void> {
       simProvider!.onPriceUpdate(update.symbol, update.price);
     });
     executionProvider = simProvider;
-    log.info('Simulation mode enabled');
+    log.info('Simulation mode enabled — real mark prices, simulated execution');
   }
 
-  const statisticsService = new StatisticsService(db, equityService, config.trading.mode);
+  const statisticsService = new StatisticsService(db, accountLedger, config.trading.mode);
 
   const traderManager = new TraderManager(
     executionProvider,
@@ -108,7 +109,7 @@ async function bootstrap(): Promise<void> {
     traderConfig,
     db,
     config.trading.mode,
-    equityService,
+    accountLedger,
   );
 
   // Simulation fills share the same OrderUpdate path as Live user-data stream

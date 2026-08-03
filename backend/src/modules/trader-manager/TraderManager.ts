@@ -5,7 +5,7 @@ import { Trader } from '../trader/Trader';
 import type { IExecutionProvider } from '../execution/IExecutionProvider';
 import type { WebSocketManager } from '../websocket/manager';
 import type { BinanceClient } from '../binance/client';
-import type { EquityService } from '../calc/EquityService';
+import type { AccountLedger } from '../calc/AccountLedger';
 import type {
   Ticker24h,
   TraderConfig,
@@ -30,7 +30,7 @@ function isLeveragedToken(symbol: string): boolean {
   return LEVERAGED_TOKEN_SUFFIXES.some((suffix) => symbol.endsWith(suffix));
 }
 
-const OPEN_ORDER_STATUSES: OrderStatus[] = ['PENDING', 'NEW', 'PARTIALLY_FILLED'];
+const OPEN_ORDER_STATUSES: OrderStatus[] = ['PENDING', 'NEW', 'TRIGGERED', 'PARTIALLY_FILLED'];
 
 export class TraderManager extends EventEmitter {
   private traders = new Map<string, Trader>();
@@ -51,7 +51,7 @@ export class TraderManager extends EventEmitter {
     private readonly traderConfig: TraderConfig,
     private readonly db: PrismaClient,
     private readonly mode: TraderMode,
-    private readonly equityService: EquityService,
+    private readonly accountLedger: AccountLedger,
   ) {
     super();
   }
@@ -177,7 +177,7 @@ export class TraderManager extends EventEmitter {
           this.executionProvider,
           this.traderConfig,
           this.db,
-          this.equityService,
+          this.accountLedger,
         );
 
         const shortEp = dbTrader.shortEntryPrice;
@@ -412,7 +412,7 @@ export class TraderManager extends EventEmitter {
     const traderId = uuidv4();
     log.info(`Creating new trader ${traderId} for ${symbol}`);
 
-    const allocation = await this.equityService.getAllocation(
+    const allocation = await this.accountLedger.getAllocation(
       this.traderConfig.maxTraders,
       this.traderConfig.leverage,
     );
@@ -437,7 +437,7 @@ export class TraderManager extends EventEmitter {
       this.executionProvider,
       this.traderConfig,
       this.db,
-      this.equityService,
+      this.accountLedger,
     );
 
     this.wireTraderEvents(trader);
@@ -527,29 +527,66 @@ export class TraderManager extends EventEmitter {
     this.lastSummaryAt = now;
 
     try {
-      const totalEquity = await this.equityService.getTotalEquity();
-      // Realized includes completed traders (DB); unrealized is live in-memory only
-      const realizedDec = await this.equityService.getTotalRealizedPnl();
       const unrealized = this.getTotalUnrealizedPnl();
-      const totalPnl = calcTotalPnl(realizedDec, unrealized);
+      const openNotionals = this.getOpenNotionals();
+      const openPositions = this.countOpenPositions();
+      const snap = await this.accountLedger.getSnapshot({
+        unrealizedPnl: unrealized,
+        openNotionals,
+        leverage: this.traderConfig.leverage,
+      });
+      const totalPnl = calcTotalPnl(snap.realizedPnl, snap.unrealizedPnl);
 
       const event: DashboardEvent = {
         type: 'SUMMARY',
         data: {
-          totalEquity: totalEquity.toFixed(2),
+          balance: snap.balance,
+          equity: snap.equity,
           totalPnl: totalPnl.toFixed(8),
-          totalRealizedPnl: realizedDec.toFixed(8),
-          totalUnrealizedPnl: unrealized,
+          totalRealizedPnl: snap.realizedPnl,
+          totalUnrealizedPnl: snap.unrealizedPnl,
+          dailyPnl: snap.dailyPnl,
+          openPositionValue: snap.openPositionValue,
+          usedMargin: snap.usedMargin,
+          availableMargin: snap.availableMargin,
+          openPositions,
           activeTraders: this.getOccupiedSlots(),
           maxTraders: this.traderConfig.maxTraders,
           topGainers: this.topGainers.slice(0, 20),
           tradingMode: this.mode,
+          botStatus: this.isPaused ? 'PAUSED' : this.isRunning ? 'RUNNING' : 'STOPPED',
         },
       };
       this.emit('traderEvent', event);
     } catch (err) {
       log.warn('Failed to broadcast summary', { error: String(err) });
     }
+  }
+
+  private getOpenNotionals(): string[] {
+    const notionals: string[] = [];
+    for (const t of this.traders.values()) {
+      const shortQty = t.getShortQuantity();
+      const entry = t.getShortEntryPrice();
+      if (shortQty != null && entry != null && t.isActive()) {
+        notionals.push(new Decimal(shortQty).mul(entry).toFixed(8));
+      }
+      for (const h of t.getHedgeLevels()) {
+        if (h.status === 'OPEN') {
+          notionals.push(new Decimal(h.quantity).mul(h.entryPrice).toFixed(8));
+        }
+      }
+    }
+    return notionals;
+  }
+
+  private countOpenPositions(): number {
+    let n = 0;
+    for (const t of this.traders.values()) {
+      if (t.getShortEntryPrice() != null && t.isActive()) n += 1;
+      n += t.getHedgeLevels().filter((h) => h.status === 'OPEN').length;
+    }
+    return n;
   }
 
   getActiveTraderCount(): number {

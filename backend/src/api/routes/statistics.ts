@@ -9,7 +9,9 @@ export function createStatisticsRouter(
   const router = Router();
 
   router.get('/', async (_req, res) => {
-    const stats = await statisticsService.getGlobalStatistics();
+    const stats = await statisticsService.getGlobalStatistics(
+      traderManager.getTotalUnrealizedPnl(),
+    );
     res.json({ success: true, data: stats });
   });
 
@@ -23,19 +25,31 @@ export function createStatisticsRouter(
   });
 
   router.get('/summary', async (_req, res) => {
-    const stats = await statisticsService.getGlobalStatistics();
+    const stats = await statisticsService.getGlobalStatistics(
+      traderManager.getTotalUnrealizedPnl(),
+    );
     const maxTraders = traderManager.getMaxTraders();
     res.json({
       success: true,
       data: {
+        balance: stats.balance,
+        equity: stats.equity,
+        dailyPnl: stats.dailyPnl,
+        totalRealizedPnl: stats.totalRealizedPnl,
+        totalUnrealizedPnl: traderManager.getTotalUnrealizedPnl(),
+        totalPnl: stats.totalPnl,
+        openPositionValue: stats.openPositionValue,
+        usedMargin: stats.usedMargin,
+        availableMargin: stats.availableMargin,
+        openPositions: traderManager.getTraderSummary().reduce(
+          (n, t) => n + (t.entryPrice != null ? 1 : 0) + t.hedgeLevels.filter((h) => h.status === 'OPEN').length,
+          0,
+        ),
         activeTraders: traderManager.getOccupiedSlots(),
         maxTraders,
         topGainers: traderManager.getTopGainers().slice(0, 20),
-        totalEquity: stats.totalEquity,
-        totalPnl: stats.totalPnl,
-        totalRealizedPnl: stats.totalRealizedPnl,
-        totalUnrealizedPnl: traderManager.getTotalUnrealizedPnl(),
         tradingMode: stats.tradingMode,
+        botStatus: 'RUNNING',
         equityPerTrader: stats.equityPerTrader,
         positionNotional: stats.positionNotional,
         leverage: stats.leverage,

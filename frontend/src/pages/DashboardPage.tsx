@@ -19,65 +19,65 @@ function money(v: string | number | null | undefined, dp = 2): string {
   return `$${n.toFixed(dp)}`;
 }
 
-function pnl(v: string, dp = 4): string {
+function pnl(v: string, dp = 2): string {
   const n = parseFloat(v);
   if (!isFinite(n)) return '—';
   return `${n >= 0 ? '+' : ''}${n.toFixed(dp)}`;
 }
 
-function pnlColor(v: string): string {
+function col(v: string): string {
   const n = parseFloat(v);
   if (n > 0) return '#4caf50';
   if (n < 0) return '#f44336';
-  return 'text.secondary';
+  return 'inherit';
 }
 
-function priceDp(p: number): number {
-  if (p >= 100) return 2;
-  if (p >= 1) return 4;
-  return 6;
+function px(p: string | null | undefined): string {
+  if (p == null) return '—';
+  const n = parseFloat(p);
+  if (!isFinite(n) || n === 0) return '—';
+  if (n >= 100) return n.toFixed(2);
+  if (n >= 1) return n.toFixed(4);
+  return n.toFixed(6);
 }
 
-function LadderRows({ trader }: { trader: TraderSummary }): React.ReactElement {
-  const mark = parseFloat(trader.markPrice);
-  const rows: Array<{ label: string; price: string; tone?: string }> = [];
+/** Simple strategy ladder — not a market chart. */
+function StrategyLadder({ trader }: { trader: TraderSummary }): React.ReactElement {
+  const active = trader.hedgeLevels.find((h) => h.status === 'OPEN');
+  const pending = trader.hedgeLevels.find((h) => h.status === 'PENDING' || h.status === 'ACTIVE');
 
-  rows.push({
-    label: 'Current',
-    price: isFinite(mark) && mark > 0 ? mark.toFixed(priceDp(mark)) : '—',
-    tone: '#fff',
-  });
-  rows.push({ label: 'Main Short', price: trader.entryPrice != null ? parseFloat(trader.entryPrice).toFixed(priceDp(parseFloat(trader.entryPrice))) : '—', tone: '#2196f3' });
-  rows.push({ label: 'Short TP', price: trader.tpPrice != null ? parseFloat(trader.tpPrice).toFixed(priceDp(parseFloat(trader.tpPrice))) : '—', tone: '#4caf50' });
+  const rows: Array<{ label: string; value: string; state?: string; color?: string }> = [
+    { label: 'Current Price', value: px(trader.markPrice), color: '#fff' },
+  ];
 
-  const live = trader.hedgeLevels.filter((h) => h.status === 'OPEN' || h.status === 'ACTIVE' || h.status === 'PENDING');
-  for (const h of live) {
-    const open = h.status === 'OPEN';
+  if (pending != null && pending.status !== 'OPEN') {
     rows.push({
-      label: open ? `Hedge L${h.level}` : `Pending L${h.level}`,
-      price: parseFloat(h.entryPrice).toFixed(priceDp(parseFloat(h.entryPrice) || 1)),
-      tone: '#ff9800',
-    });
-    rows.push({
-      label: `Hedge SL L${h.level}`,
-      price: parseFloat(h.stopPrice).toFixed(priceDp(parseFloat(h.stopPrice) || 1)),
-      tone: '#f44336',
-    });
-    rows.push({
-      label: `Hedge TP L${h.level}`,
-      price: parseFloat(h.tpPrice).toFixed(priceDp(parseFloat(h.tpPrice) || 1)),
-      tone: '#8bc34a',
+      label: 'Pending Hedge Entry',
+      value: px(pending.entryPrice),
+      state: pending.status === 'ACTIVE' ? 'TRIGGERED/ACTIVE' : 'PENDING',
+      color: '#ff9800',
     });
   }
+  if (active != null) {
+    rows.push({ label: 'Active Hedge Entry', value: px(active.entryPrice), state: 'FILLED/OPEN', color: '#ff9800' });
+    rows.push({ label: 'Active Hedge SL', value: px(active.stopPrice), state: 'PENDING', color: '#f44336' });
+    rows.push({ label: 'Active Hedge TP', value: px(active.tpPrice), state: 'PENDING', color: '#8bc34a' });
+  }
+  rows.push({ label: 'Main Short Entry', value: px(trader.entryPrice), state: trader.entryPrice ? 'FILLED' : '—', color: '#2196f3' });
+  rows.push({ label: 'Main Short TP', value: px(trader.tpPrice), state: 'PENDING', color: '#4caf50' });
+  rows.push({ label: 'Main Short SL', value: 'None', state: 'N/A', color: '#757575' });
 
   return (
     <Table size="small" sx={{ mt: 1 }}>
       <TableBody>
         {rows.map((r) => (
-          <TableRow key={r.label} sx={{ '& td': { border: 0, py: 0.35, px: 0 } }}>
-            <TableCell sx={{ color: 'text.secondary', width: '45%' }}>{r.label}</TableCell>
-            <TableCell align="right" sx={{ fontFamily: 'monospace', fontWeight: 600, color: r.tone }}>
-              {r.price === '—' ? '—' : `$${r.price}`}
+          <TableRow key={r.label} sx={{ '& td': { border: 0, py: 0.3, px: 0 } }}>
+            <TableCell sx={{ color: 'text.secondary', fontSize: 12 }}>{r.label}</TableCell>
+            <TableCell align="right" sx={{ fontFamily: 'monospace', fontWeight: 600, color: r.color, fontSize: 12 }}>
+              {r.value.startsWith('$') || r.value === 'None' || r.value === '—' ? r.value : `$${r.value}`}
+            </TableCell>
+            <TableCell align="right" sx={{ fontSize: 10, color: 'text.secondary', width: 90 }}>
+              {r.state ?? ''}
             </TableCell>
           </TableRow>
         ))}
@@ -87,23 +87,46 @@ function LadderRows({ trader }: { trader: TraderSummary }): React.ReactElement {
 }
 
 function TraderCard({ trader }: { trader: TraderSummary }): React.ReactElement {
-  const total = String(parseFloat(trader.realizedPnl) + parseFloat(trader.unrealizedPnl));
-  const hedge = trader.hedgeLevels.find((h: HedgeLevelInfo) => h.status === 'OPEN' || h.status === 'ACTIVE' || h.status === 'PENDING');
+  const profit = parseFloat(trader.realizedPnl) + parseFloat(trader.unrealizedPnl);
+  const profitStr = String(profit);
+  const activeHedge = trader.hedgeLevels.find((h: HedgeLevelInfo) => h.status === 'OPEN');
+  const pendingHedge = trader.hedgeLevels.find((h: HedgeLevelInfo) => h.status === 'PENDING' || h.status === 'ACTIVE');
 
   return (
     <Card sx={{ border: '1px solid', borderColor: 'divider', height: '100%' }}>
-      <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
+      <CardContent sx={{ p: 1.75, '&:last-child': { pb: 1.75 } }}>
         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.5 }}>
-          <Box sx={{ display: 'flex', gap: 0.75, alignItems: 'center' }}>
+          <Box sx={{ display: 'flex', gap: 0.5, alignItems: 'center', flexWrap: 'wrap' }}>
             <Typography variant="h6" fontWeight={700}>{trader.symbol.replace('USDT', '')}</Typography>
-            <Chip label={trader.status} size="small" sx={{ height: 20, fontSize: 10 }} color={trader.status === 'ACTIVE' ? 'success' : 'default'} />
-            {hedge != null && <Chip label={`L${hedge.level}`} size="small" sx={{ height: 20, fontSize: 10 }} color="warning" variant="outlined" />}
+            <Chip label={trader.status} size="small" sx={{ height: 18, fontSize: 10 }} color={trader.status === 'ACTIVE' ? 'success' : 'default'} />
+            <Chip label={`Hedge #${trader.hedgeLevel}`} size="small" sx={{ height: 18, fontSize: 10 }} variant="outlined" />
           </Box>
-          <Typography fontWeight={700} sx={{ color: pnlColor(total) }}>{pnl(total, 2)}</Typography>
+          <Typography fontWeight={700} sx={{ color: col(profitStr) }}>{pnl(profitStr)}</Typography>
         </Box>
-        <LadderRows trader={trader} />
+
+        <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 0.5, mb: 1 }}>
+          <Typography variant="caption" color="text.secondary">Price <Box component="span" sx={{ color: '#fff', fontFamily: 'monospace' }}>${px(trader.markPrice)}</Box></Typography>
+          <Typography variant="caption" color="text.secondary">Short PnL <Box component="span" sx={{ color: col(trader.shortUnrealizedPnl ?? trader.unrealizedPnl) }}>{pnl(trader.shortUnrealizedPnl ?? trader.unrealizedPnl)}</Box></Typography>
+          <Typography variant="caption" color="text.secondary">Realized <Box component="span" sx={{ color: col(trader.realizedPnl) }}>{pnl(trader.realizedPnl)}</Box></Typography>
+          <Typography variant="caption" color="text.secondary">Hedge losses <Box component="span">{trader.hedgeLosses ?? 0}</Box></Typography>
+          <Typography variant="caption" color="text.secondary">Active hedge {activeHedge ? `L${activeHedge.level}` : '—'}</Typography>
+          <Typography variant="caption" color="text.secondary">Pending hedge {pendingHedge && pendingHedge.status !== 'OPEN' ? `L${pendingHedge.level}` : '—'}</Typography>
+          <Typography variant="caption" color="text.secondary">Open orders {trader.openOrders ?? 0}</Typography>
+          <Typography variant="caption" color="text.secondary">Pending orders {trader.pendingOrders ?? 0}</Typography>
+        </Box>
+
+        <StrategyLadder trader={trader} />
       </CardContent>
     </Card>
+  );
+}
+
+function Metric({ label, value, color }: { label: string; value: string; color?: string }): React.ReactElement {
+  return (
+    <Box>
+      <Typography variant="caption" color="text.secondary" display="block">{label}</Typography>
+      <Typography variant="subtitle1" fontWeight={700} sx={{ color: color ?? 'inherit', lineHeight: 1.2 }}>{value}</Typography>
+    </Box>
   );
 }
 
@@ -117,11 +140,6 @@ export function DashboardPage(): React.ReactElement {
   const lastWs = useSystemStore((s) => s.lastWsMessageAt);
 
   const list = traders ?? summary?.traders ?? [];
-  const equity = summary?.totalEquity ?? '0';
-  const totalPnl = summary?.totalPnl
-    ?? String(parseFloat(summary?.totalRealizedPnl ?? '0') + parseFloat(summary?.totalUnrealizedPnl ?? '0'));
-  const active = summary?.activeTraders ?? list.length;
-  const max = summary?.maxTraders ?? 0;
   const mode = summary?.tradingMode ?? '…';
   const gainers = summary?.topGainers ?? [];
   const wsFresh = dashWs && Date.now() - lastWs < 5000;
@@ -130,51 +148,35 @@ export function DashboardPage(): React.ReactElement {
     <Box>
       <Box
         sx={{
-          display: 'flex',
-          flexWrap: 'wrap',
-          gap: 3,
-          alignItems: 'center',
-          p: 2,
-          mb: 2,
-          borderRadius: 2,
-          bgcolor: 'background.paper',
-          border: '1px solid',
-          borderColor: 'divider',
+          display: 'flex', flexWrap: 'wrap', gap: 2.5, alignItems: 'flex-end',
+          p: 2, mb: 2, borderRadius: 2, bgcolor: 'background.paper',
+          border: '1px solid', borderColor: 'divider',
         }}
       >
-        <Box>
-          <Typography variant="caption" color="text.secondary">Equity</Typography>
-          <Typography variant="h5" fontWeight={700}>{money(equity, 2)}</Typography>
-        </Box>
-        <Box>
-          <Typography variant="caption" color="text.secondary">Total PnL</Typography>
-          <Typography variant="h5" fontWeight={700} sx={{ color: pnlColor(totalPnl) }}>{pnl(totalPnl, 2)}</Typography>
-        </Box>
-        <Box>
-          <Typography variant="caption" color="text.secondary">Active Traders</Typography>
-          <Typography variant="h5" fontWeight={700} sx={{ color: active > max && max > 0 ? '#f44336' : 'inherit' }}>
-            {active} / {max}
-          </Typography>
-        </Box>
+        <Metric label="Balance" value={money(summary?.balance ?? summary?.totalEquity)} />
+        <Metric label="Equity" value={money(summary?.equity ?? summary?.totalEquity)} />
+        <Metric label="Today's PnL" value={pnl(summary?.dailyPnl ?? '0')} color={col(summary?.dailyPnl ?? '0')} />
+        <Metric label="Realized PnL" value={pnl(summary?.totalRealizedPnl ?? '0')} color={col(summary?.totalRealizedPnl ?? '0')} />
+        <Metric label="Unrealized PnL" value={pnl(summary?.totalUnrealizedPnl ?? '0')} color={col(summary?.totalUnrealizedPnl ?? '0')} />
+        <Metric label="Active Traders" value={`${summary?.activeTraders ?? list.length} / ${summary?.maxTraders ?? 0}`} />
+        <Metric label="Open Positions" value={String(summary?.openPositions ?? 0)} />
+        <Metric label="Used Margin" value={money(summary?.usedMargin)} />
+        <Metric label="Available" value={money(summary?.availableMargin)} />
 
         <Chip label={mode} size="small" color={mode === 'LIVE' ? 'error' : 'info'} />
+        <Chip label={summary?.botStatus ?? '…'} size="small" variant="outlined" />
         <Chip
-          label={wsFresh ? 'Live feed' : dashWs ? 'WS idle' : 'WS down · polling'}
+          label={wsFresh ? 'Live' : dashWs ? 'WS idle' : 'Polling'}
           size="small"
-          color={wsFresh ? 'success' : dashWs ? 'warning' : 'error'}
+          color={wsFresh ? 'success' : 'warning'}
           variant="outlined"
         />
 
         <Box sx={{ ml: 'auto', display: 'flex', gap: 1 }}>
           <Button size="small" variant="outlined" color="warning" onClick={() => pauseMutation.mutate()}>Pause</Button>
           <Button size="small" variant="outlined" color="success" onClick={() => resumeMutation.mutate()}>Resume</Button>
-          <Button
-            size="small"
-            variant="contained"
-            color="error"
-            startIcon={<Warning />}
-            onClick={() => { if (window.confirm('Close all positions?')) stopMutation.mutate(); }}
-          >
+          <Button size="small" variant="contained" color="error" startIcon={<Warning />}
+            onClick={() => { if (window.confirm('Close all positions?')) stopMutation.mutate(); }}>
             Stop
           </Button>
         </Box>
@@ -184,12 +186,12 @@ export function DashboardPage(): React.ReactElement {
         <Grid item xs={12} md={gainers.length ? 9 : 12}>
           {list.length === 0 ? (
             <Box sx={{ py: 8, textAlign: 'center', color: 'text.secondary' }}>
-              <Typography>No active traders — scanning gainers…</Typography>
+              <Typography>No active traders</Typography>
             </Box>
           ) : (
             <Grid container spacing={2}>
               {list.map((t) => (
-                <Grid item xs={12} sm={6} lg={4} key={t.id}>
+                <Grid item xs={12} md={6} xl={4} key={t.id}>
                   <TraderCard trader={t} />
                 </Grid>
               ))}
@@ -205,7 +207,7 @@ export function DashboardPage(): React.ReactElement {
                 {gainers.slice(0, 12).map((g) => {
                   const pct = parseFloat(g.priceChangePercent);
                   return (
-                    <Box key={g.symbol} sx={{ display: 'flex', justifyContent: 'space-between', py: 0.4 }}>
+                    <Box key={g.symbol} sx={{ display: 'flex', justifyContent: 'space-between', py: 0.35 }}>
                       <Typography variant="caption" fontFamily="monospace" fontWeight={600}>
                         {g.symbol.replace('USDT', '')}
                       </Typography>
