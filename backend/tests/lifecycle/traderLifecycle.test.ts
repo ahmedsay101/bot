@@ -29,9 +29,9 @@ const traderConfig: TraderConfig = {
   leverage: 10,
   marginMode: 'ISOLATED',
   hedgeDistance: '0.10',
-  hedgeTpPercent: '0.50',
-  hedgeSlPercent: '0.10',
-  shortTpPercent: '0.20',
+  hedgeTpPercent: '0.10',
+  hedgeSlPercent: '0.03',
+  shortTpPercent: '0.10',
   refreshInterval: 60000,
   retryLimit: 3,
   feeRate: '0.0004',
@@ -126,7 +126,7 @@ describe('Trader complete lifecycle', () => {
     ledger = createMockLedger();
   });
 
-  it('keeps first hedge PENDING with SL = short entry (previous level)', async () => {
+  it('keeps first hedge PENDING with SL = entry × (1 − hedgeSl%)', async () => {
     provider.onPriceUpdate('BTCUSDT', '100');
 
     const trader = new Trader(
@@ -152,11 +152,15 @@ describe('Trader complete lifecycle', () => {
     expect(hedge!.entryOrderStatus === 'PENDING' || hedge!.entryOrderStatus === 'NEW').toBe(true);
 
     const shortEntry = trader.getShortEntryPrice()!;
-    expect(hedge!.stopPrice).toBe(shortEntry);
     expect(hedge!.previousLevelPrice).toBe(shortEntry);
-    // STOP-LIMIT trigger equals entry — must NOT equal position SL when distance > 0
-    expect(hedge!.entryPrice).not.toBe(hedge!.stopPrice);
+    // SL is % below hedge entry, not equal to short entry
+    expect(hedge!.stopPrice).not.toBe(shortEntry);
     expect(parseFloat(hedge!.entryPrice)).toBeGreaterThan(parseFloat(hedge!.stopPrice));
+    expect(parseFloat(hedge!.stopPrice)).toBeGreaterThan(parseFloat(shortEntry));
+
+    expect(summary.hedgeStats.ordersCreated).toBe(1);
+    expect(summary.hedgeStats.pendingOrders).toBe(1);
+    expect(summary.hedgeStats.activePositions).toBe(0);
 
     // Ladder / orders consistency: open STOP_LIMIT is PENDING, not TRIGGERED
     const entryOrder = summary.orders.find(
@@ -164,7 +168,6 @@ describe('Trader complete lifecycle', () => {
     );
     expect(entryOrder).toBeDefined();
     expect(entryOrder!.status).toBe('PENDING');
-    expect(entryOrder!.status).toBe(hedge!.status === 'PENDING' ? 'PENDING' : entryOrder!.status);
 
     trader.destroy();
   });
@@ -199,8 +202,15 @@ describe('Trader complete lifecycle', () => {
     // May be TRIGGERED (limit active) or OPEN (filled if mark crossed limit)
     expect(['TRIGGERED', 'OPEN', 'HIT_TP', 'HIT_SL'].includes(after.status)).toBe(true);
     expect(after.status).not.toBe('PENDING');
-    // Position SL remains previous level (short entry)
-    expect(after.stopPrice).toBe(trader.getShortEntryPrice());
+    // Position SL stays % below entry
+    expect(after.stopPrice).toBe(hedge.stopPrice);
+    expect(after.stopPrice).not.toBe(trader.getShortEntryPrice());
+
+    const stats = trader.toSummary().hedgeStats;
+    expect(stats.ordersCreated).toBeGreaterThanOrEqual(1);
+    if (after.status === 'OPEN' || after.status === 'TRIGGERED') {
+      expect(stats.ordersTriggered).toBeGreaterThanOrEqual(1);
+    }
 
     trader.destroy();
   });

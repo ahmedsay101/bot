@@ -152,9 +152,10 @@ All trading parameters are configurable via environment variables or the `/api/c
 | `POSITION_SIZE` | 100 | Position size in USDT |
 | `LEVERAGE` | 10 | Futures leverage multiplier |
 | `MARGIN_MODE` | ISOLATED | ISOLATED or CROSSED |
-| `HEDGE_DISTANCE` | 0.10 | Hedge entry distance above short (10%) |
-| `HEDGE_TP_PERCENT` | 0.50 | Hedge take profit above hedge entry (50%) |
-| `SHORT_TP_PERCENT` | 0.20 | Short take profit below entry (20%) |
+| `HEDGE_DISTANCE` | 0.10 | Hedge entry distance above previous reference (10%) |
+| `HEDGE_TP_PERCENT` | 0.10 | Hedge take profit above hedge entry (10%) |
+| `HEDGE_SL_PERCENT` | 0.03 | Hedge stop loss below hedge entry (3%) |
+| `SHORT_TP_PERCENT` | 0.10 | Short take profit below entry (10%) |
 | `REFRESH_INTERVAL` | 60000 | Symbol refresh interval (ms) |
 | `FEE_RATE` | 0.0004 | Binance taker fee rate |
 | `SLIPPAGE` | 0.0001 | Simulated market slippage |

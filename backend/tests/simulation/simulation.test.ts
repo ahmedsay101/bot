@@ -279,9 +279,9 @@ describe('SimulationExecutionProvider — Binance-aligned', () => {
 
 describe('Hedge ladder mathematics', () => {
   it('matches strategy spec', () => {
-    expect(calcHedgeEntry('10', '0.10').toFixed(2)).toBe('11.00');
-    expect(calcHedgeTp('11', '0.50').toFixed(2)).toBe('16.50');
-    expect(calcShortTp('10', '0.20').toFixed(2)).toBe('8.00');
-    expect(calcNextHedgeEntry('16.5', '0.10').toFixed(3)).toBe('18.150');
+    expect(calcHedgeEntry('100', '0.10').toFixed(2)).toBe('110.00');
+    expect(calcHedgeTp('110', '0.10').toFixed(2)).toBe('121.00');
+    expect(calcShortTp('100', '0.10').toFixed(2)).toBe('90.00');
+    expect(calcNextHedgeEntry('121', '0.10').toFixed(2)).toBe('133.10');
   });
 });

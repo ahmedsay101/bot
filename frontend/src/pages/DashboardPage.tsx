@@ -96,7 +96,7 @@ function StrategyLadder({ trader }: { trader: TraderSummary }): React.ReactEleme
   for (const h of trader.hedgeLevels) {
     const phase = h.status;
     const entryOrderState = h.entryOrderStatus ?? phase;
-    const slPrice = h.previousLevelPrice ?? h.stopPrice;
+    const slPrice = h.stopPrice;
 
     if (phase === 'HIT_TP' || phase === 'HIT_SL' || phase === 'CANCELED') {
       rungs.push({
@@ -110,22 +110,23 @@ function StrategyLadder({ trader }: { trader: TraderSummary }): React.ReactEleme
       continue;
     }
 
-    // Pending stop-limit / triggered limit / open position — always show SL (previous level)
+    const entryLabel = phase === 'PENDING'
+      ? `Pending Hedge L${h.level}`
+      : phase === 'TRIGGERED'
+        ? `Triggered Hedge L${h.level}`
+        : `Filled Hedge L${h.level}`;
+
     rungs.push({
       key: `htp-${h.level}`,
       price: parseFloat(h.tpPrice) || 0,
-      label: `Hedge L${h.level} TP`,
+      label: `Hedge L${h.level} Take Profit`,
       state: phase === 'OPEN' ? 'OPEN' : 'ARMED',
       accent: '#8bc34a',
     });
     rungs.push({
       key: `hent-${h.level}`,
       price: parseFloat(h.entryPrice) || 0,
-      label: phase === 'PENDING'
-        ? `Hedge L${h.level} Entry (Stop-Limit)`
-        : phase === 'TRIGGERED'
-          ? `Hedge L${h.level} Entry (Limit Active)`
-          : `Hedge L${h.level} Entry`,
+      label: entryLabel,
       state: phase === 'OPEN' ? 'FILLED' : phase,
       accent: phase === 'TRIGGERED' ? '#ffb74d' : '#ff9800',
       detail: `Order ${entryOrderState}`,
@@ -136,7 +137,6 @@ function StrategyLadder({ trader }: { trader: TraderSummary }): React.ReactEleme
       label: `Hedge L${h.level} Stop Loss`,
       state: phase === 'OPEN' ? 'OPEN' : 'ARMED',
       accent: '#f44336',
-      detail: 'Previous level',
     });
   }
 
@@ -271,6 +271,18 @@ function TraderCard({ trader }: { trader: TraderSummary }): React.ReactElement {
     (h: HedgeLevelInfo) => h.status === 'PENDING' || h.status === 'TRIGGERED',
   );
   const currentHedge = activeHedge ?? workingHedge;
+  const hs = trader.hedgeStats ?? {
+    currentHedgeNumber: trader.hedgeLevel,
+    ordersCreated: 0,
+    ordersTriggered: 0,
+    positionsOpened: 0,
+    positionsClosed: 0,
+    stopLosses: trader.hedgeLosses ?? 0,
+    takeProfits: trader.hedgeWins ?? 0,
+    recreations: trader.hedgeRecreates ?? 0,
+    pendingOrders: trader.pendingOrders ?? 0,
+    activePositions: activeHedge != null ? 1 : 0,
+  };
 
   return (
     <Card sx={{ border: '1px solid', borderColor: 'divider', height: '100%', overflow: 'hidden' }}>
@@ -313,49 +325,43 @@ function TraderCard({ trader }: { trader: TraderSummary }): React.ReactElement {
 
         <Divider sx={{ my: 1 }} />
 
-        {/* Main position */}
+        {/* Main short */}
         <Typography variant="caption" color="text.secondary" fontWeight={700}>MAIN SHORT</Typography>
         <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 0.75, mt: 0.5, mb: 1 }}>
           <Stat label="Entry" value={`$${px(trader.entryPrice)}`} />
+          <Stat label="Current Price" value={`$${px(trader.markPrice)}`} />
           <Stat label="Take Profit" value={`$${px(trader.tpPrice)}`} />
-          <Stat label="Qty" value={trader.shortQuantity ?? '—'} />
-          <Stat
-            label="Dist to TP"
-            value={
-              trader.distanceToTpAbs != null
-                ? `${px(trader.distanceToTpAbs)} (${pct(trader.distanceToTpPct)})`
-                : '—'
-            }
-          />
+          <Stat label="Current PnL" value={pnl(trader.shortUnrealizedPnl ?? '0')} color={col(trader.shortUnrealizedPnl ?? '0')} />
         </Box>
 
         {/* Current hedge */}
         <Typography variant="caption" color="text.secondary" fontWeight={700}>CURRENT HEDGE</Typography>
         {currentHedge != null ? (
           <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 0.75, mt: 0.5, mb: 1 }}>
-            <Stat label="Number" value={`#${currentHedge.level}`} />
+            <Stat label="Hedge Number" value={`#${currentHedge.level}`} />
             <Stat label="State" value={currentHedge.status} />
             <Stat label="Entry" value={`$${px(currentHedge.entryPrice)}`} />
-            <Stat label="Stop Loss" value={`$${px(currentHedge.previousLevelPrice ?? currentHedge.stopPrice)}`} />
+            <Stat label="Stop Loss" value={`$${px(currentHedge.stopPrice)}`} />
             <Stat label="Take Profit" value={`$${px(currentHedge.tpPrice)}`} />
             <Stat label="Qty" value={currentHedge.quantity ?? '—'} />
-            {currentHedge.entryOrderStatus != null && (
-              <Stat label="Entry Order" value={currentHedge.entryOrderStatus} />
-            )}
           </Box>
         ) : (
           <Typography variant="caption" color="text.secondary" sx={{ display: 'block', my: 1 }}>No active hedge</Typography>
         )}
 
-        {/* Hedge stats */}
-        <Typography variant="caption" color="text.secondary" fontWeight={700}>HEDGE STATS</Typography>
+        {/* Hedge lifecycle stats — backend SSOT only */}
+        <Typography variant="caption" color="text.secondary" fontWeight={700}>HEDGE STATISTICS</Typography>
         <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 0.75, mt: 0.5 }}>
-          <Stat label="Current #" value={String(trader.hedgeLevel)} />
-          <Stat label="Successful" value={String(trader.hedgeWins ?? 0)} />
-          <Stat label="Failed (SL)" value={String(trader.hedgeLosses ?? 0)} />
-          <Stat label="Recreated" value={String(trader.hedgeRecreates ?? trader.hedgeLosses ?? 0)} />
-          <Stat label="Open orders" value={String(trader.openOrders ?? 0)} />
-          <Stat label="Closed orders" value={String(trader.closedOrders ?? 0)} />
+          <Stat label="Current Hedge" value={`#${hs.currentHedgeNumber}`} />
+          <Stat label="Orders Created" value={String(hs.ordersCreated)} />
+          <Stat label="Orders Triggered" value={String(hs.ordersTriggered)} />
+          <Stat label="Positions Opened" value={String(hs.positionsOpened)} />
+          <Stat label="Positions Closed" value={String(hs.positionsClosed)} />
+          <Stat label="Take Profits" value={String(hs.takeProfits)} />
+          <Stat label="Stop Losses" value={String(hs.stopLosses)} />
+          <Stat label="Recreated" value={String(hs.recreations)} />
+          <Stat label="Pending Orders" value={String(hs.pendingOrders)} />
+          <Stat label="Active Hedge Positions" value={String(hs.activePositions)} />
         </Box>
 
         <StrategyLadder trader={trader} />

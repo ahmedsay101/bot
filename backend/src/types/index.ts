@@ -136,11 +136,14 @@ export interface HedgeLevel {
   level: number;
   entryPrice: string;
   /**
-   * Position stop-loss price = previous completed level (short entry for L1,
-   * previous hedge TP fill for L2+). NOT the STOP-LIMIT trigger (that equals entry).
+   * Position stop-loss = hedgeEntry × (1 − hedgeSlPercent).
+   * NOT the STOP-LIMIT trigger (that equals entryPrice).
    */
   stopPrice: string;
-  /** Explicit previous-level anchor (always equals stopPrice; kept for clarity/UI). */
+  /**
+   * Previous reference used to derive entry (short entry for L1, prior hedge TP for L2+).
+   * Informational — not the position SL.
+   */
   previousLevelPrice: string;
   tpPrice: string;
   /** Sized independently from main short via hedge allocation × leverage. */
@@ -157,6 +160,20 @@ export interface HedgeLevel {
   entryOrderStatus?: OrderStatus | null;
 }
 
+/** Hedge lifecycle counters — engine SSOT for dashboard. */
+export interface HedgeLifecycleStats {
+  currentHedgeNumber: number;
+  ordersCreated: number;
+  ordersTriggered: number;
+  positionsOpened: number;
+  positionsClosed: number;
+  stopLosses: number;
+  takeProfits: number;
+  recreations: number;
+  pendingOrders: number;
+  activePositions: number;
+}
+
 /** Compact trader view for REST + dashboard WebSocket snapshots. */
 export interface TraderSummaryView {
   id: string;
@@ -167,7 +184,9 @@ export interface TraderSummaryView {
   /** Main short unrealized only */
   shortUnrealizedPnl: string;
   hedgeLevel: number;
+  /** @deprecated use hedgeStats.stopLosses */
   hedgeLosses: number;
+  /** @deprecated use hedgeStats.takeProfits */
   hedgeWins: number;
   entryPrice: string | null;
   tpPrice: string | null;
@@ -178,7 +197,10 @@ export interface TraderSummaryView {
   openOrders: number;
   pendingOrders: number;
   closedOrders: number;
+  /** @deprecated use hedgeStats.recreations */
   hedgeRecreates: number;
+  /** Full hedge lifecycle stats (SSOT). */
+  hedgeStats: HedgeLifecycleStats;
   /** Distance from mark to short TP as fraction of entry (positive = still above TP for short) */
   distanceToTpPct: string | null;
   distanceToTpAbs: string | null;

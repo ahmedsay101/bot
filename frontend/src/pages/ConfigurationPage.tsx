@@ -87,27 +87,36 @@ export function ConfigurationPage(): React.ReactElement {
             </Grid>
             <Grid item xs={12} sm={6} md={4}>
               <TextField
-                label="Hedge Distance"
+                label="Hedge Entry Distance"
                 value={current.hedgeDistance}
-                helperText="e.g. 0.10 = 10%"
+                helperText="Above previous reference — e.g. 0.10 = 10%"
                 onChange={(e) => handleChange('hedgeDistance', e.target.value)}
                 fullWidth
               />
             </Grid>
             <Grid item xs={12} sm={6} md={4}>
               <TextField
-                label="Hedge TP %"
+                label="Hedge Stop Loss %"
+                value={current.hedgeSlPercent}
+                helperText="Below hedge entry — e.g. 0.03 = 3%"
+                onChange={(e) => handleChange('hedgeSlPercent', e.target.value)}
+                fullWidth
+              />
+            </Grid>
+            <Grid item xs={12} sm={6} md={4}>
+              <TextField
+                label="Hedge Take Profit %"
                 value={current.hedgeTpPercent}
-                helperText="e.g. 0.50 = 50%"
+                helperText="Above hedge entry — e.g. 0.10 = 10%"
                 onChange={(e) => handleChange('hedgeTpPercent', e.target.value)}
                 fullWidth
               />
             </Grid>
             <Grid item xs={12} sm={6} md={4}>
               <TextField
-                label="Short TP %"
+                label="Short Take Profit %"
                 value={current.shortTpPercent}
-                helperText="e.g. 0.20 = 20%"
+                helperText="Below short entry — e.g. 0.10 = 10%"
                 onChange={(e) => handleChange('shortTpPercent', e.target.value)}
                 fullWidth
               />

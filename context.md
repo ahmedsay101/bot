@@ -15,10 +15,12 @@ Production-grade Binance Futures trading platform with Live and Testing modes sh
 ## Strategy
 - Spawn one trader per configurable top 24h gainer.
 - Each trader immediately opens one MARKET SHORT.
-- Create one LONG STOP-LIMIT hedge above the short entry.
-- Main short has no SL and configurable TP.
-- Hedge hitting SL recreates itself with identical parameters.
-- Hedge hitting TP creates the next hedge level.
+- Create one LONG STOP-LIMIT hedge above the short entry (configurable distance, default 10%).
+- Main short has no SL and configurable TP (default 10% below entry).
+- Hedge SL = entry × (1 − hedgeSl%), default 3%; TP = entry × (1 + hedgeTp%), default 10%.
+- Hedge hitting SL recreates itself with identical Entry/SL/TP.
+- Hedge hitting TP creates the next hedge from that TP fill.
+- Hedge lifecycle stats (created/triggered/opened/closed/SL/TP/recreates) persist on Trader.
 - Trader only ends when the original short reaches TP.
 - After completion, free the slot and spawn a new trader using the latest eligible top gainer.
 - Requires Hedge Mode (dual-side): SHORT + LONG held together via `positionSide`.

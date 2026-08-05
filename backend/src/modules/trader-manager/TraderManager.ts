@@ -18,6 +18,7 @@ import type {
   OrderStatus,
 } from '../../types';
 import { calcTotalPnl } from '../calc/allocation';
+import { calcHedgeStopLoss } from '../calc/strategy';
 import { createContextLogger } from '../logger';
 import { withRetry } from '../utils/retry';
 import type { PrismaClient } from '@prisma/client';
@@ -295,6 +296,15 @@ export class TraderManager extends EventEmitter {
           activeHedgeClientOrderId: restored.activeHedgeClientOrderId,
           hedgeOrderIds: restored.hedgeOrderIds,
           orderViews: restored.orderViews,
+          hedgeStats: {
+            ordersCreated: dbTrader.hedgeOrdersCreated ?? 0,
+            ordersTriggered: dbTrader.hedgeOrdersTriggered ?? 0,
+            positionsOpened: dbTrader.hedgePositionsOpened ?? 0,
+            positionsClosed: dbTrader.hedgePositionsClosed ?? 0,
+            stopLosses: dbTrader.hedgeStopLosses ?? 0,
+            takeProfits: dbTrader.hedgeTakeProfits ?? 0,
+            recreations: dbTrader.hedgeRecreations ?? 0,
+          },
         });
 
         // Rebuild simulation book so open TPs/hedges still trigger after restart
@@ -412,18 +422,21 @@ export class TraderManager extends EventEmitter {
       else if (entryTriggered) status = 'TRIGGERED';
       // Resting STOP-LIMIT (PENDING/NEW) stays PENDING — never map to TRIGGERED
 
-      // Position SL = previous level. NEVER use entryOrder.stopPrice (that is the entry trigger).
-      const previousLevel =
+      const entryPrice = entryOrder?.price ?? dbTrader.hedgeEntryPrice ?? '0';
+      // Position SL = entry × (1 − sl%). NEVER use entryOrder.stopPrice (STOP-LIMIT trigger).
+      const stopPrice =
         slOrder?.stopPrice
         ?? dbTrader.hedgeStopPrice
-        ?? dbTrader.shortEntryPrice
-        ?? '0';
+        ?? (entryPrice !== '0'
+          ? calcHedgeStopLoss(entryPrice, this.traderConfig.hedgeSlPercent).toFixed()
+          : '0');
+      const previousReference = dbTrader.shortEntryPrice ?? '0';
 
       hedgeLevels.push({
         level,
-        entryPrice: entryOrder?.price ?? dbTrader.hedgeEntryPrice ?? '0',
-        stopPrice: previousLevel,
-        previousLevelPrice: previousLevel,
+        entryPrice,
+        stopPrice,
+        previousLevelPrice: previousReference,
         tpPrice: tpOrder?.price ?? tpOrder?.stopPrice ?? dbTrader.hedgeTpPrice ?? '0',
         quantity: entryOrder?.filledQuantity && entryOrder.filledQuantity !== '0'
           ? entryOrder.filledQuantity
@@ -435,12 +448,15 @@ export class TraderManager extends EventEmitter {
 
     // If no hedge orders reconstructed but trader has hedge metadata, seed level 1
     if (hedgeLevels.length === 0 && dbTrader.hedgeEntryPrice != null) {
-      const previousLevel = dbTrader.hedgeStopPrice ?? dbTrader.shortEntryPrice ?? '0';
+      const entryPrice = dbTrader.hedgeEntryPrice;
+      const stopPrice =
+        dbTrader.hedgeStopPrice
+        ?? calcHedgeStopLoss(entryPrice, this.traderConfig.hedgeSlPercent).toFixed();
       hedgeLevels.push({
         level: Math.max(1, dbTrader.currentHedgeLevel),
-        entryPrice: dbTrader.hedgeEntryPrice,
-        stopPrice: previousLevel,
-        previousLevelPrice: previousLevel,
+        entryPrice,
+        stopPrice,
+        previousLevelPrice: dbTrader.shortEntryPrice ?? '0',
         tpPrice: dbTrader.hedgeTpPrice ?? '0',
         quantity: shortQuantity ?? '0',
         status: 'PENDING',

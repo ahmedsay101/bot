@@ -101,41 +101,15 @@ export function validateNotional(price: string, quantity: string, symbolInfo: Sy
   }
 }
 
-/**
- * Calculate the take profit price for a short position.
- * shortEntry * (1 - tpPercent)
- */
-export function calcShortTp(entryPrice: string, tpPercent: string): Decimal {
-  const entry = new Decimal(entryPrice);
-  const tp = new Decimal(tpPercent);
-  return entry.mul(new Decimal(1).minus(tp));
-}
-
-/**
- * Calculate the initial hedge entry price.
- * shortEntry * (1 + hedgeDistance)
- */
-export function calcHedgeEntry(shortEntry: string, hedgeDistance: string): Decimal {
-  const entry = new Decimal(shortEntry);
-  return entry.mul(new Decimal(1).plus(hedgeDistance));
-}
-
-/**
- * Calculate the hedge take profit price.
- * hedgeEntry * (1 + tpPercent)
- */
-export function calcHedgeTp(hedgeEntry: string, tpPercent: string): Decimal {
-  const entry = new Decimal(hedgeEntry);
-  return entry.mul(new Decimal(1).plus(tpPercent));
-}
-
-/**
- * Calculate the next hedge entry from a previous TP.
- * prevTp * (1 + hedgeDistance)
- */
-export function calcNextHedgeEntry(prevTp: string, hedgeDistance: string): Decimal {
-  return new Decimal(prevTp).mul(new Decimal(1).plus(hedgeDistance));
-}
+// Strategy price formulas — single source in modules/calc/strategy.ts
+export {
+  calcShortTakeProfit as calcShortTp,
+  calcHedgeEntry,
+  calcHedgeTakeProfit as calcHedgeTp,
+  calcHedgeStopLoss,
+  calcNextHedgeEntry,
+  planHedgeFromReference,
+} from '../calc/strategy';
 
 /**
  * Calculate unrealized PnL for a SHORT position.

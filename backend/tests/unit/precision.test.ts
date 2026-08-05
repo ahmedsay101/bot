@@ -7,6 +7,7 @@ import {
   calcShortTp,
   calcHedgeEntry,
   calcHedgeTp,
+  calcHedgeStopLoss,
   calcNextHedgeEntry,
   calcShortUnrealizedPnl,
   calcLongUnrealizedPnl,
@@ -88,16 +89,23 @@ describe('Precision utilities', () => {
   });
 
   describe('calcHedgeTp', () => {
-    it('calculates 50% above hedge entry', () => {
-      const tp = calcHedgeTp('11', '0.50');
-      expect(tp.toFixed(2)).toBe('16.50');
+    it('calculates 10% above hedge entry', () => {
+      const tp = calcHedgeTp('110', '0.10');
+      expect(tp.toFixed(2)).toBe('121.00');
+    });
+  });
+
+  describe('calcHedgeStopLoss', () => {
+    it('calculates 3% below hedge entry', () => {
+      const sl = calcHedgeStopLoss('110', '0.03');
+      expect(sl.toFixed(2)).toBe('106.70');
     });
   });
 
   describe('calcNextHedgeEntry', () => {
     it('calculates 10% above previous TP', () => {
-      const next = calcNextHedgeEntry('16.5', '0.10');
-      expect(next.toFixed(3)).toBe('18.150');
+      const next = calcNextHedgeEntry('121', '0.10');
+      expect(next.toFixed(2)).toBe('133.10');
     });
   });
 
@@ -128,27 +136,26 @@ describe('Precision utilities', () => {
   });
 
   describe('Hedge example from spec', () => {
-    // Price = 10, Short = 10
-    // Hedge: Entry = 11, Stop = 10, TP = 16.5
-    it('matches spec example exactly', () => {
-      const shortEntry = '10';
+    // Short = 100 → Hedge Entry 110, SL 106.70, TP 121
+    it('matches new risk/reward defaults', () => {
+      const shortEntry = '100';
       const hedgeEntry = calcHedgeEntry(shortEntry, '0.10');
-      const hedgeTp = calcHedgeTp(hedgeEntry.toFixed(), '0.50');
-      const hedgeStop = new Decimal(shortEntry);
+      const hedgeSl = calcHedgeStopLoss(hedgeEntry, '0.03');
+      const hedgeTp = calcHedgeTp(hedgeEntry.toFixed(), '0.10');
 
-      expect(hedgeEntry.toFixed(2)).toBe('11.00');
-      expect(hedgeStop.toFixed(2)).toBe('10.00');
-      expect(hedgeTp.toFixed(2)).toBe('16.50');
+      expect(hedgeEntry.toFixed(2)).toBe('110.00');
+      expect(hedgeSl.toFixed(2)).toBe('106.70');
+      expect(hedgeTp.toFixed(2)).toBe('121.00');
     });
 
     it('computes next hedge correctly after TP', () => {
-      // After TP at 16.5: next entry = 16.5 * 1.10 = 18.15
-      // next TP = 18.15 * 1.50 = 27.225
-      const nextEntry = calcNextHedgeEntry('16.5', '0.10');
-      const nextTp = calcHedgeTp(nextEntry.toFixed(), '0.50');
+      const nextEntry = calcNextHedgeEntry('121', '0.10');
+      const nextSl = calcHedgeStopLoss(nextEntry, '0.03');
+      const nextTp = calcHedgeTp(nextEntry.toFixed(), '0.10');
 
-      expect(nextEntry.toFixed(3)).toBe('18.150');
-      expect(nextTp.toFixed(4)).toBe('27.2250');
+      expect(nextEntry.toFixed(2)).toBe('133.10');
+      expect(nextSl.toFixed(3)).toBe('129.107');
+      expect(nextTp.toFixed(2)).toBe('146.41');
     });
   });
 });

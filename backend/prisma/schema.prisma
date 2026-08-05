@@ -76,6 +76,14 @@ model Trader {
   hedgeEntryPrice String?      // Last hedge entry
   hedgeTpPrice    String?      // Last hedge take profit
   hedgeStopPrice  String?      // Last hedge stop loss
+  /// Hedge lifecycle counters (SSOT; restored after restart)
+  hedgeOrdersCreated     Int   @default(0)
+  hedgeOrdersTriggered   Int   @default(0)
+  hedgePositionsOpened   Int   @default(0)
+  hedgePositionsClosed   Int   @default(0)
+  hedgeStopLosses        Int   @default(0)
+  hedgeTakeProfits       Int   @default(0)
+  hedgeRecreations       Int   @default(0)
   realizedPnl     String       @default("0")
   unrealizedPnl   String       @default("0")
   completedAt     DateTime?
@@ -225,9 +233,9 @@ model Configuration {
   leverage        Int      @default(10)
   marginMode      String   @default("ISOLATED")
   hedgeDistance   String   @default("0.10")
-  hedgeTpPercent  String   @default("0.50")
-  hedgeSlPercent  String   @default("0.10")
-  shortTpPercent  String   @default("0.20")
+  hedgeTpPercent  String   @default("0.10")
+  hedgeSlPercent  String   @default("0.03")
+  shortTpPercent  String   @default("0.10")
   refreshInterval Int      @default(60000)
   retryLimit      Int      @default(5)
   feeRate         String   @default("0.0004")

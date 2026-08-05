@@ -85,14 +85,29 @@ export interface HedgeLevelInfo {
   level: number;
   entryPrice: string;
   tpPrice: string;
-  /** Position SL = previous completed level (engine SSOT). Not the STOP-LIMIT trigger. */
+  /** Position SL = entry × (1 − hedgeSl%). Not the STOP-LIMIT trigger. */
   stopPrice: string;
+  /** Previous reference used to derive entry (informational). */
   previousLevelPrice?: string;
   quantity?: string;
   /** Engine hedge phase — never invent TRIGGERED from ACTIVE. */
   status: 'PENDING' | 'TRIGGERED' | 'OPEN' | 'HIT_TP' | 'HIT_SL' | 'CANCELED';
   /** Mirrors the STOP-LIMIT OrderStatus from the order book. */
   entryOrderStatus?: string | null;
+}
+
+/** Engine hedge lifecycle SSOT — display only, never recompute. */
+export interface HedgeLifecycleStats {
+  currentHedgeNumber: number;
+  ordersCreated: number;
+  ordersTriggered: number;
+  positionsOpened: number;
+  positionsClosed: number;
+  stopLosses: number;
+  takeProfits: number;
+  recreations: number;
+  pendingOrders: number;
+  activePositions: number;
 }
 
 export interface TraderOrderView {
@@ -121,6 +136,7 @@ export interface TraderSummary {
   hedgeLosses?: number;
   hedgeWins?: number;
   hedgeRecreates?: number;
+  hedgeStats?: HedgeLifecycleStats;
   entryPrice: string | null;
   tpPrice: string | null;
   shortSl?: null;

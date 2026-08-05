@@ -1,7 +1,8 @@
 /**
- * Hedge SSOT invariants: PENDING until stop, SL = previous level, never entry stop as SL.
+ * Hedge SSOT invariants: PENDING until stop; SL from entry %; never use STOP-LIMIT trigger as SL.
  */
 import type { HedgeLevel, OrderStatus } from '../../src/types';
+import { calcHedgeStopLoss } from '../../src/modules/calc/strategy';
 
 /** Mirrors TraderManager.reconstructStateFromOrders hedge mapping (kept in sync for regression). */
 function reconstructHedgeStatus(args: {
@@ -20,10 +21,13 @@ function reconstructHedgeStatus(args: {
 function reconstructPositionSl(args: {
   slOrderStop?: string | null;
   dbHedgeStop?: string | null;
-  shortEntry?: string | null;
+  entryPrice: string;
+  hedgeSlPercent: string;
   entryOrderStop?: string | null; // STOP-LIMIT trigger — MUST NOT be used as SL
 }): string {
-  return args.slOrderStop ?? args.dbHedgeStop ?? args.shortEntry ?? '0';
+  if (args.slOrderStop != null) return args.slOrderStop;
+  if (args.dbHedgeStop != null) return args.dbHedgeStop;
+  return calcHedgeStopLoss(args.entryPrice, args.hedgeSlPercent).toFixed();
 }
 
 describe('hedge state reconstruction', () => {
@@ -34,26 +38,28 @@ describe('hedge state reconstruction', () => {
   });
 
   it('never uses entry STOP-LIMIT stopPrice as position SL', () => {
-    const shortEntry = '0.017844';
+    const hedgeEntry = '0.019630';
     const hedgeTrigger = '0.019630';
     const sl = reconstructPositionSl({
       slOrderStop: null,
-      dbHedgeStop: shortEntry,
-      shortEntry,
+      dbHedgeStop: null,
+      entryPrice: hedgeEntry,
+      hedgeSlPercent: '0.03',
       entryOrderStop: hedgeTrigger,
     });
-    expect(sl).toBe(shortEntry);
+    expect(sl).toBe(calcHedgeStopLoss(hedgeEntry, '0.03').toFixed());
     expect(sl).not.toBe(hedgeTrigger);
   });
 
-  it('falls back to short entry when no SL order exists', () => {
+  it('prefers persisted SL order / DB stop over recomputed', () => {
     expect(
       reconstructPositionSl({
-        slOrderStop: null,
-        dbHedgeStop: null,
-        shortEntry: '100',
+        slOrderStop: '106.70',
+        dbHedgeStop: '999',
+        entryPrice: '110',
+        hedgeSlPercent: '0.03',
         entryOrderStop: '110',
       }),
-    ).toBe('100');
+    ).toBe('106.70');
   });
 });
