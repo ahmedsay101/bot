@@ -112,7 +112,7 @@ function fromBinanceType(type: string | undefined): OrderType {
 function resolvePositionSide(req: OrderRequest, hedgeMode: boolean): PositionSide {
   if (req.positionSide != null) return req.positionSide;
   if (!hedgeMode) return 'BOTH';
-  // Strategy: main short = SHORT side; hedge long = LONG side
+  // V2: role SHORT → SHORT; LONG / legacy HEDGE → LONG
   return req.role === 'SHORT' ? 'SHORT' : 'LONG';
 }
 

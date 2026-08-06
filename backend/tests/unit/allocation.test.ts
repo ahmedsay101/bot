@@ -24,11 +24,11 @@ const symbol: SymbolInfo = {
 };
 
 describe('allocation', () => {
-  it('splits equity across traders and halves for main/hedge', () => {
+  it('splits equity across traders with full allocation per position', () => {
     const a = calcAllocation('200', 5, 10);
     expect(a.traderEquity.toFixed(2)).toBe('40.00');
-    expect(a.positionAllocation.toFixed(2)).toBe('20.00');
-    expect(a.positionNotional.toFixed(2)).toBe('200.00');
+    expect(a.positionAllocation.toFixed(2)).toBe('40.00');
+    expect(a.positionNotional.toFixed(2)).toBe('400.00');
   });
 
   it('testing equity = 200 + realized pnl', () => {

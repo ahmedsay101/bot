@@ -27,8 +27,8 @@ export interface IExecutionProvider {
   setMarginMode(symbol: string, marginMode: string): Promise<void>;
 
   /**
-   * Enable/disable Hedge Mode (dual-side positions).
-   * Required because strategy holds SHORT + LONG hedge simultaneously.
+   * Enable/disable dual-side position mode (Binance hedge mode).
+   * Used so LONG and SHORT can use positionSide independently; strategy holds one leg at a time.
    */
   setHedgeMode(enabled: boolean): Promise<void>;
 

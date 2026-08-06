@@ -12,13 +12,12 @@ import type {
   OrderUpdate,
   PriceUpdate,
   TraderMode,
-  HedgeLevel,
   TraderSummaryView,
   DashboardEvent,
   OrderStatus,
+  TradeSide,
 } from '../../types';
 import { calcTotalPnl } from '../calc/allocation';
-import { calcHedgeStopLoss } from '../calc/strategy';
 import { createContextLogger } from '../logger';
 import { withRetry } from '../utils/retry';
 import type { PrismaClient } from '@prisma/client';
@@ -33,14 +32,13 @@ function isLeveragedToken(symbol: string): boolean {
 
 const OPEN_ORDER_STATUSES: OrderStatus[] = ['PENDING', 'NEW', 'TRIGGERED', 'PARTIALLY_FILLED'];
 
-/** Infer BUY/SELL when DB row lacks side (legacy) from role + type. */
+/** Infer BUY/SELL when DB row lacks side. */
 function inferOrderSide(o: { side?: string; role: string; type: string }): 'BUY' | 'SELL' {
   if (o.side === 'BUY' || o.side === 'SELL') return o.side;
-  if (o.role === 'SHORT') {
-    return o.type === 'MARKET' ? 'SELL' : 'BUY'; // open short = SELL; TP = BUY
-  }
-  // HEDGE: entry STOP_LIMIT = BUY; TP/SL = SELL
-  return o.type === 'STOP_LIMIT' ? 'BUY' : 'SELL';
+  const isLong = o.role === 'LONG' || o.role === 'HEDGE';
+  if (o.type === 'MARKET') return isLong ? 'BUY' : 'SELL';
+  // TP/SL close: opposite of entry
+  return isLong ? 'SELL' : 'BUY';
 }
 
 export class TraderManager extends EventEmitter {
@@ -202,7 +200,7 @@ export class TraderManager extends EventEmitter {
     const cfg = this.traderConfig as unknown as Record<string, unknown>;
     const keys = [
       'maxTraders', 'initialCapital', 'positionSize', 'leverage', 'marginMode',
-      'hedgeDistance', 'hedgeTpPercent', 'hedgeSlPercent', 'shortTpPercent',
+      'traderLifetimeHours', 'takeProfitPercent', 'stopLossPercent', 'startingSide',
       'refreshInterval', 'retryLimit', 'feeRate', 'slippage',
     ] as const;
     for (const k of keys) {
@@ -274,49 +272,90 @@ export class TraderManager extends EventEmitter {
           this.accountLedger,
         );
 
-        const shortEp = dbTrader.shortEntryPrice;
-        if (shortEp === '0' || shortEp === '0.0' || Number(shortEp) === 0) {
-          throw new Error(`Corrupt state: shortEntryPrice is ${shortEp}`);
-        }
+        const orders = dbTrader.orders;
+        const pendingClientOrderIds = orders
+          .filter((o) => OPEN_ORDER_STATUSES.includes(o.status as OrderStatus))
+          .map((o) => o.clientOrderId);
 
-        const restored = this.reconstructStateFromOrders(dbTrader);
+        const posNum = dbTrader.currentPositionNumber;
+        const entryOrder = [...orders].reverse().find(
+          (o) => o.type === 'MARKET' && o.hedgeLevel === posNum,
+        );
+        const tpOrder = [...orders].reverse().find(
+          (o) =>
+            (o.type === 'TAKE_PROFIT' || o.type === 'TAKE_PROFIT_MARKET')
+            && o.hedgeLevel === posNum
+            && OPEN_ORDER_STATUSES.includes(o.status as OrderStatus),
+        );
+        const slOrder = [...orders].reverse().find(
+          (o) =>
+            o.type === 'STOP_MARKET'
+            && o.hedgeLevel === posNum
+            && OPEN_ORDER_STATUSES.includes(o.status as OrderStatus),
+        );
+
+        const side = (dbTrader.currentSide as TradeSide | null) ?? null;
+        const positionOpen =
+          side != null
+          && dbTrader.entryPrice != null
+          && dbTrader.entryPrice !== '0'
+          && (tpOrder != null || slOrder != null);
+
+        const orderViews = orders.map((o) => ({
+          clientOrderId: o.clientOrderId,
+          role: o.role as import('../../types').HedgeRole,
+          type: o.type as import('../../types').OrderType,
+          status: o.status as OrderStatus,
+          side: inferOrderSide(o),
+          price: o.price,
+          stopPrice: o.stopPrice,
+          hedgeLevel: o.hedgeLevel,
+          quantity: o.quantity,
+        }));
 
         await trader.restore({
-          shortEntryPrice: dbTrader.shortEntryPrice,
-          shortTpPrice: dbTrader.shortTpPrice,
-          shortQuantity: restored.shortQuantity,
-          currentHedgeLevel: dbTrader.currentHedgeLevel,
-          hedgeLevels: restored.hedgeLevels,
           status: dbTrader.status as import('../../types').TraderStatus,
           realizedPnl: dbTrader.realizedPnl,
           unrealizedPnl: dbTrader.unrealizedPnl,
-          pendingClientOrderIds: restored.pendingClientOrderIds,
-          shortClientOrderId: restored.shortClientOrderId,
-          shortTpClientOrderId: restored.shortTpClientOrderId,
-          activeHedgeClientOrderId: restored.activeHedgeClientOrderId,
-          hedgeOrderIds: restored.hedgeOrderIds,
-          orderViews: restored.orderViews,
-          hedgeStats: {
-            ordersCreated: dbTrader.hedgeOrdersCreated ?? 0,
-            ordersTriggered: dbTrader.hedgeOrdersTriggered ?? 0,
-            positionsOpened: dbTrader.hedgePositionsOpened ?? 0,
-            positionsClosed: dbTrader.hedgePositionsClosed ?? 0,
-            stopLosses: dbTrader.hedgeStopLosses ?? 0,
-            takeProfits: dbTrader.hedgeTakeProfits ?? 0,
-            recreations: dbTrader.hedgeRecreations ?? 0,
-          },
+          startedAt: dbTrader.startedAt,
+          endsAt: dbTrader.endsAt,
+          currentSide: side,
+          currentPositionNumber: posNum,
+          entryPrice: dbTrader.entryPrice,
+          tpPrice: dbTrader.tpPrice,
+          slPrice: dbTrader.slPrice,
+          quantity: dbTrader.quantity,
+          positionsOpened: dbTrader.positionsOpened,
+          positionsClosed: dbTrader.positionsClosed,
+          winningPositions: dbTrader.winningPositions,
+          losingPositions: dbTrader.losingPositions,
+          takeProfits: dbTrader.takeProfits,
+          stopLosses: dbTrader.stopLosses,
+          longPositions: dbTrader.longPositions,
+          shortPositions: dbTrader.shortPositions,
+          totalFees: dbTrader.totalFees,
+          timelineJson: dbTrader.timelineJson,
+          pendingClientOrderIds,
+          entryClientOrderId: entryOrder?.clientOrderId ?? null,
+          tpClientOrderId: tpOrder?.clientOrderId ?? null,
+          slClientOrderId: slOrder?.clientOrderId ?? null,
+          positionOpen,
+          orderViews,
         });
 
-        // Rebuild simulation book so open TPs/hedges still trigger after restart
         if (this.mode === 'SIMULATION') {
-          this.rehydrateSimulation(dbTrader, restored);
+          this.rehydrateSimulation(dbTrader, {
+            positionOpen,
+            side,
+            entryPrice: dbTrader.entryPrice,
+            quantity: dbTrader.quantity,
+          });
         }
 
         this.wireTraderEvents(trader);
         this.traders.set(trader.getId(), trader);
         this.symbolToTrader.set(dbTrader.symbol, trader.getId());
 
-        // Crash mid-complete → finish cleanup + free slot
         if (dbTrader.status === 'COMPLETING') {
           await trader.resumeCompleting();
         }
@@ -331,7 +370,6 @@ export class TraderManager extends EventEmitter {
       }
     }
 
-    // Hard-cap: if DB had more actives than maxTraders, stop the extras
     if (this.traders.size > this.traderConfig.maxTraders) {
       const ordered = [...this.traders.values()];
       const extras = ordered.slice(this.traderConfig.maxTraders);
@@ -350,173 +388,11 @@ export class TraderManager extends EventEmitter {
     log.info(`Restored ${this.traders.size}/${this.traderConfig.maxTraders} active traders from database`);
   }
 
-  private reconstructStateFromOrders(dbTrader: {
-    id: string;
-    positionSize: string;
-    currentHedgeLevel: number;
-    shortEntryPrice: string | null;
-    hedgeEntryPrice: string | null;
-    hedgeTpPrice: string | null;
-    hedgeStopPrice: string | null;
-    orders: Array<{
-      clientOrderId: string;
-      type: string;
-      status: string;
-      role: string;
-      side?: string;
-      hedgeLevel: number;
-      quantity: string;
-      price: string | null;
-      stopPrice: string | null;
-      filledQuantity: string;
-    }>;
-  }): {
-    shortQuantity: string | null;
-    hedgeLevels: HedgeLevel[];
-    pendingClientOrderIds: string[];
-    shortClientOrderId: string | null;
-    shortTpClientOrderId: string | null;
-    activeHedgeClientOrderId: string | null;
-    hedgeOrderIds: Array<{ level: number; tpClientId: string; slClientId: string }>;
-    orderViews: Array<{
-      clientOrderId: string;
-      role: import('../../types').HedgeRole;
-      type: import('../../types').OrderType;
-      status: OrderStatus;
-      side: import('../../types').OrderSide;
-      price: string | null;
-      stopPrice: string | null;
-      hedgeLevel: number;
-      quantity: string;
-    }>;
-  } {
-    const orders = dbTrader.orders;
-    const shortMarket = [...orders].reverse().find((o) => o.role === 'SHORT' && o.type === 'MARKET');
-    const shortTp = [...orders].reverse().find((o) => o.role === 'SHORT' && (o.type === 'TAKE_PROFIT' || o.type === 'TAKE_PROFIT_MARKET'));
-
-    const shortQuantity =
-      shortMarket?.filledQuantity && shortMarket.filledQuantity !== '0'
-        ? shortMarket.filledQuantity
-        : shortMarket?.quantity ?? (dbTrader.positionSize !== '100' ? dbTrader.positionSize : null);
-
-    const levels = new Set(orders.filter((o) => o.role === 'HEDGE').map((o) => o.hedgeLevel));
-    const hedgeLevels: HedgeLevel[] = [];
-
-    for (const level of [...levels].sort((a, b) => a - b)) {
-      const levelOrders = orders.filter((o) => o.role === 'HEDGE' && o.hedgeLevel === level);
-      const entryOrder = [...levelOrders].reverse().find((o) => o.type === 'STOP_LIMIT');
-      const tpOrder = [...levelOrders].reverse().find((o) => o.type === 'TAKE_PROFIT' || o.type === 'TAKE_PROFIT_MARKET');
-      const slOrder = [...levelOrders].reverse().find((o) => o.type === 'STOP_MARKET');
-
-      if (entryOrder == null && dbTrader.hedgeEntryPrice == null) continue;
-
-      const entryFilled = entryOrder?.status === 'FILLED' || entryOrder?.status === 'PARTIALLY_FILLED';
-      const tpFilled = tpOrder?.status === 'FILLED';
-      const slFilled = slOrder?.status === 'FILLED';
-      const entryTriggered = entryOrder?.status === 'TRIGGERED';
-
-      let status: HedgeLevel['status'] = 'PENDING';
-      if (tpFilled) status = 'HIT_TP';
-      else if (slFilled) status = 'HIT_SL';
-      else if (entryFilled) status = 'OPEN';
-      else if (entryTriggered) status = 'TRIGGERED';
-      // Resting STOP-LIMIT (PENDING/NEW) stays PENDING — never map to TRIGGERED
-
-      const entryPrice = entryOrder?.price ?? dbTrader.hedgeEntryPrice ?? '0';
-      // Position SL = entry × (1 − sl%). NEVER use entryOrder.stopPrice (STOP-LIMIT trigger).
-      const stopPrice =
-        slOrder?.stopPrice
-        ?? dbTrader.hedgeStopPrice
-        ?? (entryPrice !== '0'
-          ? calcHedgeStopLoss(entryPrice, this.traderConfig.hedgeSlPercent).toFixed()
-          : '0');
-      const previousReference = dbTrader.shortEntryPrice ?? '0';
-
-      hedgeLevels.push({
-        level,
-        entryPrice,
-        stopPrice,
-        previousLevelPrice: previousReference,
-        tpPrice: tpOrder?.price ?? tpOrder?.stopPrice ?? dbTrader.hedgeTpPrice ?? '0',
-        quantity: entryOrder?.filledQuantity && entryOrder.filledQuantity !== '0'
-          ? entryOrder.filledQuantity
-          : entryOrder?.quantity ?? shortQuantity ?? '0',
-        status,
-        entryOrderStatus: (entryOrder?.status as OrderStatus) ?? null,
-      });
-    }
-
-    // If no hedge orders reconstructed but trader has hedge metadata, seed level 1
-    if (hedgeLevels.length === 0 && dbTrader.hedgeEntryPrice != null) {
-      const entryPrice = dbTrader.hedgeEntryPrice;
-      const stopPrice =
-        dbTrader.hedgeStopPrice
-        ?? calcHedgeStopLoss(entryPrice, this.traderConfig.hedgeSlPercent).toFixed();
-      hedgeLevels.push({
-        level: Math.max(1, dbTrader.currentHedgeLevel),
-        entryPrice,
-        stopPrice,
-        previousLevelPrice: dbTrader.shortEntryPrice ?? '0',
-        tpPrice: dbTrader.hedgeTpPrice ?? '0',
-        quantity: shortQuantity ?? '0',
-        status: 'PENDING',
-        entryOrderStatus: null,
-      });
-    }
-
-    const pendingClientOrderIds = orders
-      .filter((o) => OPEN_ORDER_STATUSES.includes(o.status as OrderStatus))
-      .map((o) => o.clientOrderId);
-
-    const hedgeOrderIds: Array<{ level: number; tpClientId: string; slClientId: string }> = [];
-    for (const level of hedgeLevels) {
-      if (level.status !== 'OPEN') continue;
-      const levelOrders = orders.filter((o) => o.role === 'HEDGE' && o.hedgeLevel === level.level);
-      const tp = [...levelOrders].reverse().find((o) =>
-        (o.type === 'TAKE_PROFIT' || o.type === 'TAKE_PROFIT_MARKET') && OPEN_ORDER_STATUSES.includes(o.status as OrderStatus),
-      );
-      const sl = [...levelOrders].reverse().find((o) =>
-        o.type === 'STOP_MARKET' && OPEN_ORDER_STATUSES.includes(o.status as OrderStatus),
-      );
-      if (tp != null && sl != null) {
-        hedgeOrderIds.push({ level: level.level, tpClientId: tp.clientOrderId, slClientId: sl.clientOrderId });
-      }
-    }
-
-    const activeHedge = [...orders].reverse().find((o) =>
-      o.role === 'HEDGE' && o.type === 'STOP_LIMIT' && OPEN_ORDER_STATUSES.includes(o.status as OrderStatus),
-    );
-
-    const orderViews = orders.map((o) => ({
-      clientOrderId: o.clientOrderId,
-      role: o.role as import('../../types').HedgeRole,
-      type: o.type as import('../../types').OrderType,
-      status: o.status as OrderStatus,
-      side: inferOrderSide(o),
-      price: o.price,
-      stopPrice: o.stopPrice,
-      hedgeLevel: o.hedgeLevel,
-      quantity: o.quantity,
-    }));
-
-    return {
-      shortQuantity,
-      hedgeLevels,
-      pendingClientOrderIds,
-      shortClientOrderId: shortMarket?.clientOrderId ?? null,
-      shortTpClientOrderId: shortTp?.clientOrderId ?? null,
-      activeHedgeClientOrderId: activeHedge?.clientOrderId ?? null,
-      hedgeOrderIds,
-      orderViews,
-    };
-  }
-
-  /** Rebuild sim positions + open conditionals after restart. */
+  /** Rebuild sim book for open V2 position + TP/SL. */
   private rehydrateSimulation(
     dbTrader: {
       id: string;
       symbol: string;
-      shortEntryPrice: string | null;
       leverage: number;
       orders: Array<{
         clientOrderId: string;
@@ -531,9 +407,11 @@ export class TraderManager extends EventEmitter {
         stopPrice: string | null;
       }>;
     },
-    restored: {
-      shortQuantity: string | null;
-      hedgeLevels: HedgeLevel[];
+    state: {
+      positionOpen: boolean;
+      side: TradeSide | null;
+      entryPrice: string | null;
+      quantity: string | null;
     },
   ): void {
     const sim = this.executionProvider as {
@@ -559,50 +437,44 @@ export class TraderManager extends EventEmitter {
     if (sim.rehydrate == null) return;
 
     const positions: Array<{ symbol: string; side: 'LONG' | 'SHORT'; entryPrice: string; quantity: string; leverage?: number }> = [];
-    if (dbTrader.shortEntryPrice != null && restored.shortQuantity != null && restored.shortQuantity !== '0') {
-      // Short still open unless COMPLETING with TP already filled — restore book conservatively
-      const shortTpFilled = dbTrader.orders.some(
-        (o) => o.role === 'SHORT' && (o.type === 'TAKE_PROFIT' || o.type === 'TAKE_PROFIT_MARKET') && o.status === 'FILLED',
-      );
-      if (!shortTpFilled) {
-        positions.push({
-          symbol: dbTrader.symbol,
-          side: 'SHORT',
-          entryPrice: dbTrader.shortEntryPrice,
-          quantity: restored.shortQuantity,
-          leverage: dbTrader.leverage,
-        });
-      }
-    }
-    for (const hl of restored.hedgeLevels) {
-      if (hl.status === 'OPEN' && hl.quantity !== '0') {
-        positions.push({
-          symbol: dbTrader.symbol,
-          side: 'LONG',
-          entryPrice: hl.entryPrice,
-          quantity: hl.quantity,
-          leverage: dbTrader.leverage,
-        });
-      }
+    if (
+      state.positionOpen
+      && state.side != null
+      && state.entryPrice != null
+      && state.quantity != null
+      && state.quantity !== '0'
+    ) {
+      positions.push({
+        symbol: dbTrader.symbol,
+        side: state.side,
+        entryPrice: state.entryPrice,
+        quantity: state.quantity,
+        leverage: dbTrader.leverage,
+      });
     }
 
     const openOrders = dbTrader.orders
       .filter((o) => OPEN_ORDER_STATUSES.includes(o.status as OrderStatus))
-      .map((o) => ({
-        clientOrderId: o.clientOrderId,
-        traderId: dbTrader.id,
-        symbol: dbTrader.symbol,
-        side: inferOrderSide(o),
-        type: o.type as import('../../types').OrderType,
-        role: o.role as import('../../types').HedgeRole,
-        hedgeLevel: o.hedgeLevel,
-        quantity: o.quantity,
-        filledQuantity: o.filledQuantity,
-        price: o.price,
-        stopPrice: o.stopPrice,
-        status: o.status as OrderStatus,
-        positionSide: (o.role === 'SHORT' ? 'SHORT' : 'LONG') as 'LONG' | 'SHORT',
-      }));
+      .map((o) => {
+        const role = o.role as import('../../types').HedgeRole;
+        const posSide: 'LONG' | 'SHORT' =
+          role === 'SHORT' ? 'SHORT' : 'LONG';
+        return {
+          clientOrderId: o.clientOrderId,
+          traderId: dbTrader.id,
+          symbol: dbTrader.symbol,
+          side: inferOrderSide(o),
+          type: o.type as import('../../types').OrderType,
+          role,
+          hedgeLevel: o.hedgeLevel,
+          quantity: o.quantity,
+          filledQuantity: o.filledQuantity,
+          price: o.price,
+          stopPrice: o.stopPrice,
+          status: o.status as OrderStatus,
+          positionSide: posSide,
+        };
+      });
 
     sim.rehydrate({ positions, orders: openOrders });
   }
@@ -846,27 +718,14 @@ export class TraderManager extends EventEmitter {
   private getOpenNotionals(): string[] {
     const notionals: string[] = [];
     for (const t of this.traders.values()) {
-      const shortQty = t.getShortQuantity();
-      const entry = t.getShortEntryPrice();
-      if (shortQty != null && entry != null && t.isActive()) {
-        notionals.push(new Decimal(shortQty).mul(entry).toFixed(8));
-      }
-      for (const h of t.getHedgeLevels()) {
-        if (h.status === 'OPEN') {
-          notionals.push(new Decimal(h.quantity).mul(h.entryPrice).toFixed(8));
-        }
-      }
+      const n = t.getOpenNotional();
+      if (n != null && t.isActive()) notionals.push(n);
     }
     return notionals;
   }
 
   private countOpenPositions(): number {
-    let n = 0;
-    for (const t of this.traders.values()) {
-      if (t.getShortEntryPrice() != null && t.isActive()) n += 1;
-      n += t.getHedgeLevels().filter((h) => h.status === 'OPEN').length;
-    }
-    return n;
+    return [...this.traders.values()].filter((t) => t.hasOpenPosition() && t.isActive()).length;
   }
 
   getActiveTraderCount(): number {

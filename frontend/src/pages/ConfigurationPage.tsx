@@ -31,7 +31,7 @@ export function ConfigurationPage(): React.ReactElement {
       <Typography variant="h4" fontWeight="bold" mb={3}>Configuration</Typography>
       <Alert severity="info" sx={{ mb: 2 }}>
         Equity allocation is automatic: Testing = 200 USDT + realized PnL; Live = Binance Futures balance.
-        Each trader gets Equity / MaxTraders, split equally between Main Short and Hedge.
+        Each trader gets Equity / MaxTraders as margin for a single position (notional = trader equity × leverage).
       </Alert>
       {saved && <Alert severity="success" sx={{ mb: 2 }}>Configuration saved successfully</Alert>}
 
@@ -50,13 +50,24 @@ export function ConfigurationPage(): React.ReactElement {
             </Grid>
             <Grid item xs={12} sm={6} md={4}>
               <TextField
+                label="Trader Lifetime (hours)"
+                type="number"
+                value={current.traderLifetimeHours ?? 24}
+                onChange={(e) => handleChange('traderLifetimeHours', parseFloat(e.target.value))}
+                fullWidth
+                inputProps={{ min: 0.001, step: 1 }}
+                helperText="Trader is destroyed and replaced after this duration"
+              />
+            </Grid>
+            <Grid item xs={12} sm={6} md={4}>
+              <TextField
                 label="Leverage"
                 type="number"
                 value={current.leverage}
                 onChange={(e) => handleChange('leverage', parseInt(e.target.value, 10))}
                 fullWidth
                 inputProps={{ min: 1, max: 125 }}
-                helperText="Position notional = (Equity ÷ MaxTraders ÷ 2) × Leverage"
+                helperText="Position notional = (Equity ÷ MaxTraders) × Leverage"
               />
             </Grid>
             <Grid item xs={12} sm={6} md={4}>
@@ -86,38 +97,33 @@ export function ConfigurationPage(): React.ReactElement {
               </FormControl>
             </Grid>
             <Grid item xs={12} sm={6} md={4}>
+              <FormControl fullWidth>
+                <InputLabel>Starting Side</InputLabel>
+                <Select
+                  value={current.startingSide ?? 'SHORT'}
+                  label="Starting Side"
+                  onChange={(e) => handleChange('startingSide', e.target.value)}
+                >
+                  <MenuItem value="SHORT">SHORT</MenuItem>
+                  <MenuItem value="LONG">LONG</MenuItem>
+                </Select>
+              </FormControl>
+            </Grid>
+            <Grid item xs={12} sm={6} md={4}>
               <TextField
-                label="Hedge Entry Distance"
-                value={current.hedgeDistance}
-                helperText="Above previous reference — e.g. 0.10 = 10%"
-                onChange={(e) => handleChange('hedgeDistance', e.target.value)}
+                label="Take Profit %"
+                value={current.takeProfitPercent ?? '0.10'}
+                helperText="e.g. 0.10 = 10% — TP opens same-side position"
+                onChange={(e) => handleChange('takeProfitPercent', e.target.value)}
                 fullWidth
               />
             </Grid>
             <Grid item xs={12} sm={6} md={4}>
               <TextField
-                label="Hedge Stop Loss %"
-                value={current.hedgeSlPercent}
-                helperText="Below hedge entry — e.g. 0.03 = 3%"
-                onChange={(e) => handleChange('hedgeSlPercent', e.target.value)}
-                fullWidth
-              />
-            </Grid>
-            <Grid item xs={12} sm={6} md={4}>
-              <TextField
-                label="Hedge Take Profit %"
-                value={current.hedgeTpPercent}
-                helperText="Above hedge entry — e.g. 0.10 = 10%"
-                onChange={(e) => handleChange('hedgeTpPercent', e.target.value)}
-                fullWidth
-              />
-            </Grid>
-            <Grid item xs={12} sm={6} md={4}>
-              <TextField
-                label="Short Take Profit %"
-                value={current.shortTpPercent}
-                helperText="Below short entry — e.g. 0.10 = 10%"
-                onChange={(e) => handleChange('shortTpPercent', e.target.value)}
+                label="Stop Loss %"
+                value={current.stopLossPercent ?? '0.10'}
+                helperText="e.g. 0.10 = 10% — SL opens opposite-side position"
+                onChange={(e) => handleChange('stopLossPercent', e.target.value)}
                 fullWidth
               />
             </Grid>

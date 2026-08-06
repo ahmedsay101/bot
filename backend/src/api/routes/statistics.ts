@@ -48,7 +48,7 @@ export function createStatisticsRouter(
         usedMargin: stats.usedMargin,
         availableMargin: stats.availableMargin,
         openPositions: traderManager.getTraderSummary().reduce(
-          (n, t) => n + (t.entryPrice != null ? 1 : 0) + t.hedgeLevels.filter((h) => h.status === 'OPEN').length,
+          (n, t) => n + (t.currentPosition != null ? 1 : 0),
           0,
         ),
         activeTraders: traderManager.getOccupiedSlots(),

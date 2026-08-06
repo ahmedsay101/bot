@@ -72,42 +72,17 @@ export interface Trader {
   marginMode: string;
   initialCapital: string;
   positionSize: string;
-  shortEntryPrice: string | null;
-  shortTpPrice: string | null;
-  currentHedgeLevel: number;
+  entryPrice: string | null;
+  tpPrice: string | null;
+  slPrice: string | null;
+  currentSide: 'LONG' | 'SHORT' | null;
+  currentPositionNumber: number;
   realizedPnl: string;
   unrealizedPnl: string;
+  startedAt: string | null;
+  endsAt: string | null;
   createdAt: string;
   updatedAt: string;
-}
-
-export interface HedgeLevelInfo {
-  level: number;
-  entryPrice: string;
-  tpPrice: string;
-  /** Position SL = entry × (1 − hedgeSl%). Not the STOP-LIMIT trigger. */
-  stopPrice: string;
-  /** Previous reference used to derive entry (informational). */
-  previousLevelPrice?: string;
-  quantity?: string;
-  /** Engine hedge phase — never invent TRIGGERED from ACTIVE. */
-  status: 'PENDING' | 'TRIGGERED' | 'OPEN' | 'HIT_TP' | 'HIT_SL' | 'CANCELED';
-  /** Mirrors the STOP-LIMIT OrderStatus from the order book. */
-  entryOrderStatus?: string | null;
-}
-
-/** Engine hedge lifecycle SSOT — display only, never recompute. */
-export interface HedgeLifecycleStats {
-  currentHedgeNumber: number;
-  ordersCreated: number;
-  ordersTriggered: number;
-  positionsOpened: number;
-  positionsClosed: number;
-  stopLosses: number;
-  takeProfits: number;
-  recreations: number;
-  pendingOrders: number;
-  activePositions: number;
 }
 
 export interface TraderOrderView {
@@ -122,33 +97,68 @@ export interface TraderOrderView {
   quantity: string;
 }
 
+export interface CurrentPositionView {
+  number: number;
+  side: 'LONG' | 'SHORT';
+  entryPrice: string;
+  quantity: string;
+  tpPrice: string;
+  slPrice: string;
+  unrealizedPnl: string;
+  roiPercent: string;
+  status: 'OPEN' | 'SUBMITTED';
+}
+
+export interface TraderLifecycleStats {
+  startedAt: string | null;
+  endsAt: string | null;
+  remainingMs: number;
+  runtimeMs: number;
+  currentPositionNumber: number;
+  positionsOpened: number;
+  positionsClosed: number;
+  winningPositions: number;
+  losingPositions: number;
+  takeProfits: number;
+  stopLosses: number;
+  longPositions: number;
+  shortPositions: number;
+  winRate: string;
+  totalFees: string;
+}
+
+export interface PositionTimelineEntry {
+  number: number;
+  side: 'LONG' | 'SHORT';
+  entryPrice: string;
+  exitPrice: string | null;
+  quantity: string;
+  closeReason: 'TP' | 'SL' | 'FORCE' | 'EXPIRED' | null;
+  realizedPnl: string | null;
+  openedAt: string;
+  closedAt: string | null;
+}
+
 export interface TraderSummary {
   id: string;
   symbol: string;
   status: string;
   realizedPnl: string;
   unrealizedPnl: string;
-  shortUnrealizedPnl?: string;
-  hedgeUnrealizedPnl?: string;
-  /** Engine: realized + unrealized — do not recompute on the client. */
-  totalPnl?: string;
-  hedgeLevel: number;
-  hedgeLosses?: number;
-  hedgeWins?: number;
-  hedgeRecreates?: number;
-  hedgeStats?: HedgeLifecycleStats;
-  entryPrice: string | null;
-  tpPrice: string | null;
-  shortSl?: null;
+  totalPnl: string;
   markPrice: string;
-  shortQuantity?: string | null;
+  leverage: number;
+  currentPosition: CurrentPositionView | null;
+  stats: TraderLifecycleStats;
+  timeline: PositionTimelineEntry[];
+  distanceToTpPct?: string | null;
+  distanceToTpAbs?: string | null;
+  distanceToSlPct?: string | null;
+  distanceToSlAbs?: string | null;
   openOrders?: number;
   pendingOrders?: number;
   closedOrders?: number;
-  distanceToTpPct?: string | null;
-  distanceToTpAbs?: string | null;
   orders?: TraderOrderView[];
-  hedgeLevels: HedgeLevelInfo[];
 }
 
 export interface TraderDetail extends Trader {
@@ -290,14 +300,14 @@ export interface AppLog {
 export interface Configuration {
   id: string;
   maxTraders: number;
+  traderLifetimeHours: number;
   initialCapital: string;
   positionSize: string;
   leverage: number;
   marginMode: string;
-  hedgeDistance: string;
-  hedgeTpPercent: string;
-  hedgeSlPercent: string;
-  shortTpPercent: string;
+  takeProfitPercent: string;
+  stopLossPercent: string;
+  startingSide: 'LONG' | 'SHORT';
   refreshInterval: number;
   retryLimit: number;
   feeRate: string;

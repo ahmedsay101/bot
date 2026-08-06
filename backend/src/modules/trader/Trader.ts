@@ -1,23 +1,33 @@
+/**
+ * Strategy V2 Trader — single-position reversal.
+ * MARKET entry → TP + SL → on TP same side / on SL opposite → until lifetime ends.
+ */
 import { EventEmitter } from 'events';
-import { v4 as uuidv4 } from 'uuid';
 import Decimal from 'decimal.js';
 import type { IExecutionProvider } from '../execution/IExecutionProvider';
 import type {
   TraderStatus,
   TraderMode,
   OrderUpdate,
-  HedgeLevel,
   TraderConfig,
   SymbolInfo,
   TraderSummaryView,
+  TradeSide,
+  CloseReason,
+  PositionTimelineEntry,
+  HedgeRole,
+  OrderStatus,
+  OrderSide,
+  OrderType,
 } from '../../types';
 import {
-  calcShortTp,
-  calcFee,
-  calcShortUnrealizedPnl,
-  calcLongUnrealizedPnl,
   adjustPrice,
-  planHedgeFromReference,
+  calcFee,
+  planPositionPrices,
+  nextSideAfterClose,
+  marketSideForPosition,
+  calcPositionUnrealizedPnl,
+  calcPositionRoi,
 } from '../utils/precision';
 import { calcQuantityFromNotional } from '../calc/allocation';
 import type { AccountLedger } from '../calc/AccountLedger';
@@ -25,7 +35,6 @@ import { RiskManager } from '../risk/RiskManager';
 import { createContextLogger } from '../logger';
 import { withRetry } from '../utils/retry';
 import type { PrismaClient } from '@prisma/client';
-import type { HedgeLifecycleStats } from '../../types';
 
 const log = createContextLogger('Trader');
 
@@ -36,54 +45,67 @@ export type TraderEvent =
   | { type: 'PNL_UPDATE'; traderId: string; realizedPnl: string; unrealizedPnl: string; totalPnl: string }
   | { type: 'TRADER_SNAPSHOT'; trader: TraderSummaryView };
 
+function roleForSide(side: TradeSide): HedgeRole {
+  return side === 'SHORT' ? 'SHORT' : 'LONG';
+}
+
 export class Trader extends EventEmitter {
   readonly id: string;
   readonly symbol: string;
   readonly mode: TraderMode;
 
   private status: TraderStatus = 'INITIALIZING';
-  private shortEntryPrice: string | null = null;
-  private shortTpPrice: string | null = null;
-  private shortQuantity: string | null = null;
-  private shortClientOrderId: string | null = null;
-  private shortTpClientOrderId: string | null = null;
-  private currentHedgeLevel = 0;
-  private hedgeLevels: HedgeLevel[] = [];
-  private activeHedgeClientOrderId: string | null = null;
+  private startedAt: Date | null = null;
+  private endsAt: Date | null = null;
+  private lifetimeTimer: ReturnType<typeof setTimeout> | null = null;
+
+  private currentSide: TradeSide | null = null;
+  private currentPositionNumber = 0;
+  entryPrice: string | null = null;
+  private tpPrice: string | null = null;
+  private slPrice: string | null = null;
+  private quantity: string | null = null;
+
+  private entryClientOrderId: string | null = null;
+  private tpClientOrderId: string | null = null;
+  private slClientOrderId: string | null = null;
+
+  private positionOpen = false;
+  private openingNext = false;
+  private closeHandled = false;
+
+  private positionsOpened = 0;
+  private positionsClosed = 0;
+  private winningPositions = 0;
+  private losingPositions = 0;
+  private takeProfits = 0;
+  private stopLosses = 0;
+  private longPositions = 0;
+  private shortPositions = 0;
+  private totalFees = new Decimal(0);
+
+  private timeline: PositionTimelineEntry[] = [];
   private realizedPnl = new Decimal(0);
   private unrealizedPnl = new Decimal(0);
   private symbolInfo: SymbolInfo | null = null;
-  private markPrice: string = '0';
+  private markPrice = '0';
   private isDestroyed = false;
   private completing = false;
   private completePromise: Promise<void> | null = null;
-  private shortTpHandled = false;
   private pendingOrders = new Set<string>();
-  private hedgeOrderIds = new Map<number, { tpClientId: string; slClientId: string }>();
-  private lastSnapshotAt = 0;
+  private handledCloseIds = new Set<string>();
   private readonly riskManager = new RiskManager();
-  private handledHedgeEvents = new Set<string>(); // clientOrderId of closed hedge TP/SL
-  /** In-memory order ledger for dashboard (role/status/prices). */
   private orderViews = new Map<string, {
     clientOrderId: string;
-    role: import('../../types').HedgeRole;
-    type: import('../../types').OrderType;
-    status: import('../../types').OrderStatus;
-    side: import('../../types').OrderSide;
+    role: HedgeRole;
+    type: OrderType;
+    status: OrderStatus;
+    side: OrderSide;
     price: string | null;
     stopPrice: string | null;
     hedgeLevel: number;
     quantity: string;
   }>();
-
-  /** Hedge lifecycle counters — persisted on Trader row for restart restore. */
-  private hedgeOrdersCreated = 0;
-  private hedgeOrdersTriggered = 0;
-  private hedgePositionsOpened = 0;
-  private hedgePositionsClosed = 0;
-  private hedgeStopLosses = 0;
-  private hedgeTakeProfits = 0;
-  private hedgeRecreations = 0;
 
   constructor(
     private readonly traderId: string,
@@ -108,17 +130,14 @@ export class Trader extends EventEmitter {
       { maxAttempts: 3, delayMs: 1000 },
     );
 
-    // Strategy holds SHORT + LONG simultaneously — require Hedge Mode
     await withRetry(
       () => this.executionProvider.setHedgeMode(true),
       { maxAttempts: 3, delayMs: 1000 },
     );
-
     await withRetry(
       () => this.executionProvider.setLeverage(this.symbol, this.traderConfig.leverage),
       { maxAttempts: 3, delayMs: 1000 },
     );
-
     await withRetry(
       () => this.executionProvider.setMarginMode(this.symbol, this.traderConfig.marginMode),
       { maxAttempts: 3, delayMs: 1000 },
@@ -126,107 +145,128 @@ export class Trader extends EventEmitter {
 
     this.markPrice = await this.executionProvider.getMarkPrice(this.symbol);
 
-    this.lifecycle('TRADER_CREATE', { mode: this.mode });
-    await this.openShort();
+    this.startedAt = new Date();
+    const hours = Math.max(0.001, this.traderConfig.traderLifetimeHours);
+    this.endsAt = new Date(this.startedAt.getTime() + hours * 3600_000);
+
+    this.lifecycle('TRADER_CREATE', {
+      mode: this.mode,
+      lifetimeHours: hours,
+      endsAt: this.endsAt.toISOString(),
+      startingSide: this.traderConfig.startingSide,
+    });
+
+    await this.persistTraderState();
+    await this.openPosition(this.traderConfig.startingSide);
     await this.setStatus('ACTIVE');
+    this.scheduleLifetimeEnd();
     this.lifecycle('TRADER_ACTIVE', {
-      shortEntry: this.shortEntryPrice,
-      shortTp: this.shortTpPrice,
-      shortQty: this.shortQuantity,
-      hedgeLevel: this.currentHedgeLevel,
+      side: this.currentSide,
+      entry: this.entryPrice,
+      tp: this.tpPrice,
+      sl: this.slPrice,
     });
   }
 
-  /** Restore a trader from persisted state (called on restart). */
   async restore(state: {
-    shortEntryPrice: string | null;
-    shortTpPrice: string | null;
-    shortQuantity: string | null;
-    currentHedgeLevel: number;
-    hedgeLevels: HedgeLevel[];
     status: TraderStatus;
     realizedPnl: string;
     unrealizedPnl: string;
+    startedAt: Date | null;
+    endsAt: Date | null;
+    currentSide: TradeSide | null;
+    currentPositionNumber: number;
+    entryPrice: string | null;
+    tpPrice: string | null;
+    slPrice: string | null;
+    quantity: string | null;
+    positionsOpened: number;
+    positionsClosed: number;
+    winningPositions: number;
+    losingPositions: number;
+    takeProfits: number;
+    stopLosses: number;
+    longPositions: number;
+    shortPositions: number;
+    totalFees: string;
+    timelineJson: string;
     pendingClientOrderIds: string[];
-    shortClientOrderId: string | null;
-    shortTpClientOrderId: string | null;
-    activeHedgeClientOrderId: string | null;
-    hedgeOrderIds: Array<{ level: number; tpClientId: string; slClientId: string }>;
-    hedgeStats?: {
-      ordersCreated: number;
-      ordersTriggered: number;
-      positionsOpened: number;
-      positionsClosed: number;
-      stopLosses: number;
-      takeProfits: number;
-      recreations: number;
-    };
+    entryClientOrderId: string | null;
+    tpClientOrderId: string | null;
+    slClientOrderId: string | null;
+    positionOpen: boolean;
     orderViews?: Array<{
       clientOrderId: string;
-      role: import('../../types').HedgeRole;
-      type: import('../../types').OrderType;
-      status: import('../../types').OrderStatus;
-      side: import('../../types').OrderSide;
+      role: HedgeRole;
+      type: OrderType;
+      status: OrderStatus;
+      side: OrderSide;
       price: string | null;
       stopPrice: string | null;
       hedgeLevel: number;
       quantity: string;
     }>;
   }): Promise<void> {
-    this.shortEntryPrice = state.shortEntryPrice;
-    this.shortTpPrice = state.shortTpPrice;
-    this.shortQuantity = state.shortQuantity;
-    this.currentHedgeLevel = state.currentHedgeLevel;
-    this.hedgeLevels = state.hedgeLevels.map((h) => ({
-      ...h,
-      previousLevelPrice: h.previousLevelPrice || state.shortEntryPrice || h.stopPrice,
-      // Legacy ACTIVE (order resting) → PENDING
-      status: (h.status as string) === 'ACTIVE' ? 'PENDING' : h.status,
-    }));
     this.status = state.status;
     this.realizedPnl = new Decimal(state.realizedPnl);
     this.unrealizedPnl = new Decimal(state.unrealizedPnl);
-    this.shortClientOrderId = state.shortClientOrderId;
-    this.shortTpClientOrderId = state.shortTpClientOrderId;
-    this.activeHedgeClientOrderId = state.activeHedgeClientOrderId;
-    this.pendingOrders = new Set(state.pendingClientOrderIds);
-    this.hedgeOrderIds = new Map(state.hedgeOrderIds.map((h) => [h.level, { tpClientId: h.tpClientId, slClientId: h.slClientId }]));
-    if (state.hedgeStats != null) {
-      this.hedgeOrdersCreated = state.hedgeStats.ordersCreated;
-      this.hedgeOrdersTriggered = state.hedgeStats.ordersTriggered;
-      this.hedgePositionsOpened = state.hedgeStats.positionsOpened;
-      this.hedgePositionsClosed = state.hedgeStats.positionsClosed;
-      this.hedgeStopLosses = state.hedgeStats.stopLosses;
-      this.hedgeTakeProfits = state.hedgeStats.takeProfits;
-      this.hedgeRecreations = state.hedgeStats.recreations;
+    this.startedAt = state.startedAt;
+    this.endsAt = state.endsAt;
+    this.currentSide = state.currentSide;
+    this.currentPositionNumber = state.currentPositionNumber;
+    this.entryPrice = state.entryPrice;
+    this.tpPrice = state.tpPrice;
+    this.slPrice = state.slPrice;
+    this.quantity = state.quantity;
+    this.positionsOpened = state.positionsOpened;
+    this.positionsClosed = state.positionsClosed;
+    this.winningPositions = state.winningPositions;
+    this.losingPositions = state.losingPositions;
+    this.takeProfits = state.takeProfits;
+    this.stopLosses = state.stopLosses;
+    this.longPositions = state.longPositions;
+    this.shortPositions = state.shortPositions;
+    this.totalFees = new Decimal(state.totalFees);
+    try {
+      this.timeline = JSON.parse(state.timelineJson || '[]') as PositionTimelineEntry[];
+    } catch {
+      this.timeline = [];
     }
+    this.pendingOrders = new Set(state.pendingClientOrderIds);
+    this.entryClientOrderId = state.entryClientOrderId;
+    this.tpClientOrderId = state.tpClientOrderId;
+    this.slClientOrderId = state.slClientOrderId;
+    this.positionOpen = state.positionOpen;
     if (state.orderViews != null) {
       this.orderViews = new Map(state.orderViews.map((o) => [o.clientOrderId, o]));
     }
+
     this.symbolInfo = await this.executionProvider.getSymbolInfo(this.symbol);
     this.markPrice = await this.executionProvider.getMarkPrice(this.symbol);
     this.updateUnrealizedPnl();
-    // If short TP already filled in DB, don't re-handle on rehydrate noise
+
     if (this.status === 'COMPLETING' || this.status === 'COMPLETED') {
-      this.shortTpHandled = true;
+      // no-op
+    } else if (this.endsAt != null && Date.now() >= this.endsAt.getTime()) {
+      void this.complete('EXPIRED');
+    } else {
+      this.scheduleLifetimeEnd();
     }
+
     log.info(`Trader ${this.id} restored for ${this.symbol}`, {
-      shortQty: this.shortQuantity,
-      hedgeLevels: this.hedgeLevels.length,
-      pendingOrders: this.pendingOrders.size,
-      status: this.status,
+      side: this.currentSide,
+      pos: this.currentPositionNumber,
+      endsAt: this.endsAt?.toISOString(),
     });
   }
 
-  /** Resume a crash mid-complete (COMPLETING status on restart). */
   async resumeCompleting(): Promise<void> {
     if (this.status !== 'COMPLETING' || this.isDestroyed) return;
-    log.warn(`Resuming COMPLETING trader ${this.id} for ${this.symbol}`);
-    await this.complete();
+    await this.complete('FORCE');
   }
 
-  /** Full teardown — remove listeners after slot release. */
   destroy(): void {
+    this.clearLifetimeTimer();
     this.lifecycle('TRADER_DESTROYED');
     this.isDestroyed = true;
     this.removeAllListeners();
@@ -237,55 +277,31 @@ export class Trader extends EventEmitter {
     this.markPrice = price;
     this.updateUnrealizedPnl();
 
+    if (this.endsAt != null && Date.now() >= this.endsAt.getTime()) {
+      void this.complete('EXPIRED');
+      return;
+    }
+
     const now = Date.now();
-    // Emit aggressively so dashboard marks/PnL tick with the mark-price stream
-    if (now - this.lastSnapshotAt >= 200) {
-      this.lastSnapshotAt = now;
+    if (now - (this as unknown as { lastSnap?: number }).lastSnap! > 500 || !(this as unknown as { lastSnap?: number }).lastSnap) {
+      (this as unknown as { lastSnap?: number }).lastSnap = now;
+      this.emitPnlUpdate();
       this.emitSnapshot();
     }
   }
 
   async onOrderUpdate(update: OrderUpdate): Promise<void> {
     if (this.isDestroyed) return;
-    if (!this.pendingOrders.has(update.clientOrderId)) return;
 
-    log.debug(`Order update for trader ${this.id}`, {
-      clientId: update.clientOrderId,
-      status: update.status,
-      filledQty: update.filledQuantity,
-      avg: update.avgFillPrice,
-    });
-
-    // Non-fill working statuses — only TRIGGERED advances hedge phase (not NEW/PENDING)
     if (update.status === 'TRIGGERED' || update.status === 'NEW' || update.status === 'PENDING') {
       this.touchOrderView(update.clientOrderId, { status: update.status });
       await this.db.order.updateMany({
         where: { clientOrderId: update.clientOrderId },
         data: { status: update.status },
       });
-      if (update.clientOrderId === this.activeHedgeClientOrderId) {
-        const hl = this.hedgeLevels.find((h) => h.level === this.currentHedgeLevel);
-        if (hl != null) {
-          hl.entryOrderStatus = update.status;
-          // STOP-LIMIT: only mark TRIGGERED when the stop is actually hit
-          if (update.status === 'TRIGGERED' && hl.status === 'PENDING') {
-            hl.status = 'TRIGGERED';
-            this.hedgeOrdersTriggered += 1;
-            void this.persistTraderState();
-            this.lifecycle('HEDGE_STOP_TRIGGERED', {
-              level: hl.level,
-              entry: hl.entryPrice,
-              mark: this.markPrice,
-              ordersTriggered: this.hedgeOrdersTriggered,
-            });
-            this.emitSnapshot();
-          }
-        }
-      }
       return;
     }
 
-    // Terminal non-fill statuses — release pending book
     if (update.status === 'CANCELED' || update.status === 'REJECTED' || update.status === 'EXPIRED') {
       this.pendingOrders.delete(update.clientOrderId);
       this.touchOrderView(update.clientOrderId, { status: update.status });
@@ -298,19 +314,17 @@ export class Trader extends EventEmitter {
       return;
     }
 
-    // Partial fills: track qty only — state machine advances on FILLED
     if (update.status === 'PARTIALLY_FILLED') {
-      if (update.clientOrderId === this.shortClientOrderId && update.filledQuantity) {
-        this.shortQuantity = update.filledQuantity;
-      }
       this.touchOrderView(update.clientOrderId, { status: 'PARTIALLY_FILLED' });
+      if (update.clientOrderId === this.entryClientOrderId && update.filledQuantity) {
+        this.quantity = update.filledQuantity;
+      }
       await this.db.order.updateMany({
         where: { clientOrderId: update.clientOrderId },
         data: {
           status: 'PARTIALLY_FILLED',
           filledQuantity: update.filledQuantity,
           ...(update.avgFillPrice != null ? { avgFillPrice: update.avgFillPrice } : {}),
-          ...(update.fee != null ? { fee: update.fee } : {}),
         },
       });
       this.emitSnapshot();
@@ -318,36 +332,17 @@ export class Trader extends EventEmitter {
     }
 
     if (update.status !== 'FILLED') return;
-
-    // Enrich null avg fill (common on ALGO_UPDATE FINISHED) before handlers
     const enriched = this.enrichFillUpdate(update);
 
-    if (update.clientOrderId === this.shortClientOrderId) {
-      await this.onShortFilled(enriched);
-    } else if (update.clientOrderId === this.shortTpClientOrderId) {
-      await this.onShortTpFilled(enriched);
-    } else if (update.clientOrderId === this.activeHedgeClientOrderId) {
-      await this.onHedgeFilled(enriched);
-    } else {
-      for (const [level, ids] of this.hedgeOrderIds) {
-        if (update.clientOrderId === ids.tpClientId) {
-          const hl = this.hedgeLevels.find((h) => h.level === level);
-          if (hl != null) await this.onHedgeTpFilled(hl, enriched);
-          break;
-        }
-        if (update.clientOrderId === ids.slClientId) {
-          const hl = this.hedgeLevels.find((h) => h.level === level);
-          if (hl != null) await this.onHedgeStopLossHit(hl, enriched);
-          break;
-        }
-      }
+    if (update.clientOrderId === this.entryClientOrderId) {
+      await this.onEntryFilled(enriched);
+    } else if (update.clientOrderId === this.tpClientOrderId) {
+      await this.onTpFilled(enriched);
+    } else if (update.clientOrderId === this.slClientOrderId) {
+      await this.onSlFilled(enriched);
     }
   }
 
-  /**
-   * ALGO_UPDATE often arrives FILLED with null avgPrice.
-   * Fall back to known order price / stop / mark so lifecycle can advance.
-   */
   private enrichFillUpdate(update: OrderUpdate): OrderUpdate {
     if (update.avgFillPrice != null && update.avgFillPrice !== '' && update.avgFillPrice !== '0') {
       return update;
@@ -356,515 +351,338 @@ export class Trader extends EventEmitter {
     const fallbacks = [
       view?.price,
       view?.stopPrice,
-      update.clientOrderId === this.shortTpClientOrderId ? this.shortTpPrice : null,
+      update.clientOrderId === this.tpClientOrderId ? this.tpPrice : null,
+      update.clientOrderId === this.slClientOrderId ? this.slPrice : null,
+      this.entryPrice,
       this.markPrice !== '0' ? this.markPrice : null,
     ];
     for (const f of fallbacks) {
       if (f != null && f !== '' && f !== '0') {
-        log.debug('Enriched null avgFillPrice from fallback', {
-          clientId: update.clientOrderId,
-          fill: f,
-        });
         return { ...update, avgFillPrice: f };
       }
     }
     return update;
   }
 
-  private async resolvePositionNotional(): Promise<Decimal> {
-    const allocation = await this.accountLedger.getAllocation(
-      this.traderConfig.maxTraders,
-      this.traderConfig.leverage,
-    );
-    return allocation.positionNotional;
-  }
-
-  private async openShort(): Promise<void> {
-    if (this.symbolInfo == null) throw new Error('Symbol info not loaded');
-
-    const markPriceDecimal = new Decimal(this.markPrice);
-    if (markPriceDecimal.isZero() || markPriceDecimal.isNaN() || markPriceDecimal.isNeg()) {
-      throw new Error(`Cannot open short: invalid mark price '${this.markPrice}' for ${this.symbol}`);
+  private async openPosition(side: TradeSide): Promise<void> {
+    if (this.symbolInfo == null || this.openingNext || this.completing) return;
+    if (this.positionOpen) {
+      log.warn(`Refusing second position for ${this.symbol}`);
+      return;
     }
 
-    const notional = await this.resolvePositionNotional();
-    const qty = calcQuantityFromNotional(notional, this.markPrice, this.symbolInfo);
+    this.openingNext = true;
+    this.closeHandled = false;
+    try {
+      const notional = await this.resolvePositionNotional();
+      const mark = this.markPrice !== '0'
+        ? this.markPrice
+        : await this.executionProvider.getMarkPrice(this.symbol);
+      this.markPrice = mark;
+      const qty = calcQuantityFromNotional(notional, mark, this.symbolInfo);
 
-    const clientOrderId = `short_${this.id}_${Date.now()}`;
-    this.shortClientOrderId = clientOrderId;
-    this.pendingOrders.add(clientOrderId);
+      this.currentPositionNumber += 1;
+      this.currentSide = side;
+      this.quantity = qty;
+      this.entryPrice = null;
+      this.tpPrice = null;
+      this.slPrice = null;
 
-    const result = await withRetry(
-      () =>
-        this.placeValidated({
-          traderId: this.id,
+      const clientOrderId = `entry_${this.id}_p${this.currentPositionNumber}_${Date.now()}`;
+      this.entryClientOrderId = clientOrderId;
+      this.pendingOrders.add(clientOrderId);
+
+      const result = await withRetry(
+        () =>
+          this.placeValidated({
+            traderId: this.id,
+            clientOrderId,
+            symbol: this.symbol,
+            side: marketSideForPosition(side),
+            type: 'MARKET',
+            role: roleForSide(side),
+            hedgeLevel: this.currentPositionNumber,
+            quantity: qty,
+            positionSide: side,
+          }),
+        { maxAttempts: this.traderConfig.retryLimit, delayMs: 500 },
+      );
+
+      await this.persistOrder(result, roleForSide(side), this.currentPositionNumber);
+
+      if (result.status === 'FILLED' && result.avgFillPrice != null) {
+        await this.onEntryFilled({
           clientOrderId,
+          exchangeOrderId: result.exchangeOrderId,
           symbol: this.symbol,
-          side: 'SELL',
-          type: 'MARKET',
-          role: 'SHORT',
-          hedgeLevel: 0,
-          quantity: qty,
-          positionSide: 'SHORT',
-        }),
-      { maxAttempts: this.traderConfig.retryLimit, delayMs: 500 },
-    );
+          status: 'FILLED',
+          filledQuantity: result.filledQuantity,
+          avgFillPrice: result.avgFillPrice,
+          fee: result.fee,
+          feeCurrency: result.feeCurrency,
+          timestamp: Date.now(),
+        });
+      }
 
-    this.shortQuantity = result.quantity;
-    // Persist before state-machine advance so restart never loses the short MARKET row
-    await this.persistOrder(result, 'SHORT', 0);
-
-    if (result.status === 'FILLED' && result.avgFillPrice != null) {
-      await this.onShortFilled({
-        clientOrderId,
-        exchangeOrderId: result.exchangeOrderId,
-        symbol: this.symbol,
-        status: 'FILLED',
-        filledQuantity: result.filledQuantity,
-        avgFillPrice: result.avgFillPrice,
-        fee: result.fee,
-        feeCurrency: result.feeCurrency,
-        timestamp: Date.now(),
+      this.lifecycle('POSITION_SUBMITTED', {
+        number: this.currentPositionNumber,
+        side,
+        qty,
       });
+    } finally {
+      this.openingNext = false;
     }
-
-    log.info(`Short opened for ${this.symbol}`, {
-      clientId: clientOrderId,
-      qty,
-      notional: notional.toFixed(4),
-    });
   }
 
-  private async onShortFilled(update: OrderUpdate): Promise<void> {
-    if (update.avgFillPrice == null) return;
-    // Idempotent — sync MARKET return + async sim/live event must not double-place TP/hedge
-    if (this.shortEntryPrice != null) return;
+  private async onEntryFilled(update: OrderUpdate): Promise<void> {
+    if (update.avgFillPrice == null || this.currentSide == null || this.symbolInfo == null) return;
+    if (this.positionOpen && this.entryPrice != null) return;
 
-    this.shortEntryPrice = update.avgFillPrice;
-    if (update.filledQuantity) this.shortQuantity = update.filledQuantity;
+    this.entryPrice = update.avgFillPrice;
+    if (update.filledQuantity) this.quantity = update.filledQuantity;
+    this.positionOpen = true;
+    this.positionsOpened += 1;
+    if (this.currentSide === 'LONG') this.longPositions += 1;
+    else this.shortPositions += 1;
 
-    const openFee = calcFee(this.shortEntryPrice, this.shortQuantity ?? '0', this.traderConfig.feeRate);
-    this.realizedPnl = this.realizedPnl.minus(openFee);
-    await this.accountLedger.recordFee(openFee);
+    const fee = calcFee(this.entryPrice, this.quantity ?? '0', this.traderConfig.feeRate);
+    this.realizedPnl = this.realizedPnl.minus(fee);
+    this.totalFees = this.totalFees.plus(fee);
+    await this.accountLedger.recordFee(fee);
+
     this.pendingOrders.delete(update.clientOrderId);
     this.riskManager.releaseOrder(update.clientOrderId);
-    await this.upsertPosition('SHORT', 'SHORT', 0, this.shortEntryPrice, this.shortQuantity ?? '0', true);
-    await this.persistTrade(update, 'SHORT', 0, openFee.neg().toFixed(8));
-    const shortTp = calcShortTp(this.shortEntryPrice, this.traderConfig.shortTpPercent);
-    this.shortTpPrice = adjustPrice(shortTp, this.symbolInfo!);
 
-    await this.persistTraderState();
-    await this.placeShortTp();
-    await this.placeInitialHedge();
-    this.emitSnapshot();
-  }
+    const plan = planPositionPrices(this.entryPrice, this.currentSide, this.traderConfig);
+    this.tpPrice = adjustPrice(plan.takeProfit, this.symbolInfo);
+    this.slPrice = adjustPrice(plan.stopLoss, this.symbolInfo);
 
-  private async placeShortTp(): Promise<void> {
-    if (this.symbolInfo == null || this.shortEntryPrice == null || this.shortQuantity == null) return;
-
-    const clientOrderId = `short_tp_${this.id}_${Date.now()}`;
-    this.shortTpClientOrderId = clientOrderId;
-    this.pendingOrders.add(clientOrderId);
-
-    const result = await withRetry(
-      () =>
-        this.placeValidated({
-          traderId: this.id,
-          clientOrderId,
-          symbol: this.symbol,
-          side: 'BUY',
-          type: 'TAKE_PROFIT',
-          role: 'SHORT',
-          hedgeLevel: 0,
-          quantity: this.shortQuantity!,
-          price: this.shortTpPrice!,
-          stopPrice: this.shortTpPrice!,
-          positionSide: 'SHORT',
-        }),
-      { maxAttempts: this.traderConfig.retryLimit, delayMs: 500 },
-    );
-
-    await this.persistOrder(result, 'SHORT', 0);
-    log.info(`Short TP placed for ${this.symbol}`, { tp: this.shortTpPrice });
-  }
-
-  private async placeInitialHedge(): Promise<void> {
-    if (this.symbolInfo == null || this.shortEntryPrice == null) return;
-
-    const plan = planHedgeFromReference(this.shortEntryPrice, this.traderConfig);
-    const previousRef = adjustPrice(this.shortEntryPrice, this.symbolInfo);
-    const entryAdj = adjustPrice(plan.entry, this.symbolInfo);
-    const slAdj = adjustPrice(plan.stopLoss, this.symbolInfo);
-    const tpAdj = adjustPrice(plan.takeProfit, this.symbolInfo);
-
-    const notional = await this.resolvePositionNotional();
-    const qty = calcQuantityFromNotional(notional, entryAdj, this.symbolInfo);
-
-    const hedgeLevel: HedgeLevel = {
-      level: 1,
-      entryPrice: entryAdj,
-      stopPrice: slAdj,
-      previousLevelPrice: previousRef,
-      tpPrice: tpAdj,
-      quantity: qty,
-      status: 'PENDING',
-      entryOrderStatus: null,
-    };
-
-    this.hedgeLevels.push(hedgeLevel);
-    this.currentHedgeLevel = 1;
-
-    this.lifecycle('HEDGE_CREATE', {
-      level: 1,
-      entry: hedgeLevel.entryPrice,
-      stopLoss: hedgeLevel.stopPrice,
-      previousReference: hedgeLevel.previousLevelPrice,
-      tp: hedgeLevel.tpPrice,
-      qty: hedgeLevel.quantity,
+    this.timeline.push({
+      number: this.currentPositionNumber,
+      side: this.currentSide,
+      entryPrice: this.entryPrice,
+      exitPrice: null,
+      quantity: this.quantity ?? '0',
+      closeReason: null,
+      realizedPnl: null,
+      openedAt: new Date().toISOString(),
+      closedAt: null,
     });
 
-    await this.placeHedgeOrder(hedgeLevel);
-  }
-
-  private async placeHedgeOrder(hedgeLevel: HedgeLevel): Promise<void> {
-    if (this.symbolInfo == null) return;
-
-    // Re-size if quantity missing (restored legacy levels)
-    if (!hedgeLevel.quantity || hedgeLevel.quantity === '0') {
-      const notional = await this.resolvePositionNotional();
-      hedgeLevel.quantity = calcQuantityFromNotional(notional, hedgeLevel.entryPrice, this.symbolInfo);
-    }
-
-    const clientOrderId = `hedge_${this.id}_lvl${hedgeLevel.level}_${Date.now()}`;
-    this.activeHedgeClientOrderId = clientOrderId;
-    this.pendingOrders.add(clientOrderId);
-
-    // STOP-LIMIT trigger = entry (buy when mark >= entry). Position SL is hedgeLevel.stopPrice.
-    const result = await withRetry(
-      () =>
-        this.placeValidated({
-          traderId: this.id,
-          clientOrderId,
-          symbol: this.symbol,
-          side: 'BUY',
-          type: 'STOP_LIMIT',
-          role: 'HEDGE',
-          hedgeLevel: hedgeLevel.level,
-          quantity: hedgeLevel.quantity,
-          price: hedgeLevel.entryPrice,
-          stopPrice: hedgeLevel.entryPrice,
-          positionSide: 'LONG',
-        }),
-      { maxAttempts: this.traderConfig.retryLimit, delayMs: 500 },
-    );
-
-    this.hedgeOrdersCreated += 1;
-
-    // Stay PENDING until the stop is hit — do NOT mark TRIGGERED on accept
-    hedgeLevel.status = 'PENDING';
-    hedgeLevel.entryOrderStatus = result.status === 'TRIGGERED' ? 'TRIGGERED' : 'PENDING';
-    if (result.status === 'TRIGGERED') {
-      hedgeLevel.status = 'TRIGGERED';
-      this.hedgeOrdersTriggered += 1;
-    }
-
-    await this.persistOrder(result, 'HEDGE', hedgeLevel.level);
+    await this.upsertPosition(this.currentSide, this.entryPrice, this.quantity ?? '0', true);
+    await this.persistTrade(update, roleForSide(this.currentSide), this.currentPositionNumber, fee.neg().toFixed(8));
+    await this.placeProtectiveOrders();
     await this.persistTraderState();
     this.emitSnapshot();
 
-    this.lifecycle('HEDGE_STOP_LIMIT_PLACED', {
-      level: hedgeLevel.level,
-      entry: hedgeLevel.entryPrice,
-      positionSl: hedgeLevel.stopPrice,
-      previousReference: hedgeLevel.previousLevelPrice,
-      tp: hedgeLevel.tpPrice,
-      qty: hedgeLevel.quantity,
-      orderStatus: hedgeLevel.entryOrderStatus,
-      hedgePhase: hedgeLevel.status,
-      ordersCreated: this.hedgeOrdersCreated,
-      clientId: clientOrderId,
+    this.lifecycle('POSITION_OPEN', {
+      number: this.currentPositionNumber,
+      side: this.currentSide,
+      entry: this.entryPrice,
+      tp: this.tpPrice,
+      sl: this.slPrice,
     });
   }
 
-  private async onHedgeFilled(update: OrderUpdate): Promise<void> {
-    if (update.avgFillPrice == null) return;
+  private async placeProtectiveOrders(): Promise<void> {
+    if (
+      this.symbolInfo == null
+      || this.currentSide == null
+      || this.entryPrice == null
+      || this.quantity == null
+      || this.tpPrice == null
+      || this.slPrice == null
+    ) return;
 
-    const hedgeLevel = this.hedgeLevels.find((h) => h.level === this.currentHedgeLevel);
-    if (hedgeLevel == null) return;
-    if (hedgeLevel.status === 'OPEN' || hedgeLevel.status === 'HIT_TP' || hedgeLevel.status === 'HIT_SL') return;
+    const closeSide: OrderSide = this.currentSide === 'SHORT' ? 'BUY' : 'SELL';
+    const posSide = this.currentSide;
 
-    hedgeLevel.status = 'OPEN';
-    hedgeLevel.entryOrderStatus = 'FILLED';
-    if (update.filledQuantity) hedgeLevel.quantity = update.filledQuantity;
-    this.hedgePositionsOpened += 1;
-    this.lifecycle('HEDGE_FILLED_OPEN', {
-      level: hedgeLevel.level,
-      fill: update.avgFillPrice,
-      qty: hedgeLevel.quantity,
-      positionSl: hedgeLevel.stopPrice,
-      tp: hedgeLevel.tpPrice,
-      positionsOpened: this.hedgePositionsOpened,
-    });
+    const tpId = `tp_${this.id}_p${this.currentPositionNumber}_${Date.now()}`;
+    this.tpClientOrderId = tpId;
+    this.pendingOrders.add(tpId);
 
-    const openFee = calcFee(update.avgFillPrice, hedgeLevel.quantity, this.traderConfig.feeRate);
-    this.realizedPnl = this.realizedPnl.minus(openFee);
-    await this.accountLedger.recordFee(openFee);
-
-    const tpClientId = `hedge_tp_${this.id}_lvl${hedgeLevel.level}_${Date.now()}`;
-    this.pendingOrders.add(tpClientId);
-
-    const result = await withRetry(
+    const tpResult = await withRetry(
       () =>
         this.placeValidated({
           traderId: this.id,
-          clientOrderId: tpClientId,
+          clientOrderId: tpId,
           symbol: this.symbol,
-          side: 'SELL',
+          side: closeSide,
           type: 'TAKE_PROFIT',
-          role: 'HEDGE',
-          hedgeLevel: hedgeLevel.level,
-          quantity: hedgeLevel.quantity,
-          price: hedgeLevel.tpPrice,
-          stopPrice: hedgeLevel.tpPrice,
-          positionSide: 'LONG',
+          role: roleForSide(this.currentSide!),
+          hedgeLevel: this.currentPositionNumber,
+          quantity: this.quantity!,
+          price: this.tpPrice!,
+          stopPrice: this.tpPrice!,
+          positionSide: posSide,
         }),
       { maxAttempts: this.traderConfig.retryLimit, delayMs: 500 },
     );
+    await this.persistOrder(tpResult, roleForSide(this.currentSide), this.currentPositionNumber);
 
-    const slClientId = `hedge_sl_${this.id}_lvl${hedgeLevel.level}_${Date.now()}`;
-    this.pendingOrders.add(slClientId);
+    const slId = `sl_${this.id}_p${this.currentPositionNumber}_${Date.now()}`;
+    this.slClientOrderId = slId;
+    this.pendingOrders.add(slId);
 
     const slResult = await withRetry(
       () =>
         this.placeValidated({
           traderId: this.id,
-          clientOrderId: slClientId,
+          clientOrderId: slId,
           symbol: this.symbol,
-          side: 'SELL',
+          side: closeSide,
           type: 'STOP_MARKET',
-          role: 'HEDGE',
-          hedgeLevel: hedgeLevel.level,
-          quantity: hedgeLevel.quantity,
-          stopPrice: hedgeLevel.stopPrice,
-          positionSide: 'LONG',
+          role: roleForSide(this.currentSide!),
+          hedgeLevel: this.currentPositionNumber,
+          quantity: this.quantity!,
+          stopPrice: this.slPrice!,
+          positionSide: posSide,
         }),
       { maxAttempts: this.traderConfig.retryLimit, delayMs: 500 },
     );
-
-    this.hedgeOrderIds.set(hedgeLevel.level, { tpClientId, slClientId });
-
-    await this.persistOrder(result, 'HEDGE', hedgeLevel.level);
-    await this.persistOrder(slResult, 'HEDGE', hedgeLevel.level);
-    await this.upsertPosition('LONG', 'HEDGE', hedgeLevel.level, update.avgFillPrice, hedgeLevel.quantity, true);
-    await this.persistTrade(update, 'HEDGE', hedgeLevel.level, '0');
-    await this.persistTraderState();
-    this.emitSnapshot();
-
-    log.info(`Hedge L${hedgeLevel.level} FILLED for ${this.symbol}`, { fillPrice: update.avgFillPrice });
+    await this.persistOrder(slResult, roleForSide(this.currentSide), this.currentPositionNumber);
   }
 
-  private async onHedgeStopLossHit(hedgeLevel: HedgeLevel, update: OrderUpdate): Promise<void> {
-    if (update.avgFillPrice == null) return;
-    const key = update.clientOrderId;
-    if (this.handledHedgeEvents.has(key) || hedgeLevel.status === 'HIT_SL' || hedgeLevel.status === 'HIT_TP') return;
-    this.handledHedgeEvents.add(key);
+  private async onTpFilled(update: OrderUpdate): Promise<void> {
+    await this.closePosition(update, 'TP');
+  }
 
-    log.info(`Hedge L${hedgeLevel.level} SL hit for ${this.symbol} — recreating same hedge`);
-    hedgeLevel.status = 'HIT_SL';
-    this.hedgeStopLosses += 1;
-    this.hedgePositionsClosed += 1;
-    this.hedgeRecreations += 1;
+  private async onSlFilled(update: OrderUpdate): Promise<void> {
+    await this.closePosition(update, 'SL');
+  }
 
-    const qty = hedgeLevel.quantity;
-    const loss = new Decimal(update.avgFillPrice).minus(hedgeLevel.entryPrice).mul(qty);
-    const closeFee = calcFee(update.avgFillPrice, qty, this.traderConfig.feeRate);
-    this.realizedPnl = this.realizedPnl.plus(loss).minus(closeFee);
-    await this.accountLedger.recordRealized(loss, closeFee);
-    await this.upsertPosition('LONG', 'HEDGE', hedgeLevel.level, hedgeLevel.entryPrice, qty, false, loss.minus(closeFee).toFixed(8));
-    await this.persistTrade(update, 'HEDGE', hedgeLevel.level, loss.minus(closeFee).toFixed(8));
+  private async closePosition(update: OrderUpdate, reason: CloseReason): Promise<void> {
+    if (update.avgFillPrice == null || this.currentSide == null || this.entryPrice == null) return;
+    if (this.handledCloseIds.has(update.clientOrderId) || this.closeHandled) return;
+    if (!this.positionOpen) return;
+    this.handledCloseIds.add(update.clientOrderId);
+    this.closeHandled = true;
 
-    const ids = this.hedgeOrderIds.get(hedgeLevel.level);
-    if (ids != null) {
+    const qty = this.quantity ?? '0';
+    const side = this.currentSide;
+    const entry = this.entryPrice;
+    const fill = update.avgFillPrice;
+
+    const gross = side === 'SHORT'
+      ? new Decimal(entry).minus(fill).mul(qty)
+      : new Decimal(fill).minus(entry).mul(qty);
+    const fee = calcFee(fill, qty, this.traderConfig.feeRate);
+    const net = gross.minus(fee);
+    this.realizedPnl = this.realizedPnl.plus(net);
+    this.totalFees = this.totalFees.plus(fee);
+    await this.accountLedger.recordRealized(gross, fee);
+
+    this.positionsClosed += 1;
+    if (reason === 'TP') {
+      this.takeProfits += 1;
+      this.winningPositions += 1;
+    } else if (reason === 'SL') {
+      this.stopLosses += 1;
+      this.losingPositions += 1;
+    } else if (net.gte(0)) {
+      this.winningPositions += 1;
+    } else {
+      this.losingPositions += 1;
+    }
+
+    // Cancel the sibling protective order
+    const sibling = reason === 'TP' ? this.slClientOrderId : this.tpClientOrderId;
+    if (sibling != null) {
       try {
-        await this.executionProvider.cancelOrder({ symbol: this.symbol, clientOrderId: ids.tpClientId });
+        await this.executionProvider.cancelOrder({ symbol: this.symbol, clientOrderId: sibling });
       } catch (err) {
-        log.debug('Cancel hedge TP after SL (may already be gone)', { error: String(err) });
+        log.debug('Cancel sibling after close', { error: String(err) });
       }
-      this.pendingOrders.delete(ids.tpClientId);
-      this.pendingOrders.delete(ids.slClientId);
-      this.riskManager.releaseOrder(ids.tpClientId);
-      this.riskManager.releaseOrder(ids.slClientId);
-      this.hedgeOrderIds.delete(hedgeLevel.level);
+      this.pendingOrders.delete(sibling);
+      this.riskManager.releaseOrder(sibling);
     }
-
-    // Recreate identical Entry / SL / TP
-    const newLevel: HedgeLevel = {
-      level: hedgeLevel.level,
-      entryPrice: hedgeLevel.entryPrice,
-      stopPrice: hedgeLevel.stopPrice,
-      previousLevelPrice: hedgeLevel.previousLevelPrice,
-      tpPrice: hedgeLevel.tpPrice,
-      quantity: hedgeLevel.quantity,
-      status: 'PENDING',
-      entryOrderStatus: null,
-    };
-
-    const idx = this.hedgeLevels.findIndex((h) => h.level === hedgeLevel.level);
-    if (idx >= 0) this.hedgeLevels[idx] = newLevel;
-
-    this.lifecycle('HEDGE_RECREATE_AFTER_SL', {
-      level: newLevel.level,
-      entry: newLevel.entryPrice,
-      stopLoss: newLevel.stopPrice,
-      tp: newLevel.tpPrice,
-      recreations: this.hedgeRecreations,
-    });
-
-    await this.placeHedgeOrder(newLevel);
-    this.emitPnlUpdate();
-    this.emitSnapshot();
-  }
-
-  private async onHedgeTpFilled(hedgeLevel: HedgeLevel, update: OrderUpdate): Promise<void> {
-    if (update.avgFillPrice == null) return;
-    const key = update.clientOrderId;
-    if (this.handledHedgeEvents.has(key) || hedgeLevel.status === 'HIT_TP' || hedgeLevel.status === 'HIT_SL') return;
-    this.handledHedgeEvents.add(key);
-
-    log.info(`Hedge L${hedgeLevel.level} TP hit for ${this.symbol} — creating next hedge`);
-    hedgeLevel.status = 'HIT_TP';
-    this.hedgeTakeProfits += 1;
-    this.hedgePositionsClosed += 1;
-
-    const qty = hedgeLevel.quantity;
-    const pnl = new Decimal(update.avgFillPrice).minus(hedgeLevel.entryPrice).mul(qty);
-    const closeFee = calcFee(update.avgFillPrice, qty, this.traderConfig.feeRate);
-    this.realizedPnl = this.realizedPnl.plus(pnl).minus(closeFee);
-    await this.accountLedger.recordRealized(pnl, closeFee);
-    await this.upsertPosition('LONG', 'HEDGE', hedgeLevel.level, hedgeLevel.entryPrice, qty, false, pnl.minus(closeFee).toFixed(8));
-    await this.persistTrade(update, 'HEDGE', hedgeLevel.level, pnl.minus(closeFee).toFixed(8));
-
-    const ids = this.hedgeOrderIds.get(hedgeLevel.level);
-    if (ids != null) {
-      try {
-        await this.executionProvider.cancelOrder({ symbol: this.symbol, clientOrderId: ids.slClientId });
-      } catch (err) {
-        log.debug('Cancel hedge SL after TP (may already be gone)', { error: String(err) });
-      }
-      this.pendingOrders.delete(ids.slClientId);
-      this.pendingOrders.delete(ids.tpClientId);
-      this.riskManager.releaseOrder(ids.tpClientId);
-      this.riskManager.releaseOrder(ids.slClientId);
-      this.hedgeOrderIds.delete(hedgeLevel.level);
-    }
-
-    const plan = planHedgeFromReference(update.avgFillPrice, this.traderConfig);
-    const previousRef = adjustPrice(update.avgFillPrice, this.symbolInfo!);
-    const entryAdj = adjustPrice(plan.entry, this.symbolInfo!);
-    const slAdj = adjustPrice(plan.stopLoss, this.symbolInfo!);
-    const tpAdj = adjustPrice(plan.takeProfit, this.symbolInfo!);
-
-    const notional = await this.resolvePositionNotional();
-    const nextQty = calcQuantityFromNotional(notional, entryAdj, this.symbolInfo!);
-
-    const nextLevel: HedgeLevel = {
-      level: hedgeLevel.level + 1,
-      entryPrice: entryAdj,
-      stopPrice: slAdj,
-      previousLevelPrice: previousRef,
-      tpPrice: tpAdj,
-      quantity: nextQty,
-      status: 'PENDING',
-      entryOrderStatus: null,
-    };
-
-    this.hedgeLevels.push(nextLevel);
-    this.currentHedgeLevel = nextLevel.level;
-
-    this.lifecycle('HEDGE_PROGRESS', {
-      level: nextLevel.level,
-      entry: nextLevel.entryPrice,
-      stopLoss: nextLevel.stopPrice,
-      previousReference: nextLevel.previousLevelPrice,
-      tp: nextLevel.tpPrice,
-      takeProfits: this.hedgeTakeProfits,
-    });
-
-    await this.placeHedgeOrder(nextLevel);
-    await this.persistTraderState();
-    this.emitPnlUpdate();
-    this.emitSnapshot();
-  }
-
-  private async onShortTpFilled(update: OrderUpdate): Promise<void> {
-    if (update.avgFillPrice == null) return;
-    // Idempotent — dual FILLED / ALGO+ORDER updates must not double-complete
-    if (this.shortTpHandled || this.completing || this.isDestroyed) return;
-    if (this.status === 'COMPLETED' || this.status === 'COMPLETING') return;
-    this.shortTpHandled = true;
-
-    log.info(`Short TP hit for ${this.symbol} — completing trader ${this.id}`);
-
-    if (this.shortTpClientOrderId != null) {
-      this.pendingOrders.delete(this.shortTpClientOrderId);
-      this.touchOrderView(this.shortTpClientOrderId, { status: 'FILLED' });
-    }
-
-    await this.db.order.updateMany({
-      where: { clientOrderId: update.clientOrderId },
-      data: {
-        status: 'FILLED',
-        filledQuantity: update.filledQuantity,
-        avgFillPrice: update.avgFillPrice,
-        fee: update.fee ?? undefined,
-        filledAt: new Date(),
-      },
-    });
-
-    const pnl = new Decimal(this.shortEntryPrice ?? '0')
-      .minus(update.avgFillPrice)
-      .mul(this.shortQuantity ?? '0');
-    const fee = calcFee(update.avgFillPrice, this.shortQuantity ?? '0', this.traderConfig.feeRate);
-    this.realizedPnl = this.realizedPnl.plus(pnl).minus(fee);
-    await this.accountLedger.recordRealized(pnl, fee);
-    await this.upsertPosition(
-      'SHORT',
-      'SHORT',
-      0,
-      this.shortEntryPrice ?? update.avgFillPrice,
-      this.shortQuantity ?? '0',
-      false,
-      pnl.minus(fee).toFixed(8),
-    );
-    await this.persistTrade(update, 'SHORT', 0, pnl.minus(fee).toFixed(8));
+    this.pendingOrders.delete(update.clientOrderId);
     this.riskManager.releaseOrder(update.clientOrderId);
 
-    await this.complete();
+    const last = this.timeline[this.timeline.length - 1];
+    if (last != null && last.number === this.currentPositionNumber) {
+      last.exitPrice = fill;
+      last.closeReason = reason;
+      last.realizedPnl = net.toFixed(8);
+      last.closedAt = new Date().toISOString();
+    }
+
+    await this.upsertPosition(side, entry, qty, false, net.toFixed(8));
+    await this.persistTrade(update, roleForSide(side), this.currentPositionNumber, net.toFixed(8));
+
+    this.positionOpen = false;
+    this.unrealizedPnl = new Decimal(0);
+    this.tpClientOrderId = null;
+    this.slClientOrderId = null;
+    this.entryClientOrderId = null;
+
+    this.lifecycle(reason === 'TP' ? 'POSITION_TP' : reason === 'SL' ? 'POSITION_SL' : 'POSITION_CLOSED', {
+      number: this.currentPositionNumber,
+      side,
+      fill,
+      net: net.toFixed(8),
+    });
+
+    await this.persistTraderState();
+    this.emitPnlUpdate();
+    this.emitSnapshot();
+
+    if (this.completing || this.status === 'COMPLETING' || this.status === 'COMPLETED') return;
+    if (this.endsAt != null && Date.now() >= this.endsAt.getTime()) {
+      await this.complete('EXPIRED');
+      return;
+    }
+
+    // Continuous trading: open next immediately
+    const next = nextSideAfterClose(side, reason === 'TP' ? 'TP' : 'SL');
+    await this.openPosition(next);
   }
 
-  private async complete(): Promise<void> {
+  private scheduleLifetimeEnd(): void {
+    this.clearLifetimeTimer();
+    if (this.endsAt == null) return;
+    const ms = this.endsAt.getTime() - Date.now();
+    if (ms <= 0) {
+      void this.complete('EXPIRED');
+      return;
+    }
+    this.lifetimeTimer = setTimeout(() => {
+      void this.complete('EXPIRED');
+    }, ms);
+  }
+
+  private clearLifetimeTimer(): void {
+    if (this.lifetimeTimer != null) {
+      clearTimeout(this.lifetimeTimer);
+      this.lifetimeTimer = null;
+    }
+  }
+
+  private async complete(reason: CloseReason = 'EXPIRED'): Promise<void> {
     if (this.status === 'COMPLETED') return;
     if (this.completePromise != null) return this.completePromise;
-    this.completePromise = this.runComplete();
+    this.completePromise = this.runComplete(reason);
     return this.completePromise;
   }
 
-  private async runComplete(): Promise<void> {
+  private async runComplete(reason: CloseReason): Promise<void> {
     this.completing = true;
-
+    this.clearLifetimeTimer();
     if (this.status !== 'COMPLETING') {
       await this.setStatus('COMPLETING');
     }
 
+    this.lifecycle('TRADER_COMPLETING', { reason });
+
     try {
       await this.executionProvider.cancelAllOrders(this.symbol);
       for (const [id, view] of this.orderViews) {
-        if (view.status === 'PENDING' || view.status === 'NEW' || view.status === 'TRIGGERED' || view.status === 'PARTIALLY_FILLED') {
+        if (['PENDING', 'NEW', 'TRIGGERED', 'PARTIALLY_FILLED'].includes(view.status)) {
           this.touchOrderView(id, { status: 'CANCELED' });
         }
       }
     } catch (err) {
-      log.warn(`Failed to cancel hedge orders for ${this.symbol}`, { error: String(err) });
+      log.warn(`Cancel orders on complete failed for ${this.symbol}`, { error: String(err) });
     }
 
     try {
@@ -877,30 +695,37 @@ export class Trader extends EventEmitter {
           pos.side as 'LONG' | 'SHORT',
           qty.toFixed(),
         );
-        if (pos.side === 'LONG') {
-          this.hedgePositionsClosed += 1;
-        }
-        // Apply remaining hedge/short PnL immediately when force-closing
-        if (closeResult.avgFillPrice != null) {
-          const fill = new Decimal(closeResult.avgFillPrice);
-          const entry = new Decimal(pos.entryPrice);
-          const gross = pos.side === 'LONG'
-            ? fill.minus(entry).mul(qty)
-            : entry.minus(fill).mul(qty);
-          const closeFee = new Decimal(closeResult.fee || '0');
-          this.realizedPnl = this.realizedPnl.plus(gross).minus(closeFee);
-          await this.accountLedger.recordRealized(gross, closeFee);
+        if (this.positionOpen && closeResult.avgFillPrice != null && this.entryPrice != null && this.currentSide != null) {
+          const fill = closeResult.avgFillPrice;
+          const gross = this.currentSide === 'SHORT'
+            ? new Decimal(this.entryPrice).minus(fill).mul(qty)
+            : new Decimal(fill).minus(this.entryPrice).mul(qty);
+          const fee = new Decimal(closeResult.fee || '0');
+          const net = gross.minus(fee);
+          this.realizedPnl = this.realizedPnl.plus(net);
+          this.totalFees = this.totalFees.plus(fee);
+          await this.accountLedger.recordRealized(gross, fee);
+          this.positionsClosed += 1;
+          if (net.gte(0)) this.winningPositions += 1;
+          else this.losingPositions += 1;
+          const last = this.timeline[this.timeline.length - 1];
+          if (last != null && last.closedAt == null) {
+            last.exitPrice = fill;
+            last.closeReason = reason;
+            last.realizedPnl = net.toFixed(8);
+            last.closedAt = new Date().toISOString();
+          }
         }
       }
     } catch (err) {
-      log.warn(`Failed to close positions for ${this.symbol}`, { error: String(err) });
+      log.warn(`Force close on complete failed for ${this.symbol}`, { error: String(err) });
     }
 
+    this.positionOpen = false;
     this.unrealizedPnl = new Decimal(0);
     await this.persistFinalStatistics();
     await this.setStatus('COMPLETED');
     this.isDestroyed = true;
-    this.pendingOrders.clear();
 
     this.emit('traderEvent', {
       type: 'COMPLETED',
@@ -908,7 +733,13 @@ export class Trader extends EventEmitter {
       symbol: this.symbol,
     } satisfies TraderEvent);
 
-    this.lifecycle('TRADER_COMPLETED', { realizedPnl: this.realizedPnl.toFixed(8) });
+    this.lifecycle('TRADER_COMPLETED', {
+      reason,
+      realizedPnl: this.realizedPnl.toFixed(8),
+      positionsOpened: this.positionsOpened,
+      takeProfits: this.takeProfits,
+      stopLosses: this.stopLosses,
+    });
   }
 
   async pause(): Promise<void> {
@@ -916,52 +747,61 @@ export class Trader extends EventEmitter {
   }
 
   async resume(): Promise<void> {
-    if (this.status === 'PAUSED') await this.setStatus('ACTIVE');
+    if (this.status === 'PAUSED') {
+      await this.setStatus('ACTIVE');
+      this.scheduleLifetimeEnd();
+    }
   }
 
   async emergencyStop(): Promise<void> {
     this.isDestroyed = true;
+    this.clearLifetimeTimer();
     try {
       await this.executionProvider.cancelAllOrders(this.symbol);
       const positions = await this.executionProvider.getPositions(this.symbol);
       for (const pos of positions) {
         const qty = new Decimal(pos.quantity).abs().toFixed();
-        await this.executionProvider.closePosition(
-          this.symbol,
-          pos.side as 'LONG' | 'SHORT',
-          qty,
-        );
+        await this.executionProvider.closePosition(this.symbol, pos.side as 'LONG' | 'SHORT', qty);
       }
     } catch (err) {
       log.error(`Emergency stop partial failure for ${this.symbol}`, { error: String(err) });
     }
     await this.setStatus('FAILED');
+    this.emit('traderEvent', {
+      type: 'FAILED',
+      traderId: this.id,
+      symbol: this.symbol,
+      error: 'emergency_stop',
+    } satisfies TraderEvent);
+  }
+
+  private async resolvePositionNotional(): Promise<Decimal> {
+    const allocation = await this.accountLedger.getAllocation(
+      this.traderConfig.maxTraders,
+      this.traderConfig.leverage,
+    );
+    return allocation.positionNotional;
   }
 
   private updateUnrealizedPnl(): void {
-    if (this.shortEntryPrice == null || this.shortQuantity == null) return;
-
-    let total = calcShortUnrealizedPnl(this.shortEntryPrice, this.markPrice, this.shortQuantity);
-
-    for (const level of this.hedgeLevels) {
-      if (level.status === 'OPEN') {
-        total = total.plus(
-          calcLongUnrealizedPnl(level.entryPrice, this.markPrice, level.quantity),
-        );
-      }
+    if (!this.positionOpen || this.entryPrice == null || this.quantity == null || this.currentSide == null) {
+      this.unrealizedPnl = new Decimal(0);
+      return;
     }
-
-    this.unrealizedPnl = total;
+    this.unrealizedPnl = calcPositionUnrealizedPnl(
+      this.currentSide,
+      this.entryPrice,
+      this.markPrice,
+      this.quantity,
+    );
   }
 
   private emitPnlUpdate(): void {
-    const realized = this.realizedPnl.toFixed(8);
-    const unrealized = this.unrealizedPnl.toFixed(8);
     this.emit('traderEvent', {
       type: 'PNL_UPDATE',
       traderId: this.id,
-      realizedPnl: realized,
-      unrealizedPnl: unrealized,
+      realizedPnl: this.realizedPnl.toFixed(8),
+      unrealizedPnl: this.unrealizedPnl.toFixed(8),
       totalPnl: this.realizedPnl.plus(this.unrealizedPnl).toFixed(8),
     } satisfies TraderEvent);
   }
@@ -985,30 +825,30 @@ export class Trader extends EventEmitter {
   }
 
   private async persistTraderState(): Promise<void> {
-    const activeHedge = this.hedgeLevels.find(
-      (h) => h.status === 'TRIGGERED' || h.status === 'OPEN' || h.status === 'PENDING',
-    );
-
     await this.db.trader.update({
       where: { id: this.id },
       data: {
-        shortEntryPrice: this.shortEntryPrice,
-        shortTpPrice: this.shortTpPrice,
-        currentHedgeLevel: this.currentHedgeLevel,
-        // Persist actual short qty in positionSize (sizing is equity-driven; field reused for recovery)
-        positionSize: this.shortQuantity ?? this.traderConfig.positionSize,
-        hedgeEntryPrice: activeHedge?.entryPrice ?? null,
-        hedgeTpPrice: activeHedge?.tpPrice ?? null,
-        hedgeStopPrice: activeHedge?.stopPrice ?? null,
-        hedgeOrdersCreated: this.hedgeOrdersCreated,
-        hedgeOrdersTriggered: this.hedgeOrdersTriggered,
-        hedgePositionsOpened: this.hedgePositionsOpened,
-        hedgePositionsClosed: this.hedgePositionsClosed,
-        hedgeStopLosses: this.hedgeStopLosses,
-        hedgeTakeProfits: this.hedgeTakeProfits,
-        hedgeRecreations: this.hedgeRecreations,
+        startedAt: this.startedAt,
+        endsAt: this.endsAt,
+        currentSide: this.currentSide,
+        currentPositionNumber: this.currentPositionNumber,
+        entryPrice: this.entryPrice,
+        tpPrice: this.tpPrice,
+        slPrice: this.slPrice,
+        quantity: this.quantity,
+        positionsOpened: this.positionsOpened,
+        positionsClosed: this.positionsClosed,
+        winningPositions: this.winningPositions,
+        losingPositions: this.losingPositions,
+        takeProfits: this.takeProfits,
+        stopLosses: this.stopLosses,
+        longPositions: this.longPositions,
+        shortPositions: this.shortPositions,
+        totalFees: this.totalFees.toFixed(8),
+        timelineJson: JSON.stringify(this.timeline),
         realizedPnl: this.realizedPnl.toFixed(8),
         unrealizedPnl: this.unrealizedPnl.toFixed(8),
+        positionSize: this.quantity ?? this.traderConfig.positionSize,
       },
     });
   }
@@ -1016,7 +856,6 @@ export class Trader extends EventEmitter {
   private async placeValidated(req: import('../../types').OrderRequest): Promise<import('../../types').OrderResult> {
     if (this.symbolInfo == null) throw new Error('Symbol info not loaded');
     const available = this.accountLedger.getBalance().toFixed();
-    // Release before validate so withRetry can re-attempt the same clientOrderId
     this.riskManager.releaseOrder(req.clientOrderId);
     this.riskManager.validateOrder(req, this.symbolInfo, available);
     const result = await this.executionProvider.placeOrder(req);
@@ -1026,8 +865,8 @@ export class Trader extends EventEmitter {
 
   private async persistOrder(
     result: import('../../types').OrderResult,
-    role: import('../../types').HedgeRole,
-    hedgeLevel: number,
+    role: HedgeRole,
+    positionNumber: number,
   ): Promise<void> {
     this.orderViews.set(result.clientOrderId, {
       clientOrderId: result.clientOrderId,
@@ -1037,7 +876,7 @@ export class Trader extends EventEmitter {
       side: result.side,
       price: result.price,
       stopPrice: result.stopPrice,
-      hedgeLevel,
+      hedgeLevel: positionNumber,
       quantity: result.quantity,
     });
 
@@ -1065,7 +904,7 @@ export class Trader extends EventEmitter {
         type: result.type,
         status: result.status,
         role,
-        hedgeLevel,
+        hedgeLevel: positionNumber,
         quantity: result.quantity,
         price: result.price,
         stopPrice: result.stopPrice,
@@ -1078,26 +917,26 @@ export class Trader extends EventEmitter {
     });
   }
 
-  private touchOrderView(
-    clientOrderId: string,
-    patch: Partial<{ status: import('../../types').OrderStatus; quantity: string }>,
-  ): void {
+  private touchOrderView(clientOrderId: string, patch: { status: OrderStatus }): void {
     const prev = this.orderViews.get(clientOrderId);
-    if (prev == null) return;
-    this.orderViews.set(clientOrderId, { ...prev, ...patch });
+    if (prev != null) this.orderViews.set(clientOrderId, { ...prev, ...patch });
   }
 
   private async upsertPosition(
-    side: 'LONG' | 'SHORT',
-    role: import('../../types').HedgeRole,
-    hedgeLevel: number,
+    side: TradeSide,
     entryPrice: string,
     quantity: string,
     isOpen: boolean,
     realizedPnl = '0',
   ): Promise<void> {
     const existing = await this.db.position.findFirst({
-      where: { traderId: this.id, side, role, hedgeLevel, isOpen: true },
+      where: {
+        traderId: this.id,
+        symbol: this.symbol,
+        side,
+        hedgeLevel: this.currentPositionNumber,
+        isOpen: true,
+      },
     });
     if (existing != null) {
       await this.db.position.update({
@@ -1105,51 +944,45 @@ export class Trader extends EventEmitter {
         data: {
           entryPrice,
           quantity,
-          unrealizedPnl: isOpen ? this.unrealizedPnl.toFixed(8) : '0',
-          realizedPnl,
-          markPrice: this.markPrice,
           isOpen,
+          realizedPnl,
           closedAt: isOpen ? null : new Date(),
+          markPrice: this.markPrice,
         },
       });
-      return;
+    } else if (isOpen) {
+      await this.db.position.create({
+        data: {
+          traderId: this.id,
+          symbol: this.symbol,
+          side,
+          role: roleForSide(side),
+          hedgeLevel: this.currentPositionNumber,
+          entryPrice,
+          quantity,
+          leverage: this.traderConfig.leverage,
+          isOpen: true,
+          markPrice: this.markPrice,
+        },
+      });
     }
-    if (!isOpen) return;
-    await this.db.position.create({
-      data: {
-        traderId: this.id,
-        symbol: this.symbol,
-        side,
-        role,
-        hedgeLevel,
-        entryPrice,
-        quantity,
-        leverage: this.traderConfig.leverage,
-        unrealizedPnl: '0',
-        realizedPnl: '0',
-        markPrice: this.markPrice,
-        isOpen: true,
-      },
-    });
   }
 
   private async persistTrade(
     update: OrderUpdate,
-    role: import('../../types').HedgeRole,
-    hedgeLevel: number,
+    role: HedgeRole,
+    positionNumber: number,
     realizedPnl: string,
   ): Promise<void> {
     const view = this.orderViews.get(update.clientOrderId);
-    const side = view?.side ?? (role === 'SHORT' && update.clientOrderId === this.shortClientOrderId ? 'SELL' : 'BUY');
-    const orderRow = await this.db.order.findUnique({ where: { clientOrderId: update.clientOrderId } });
     await this.db.trade.create({
       data: {
         traderId: this.id,
-        orderId: orderRow?.id ?? update.clientOrderId,
+        orderId: update.clientOrderId,
         symbol: this.symbol,
-        side,
+        side: view?.side ?? 'BUY',
         role,
-        hedgeLevel,
+        hedgeLevel: positionNumber,
         quantity: update.filledQuantity || view?.quantity || '0',
         price: update.avgFillPrice ?? '0',
         fee: update.fee ?? '0',
@@ -1161,79 +994,66 @@ export class Trader extends EventEmitter {
   }
 
   private async persistFinalStatistics(): Promise<void> {
-    const completedAt = new Date();
-    const stats = this.buildHedgeStats();
-
+    await this.persistTraderState();
     await this.db.traderStatistics.upsert({
       where: { traderId: this.id },
       update: {
-        shortExitPrice: this.shortTpPrice,
-        totalHedgeLevels: this.currentHedgeLevel,
-        hedgeWins: stats.takeProfits,
-        hedgeLosses: stats.stopLosses,
+        hedgeWins: this.takeProfits,
+        hedgeLosses: this.stopLosses,
+        totalHedgeLevels: this.currentPositionNumber,
+        totalFees: this.totalFees.toFixed(8),
         realizedPnl: this.realizedPnl.toFixed(8),
-        durationMs: BigInt(0),
+        durationMs: this.startedAt != null
+          ? BigInt(Date.now() - this.startedAt.getTime())
+          : BigInt(0),
       },
       create: {
         traderId: this.id,
         symbol: this.symbol,
         mode: this.mode,
-        shortEntryPrice: this.shortEntryPrice ?? '0',
-        shortExitPrice: this.shortTpPrice,
-        totalHedgeLevels: this.currentHedgeLevel,
-        hedgeWins: stats.takeProfits,
-        hedgeLosses: stats.stopLosses,
+        shortEntryPrice: this.entryPrice ?? '0',
+        totalHedgeLevels: this.currentPositionNumber,
+        hedgeWins: this.takeProfits,
+        hedgeLosses: this.stopLosses,
+        totalFees: this.totalFees.toFixed(8),
         realizedPnl: this.realizedPnl.toFixed(8),
-        durationMs: BigInt(0),
+        durationMs: this.startedAt != null
+          ? BigInt(Date.now() - this.startedAt.getTime())
+          : BigInt(0),
       },
     });
-
     await this.db.trader.update({
       where: { id: this.id },
-      data: {
-        completedAt,
-        realizedPnl: this.realizedPnl.toFixed(8),
-        hedgeOrdersCreated: this.hedgeOrdersCreated,
-        hedgeOrdersTriggered: this.hedgeOrdersTriggered,
-        hedgePositionsOpened: this.hedgePositionsOpened,
-        hedgePositionsClosed: this.hedgePositionsClosed,
-        hedgeStopLosses: this.hedgeStopLosses,
-        hedgeTakeProfits: this.hedgeTakeProfits,
-        hedgeRecreations: this.hedgeRecreations,
-      },
+      data: { completedAt: new Date(), realizedPnl: this.realizedPnl.toFixed(8) },
     });
-  }
-
-  private buildHedgeStats(): HedgeLifecycleStats {
-    const pendingOrders = this.hedgeLevels.filter(
-      (h) => h.status === 'PENDING' || h.status === 'TRIGGERED',
-    ).length;
-    const activePositions = this.hedgeLevels.filter((h) => h.status === 'OPEN').length;
-    return {
-      currentHedgeNumber: this.currentHedgeLevel,
-      ordersCreated: this.hedgeOrdersCreated,
-      ordersTriggered: this.hedgeOrdersTriggered,
-      positionsOpened: this.hedgePositionsOpened,
-      positionsClosed: this.hedgePositionsClosed,
-      stopLosses: this.hedgeStopLosses,
-      takeProfits: this.hedgeTakeProfits,
-      recreations: this.hedgeRecreations,
-      pendingOrders,
-      activePositions,
-    };
   }
 
   toSummary(): TraderSummaryView {
-    let shortUnrealized = new Decimal(0);
-    if (this.shortEntryPrice != null && this.shortQuantity != null) {
-      shortUnrealized = calcShortUnrealizedPnl(this.shortEntryPrice, this.markPrice, this.shortQuantity);
-    }
-    let hedgeUnrealized = new Decimal(0);
-    for (const level of this.hedgeLevels) {
-      if (level.status === 'OPEN') {
-        hedgeUnrealized = hedgeUnrealized.plus(
-          calcLongUnrealizedPnl(level.entryPrice, this.markPrice, level.quantity),
-        );
+    this.updateUnrealizedPnl();
+    const now = Date.now();
+    const remainingMs = this.endsAt != null ? Math.max(0, this.endsAt.getTime() - now) : 0;
+    const runtimeMs = this.startedAt != null ? Math.max(0, now - this.startedAt.getTime()) : 0;
+    const closed = this.positionsClosed;
+    const wins = this.winningPositions;
+    const winRate = closed > 0
+      ? new Decimal(wins).div(closed).mul(100).toFixed(2)
+      : '0.00';
+
+    let distanceToTpPct: string | null = null;
+    let distanceToTpAbs: string | null = null;
+    let distanceToSlPct: string | null = null;
+    let distanceToSlAbs: string | null = null;
+
+    if (this.positionOpen && this.entryPrice != null && this.tpPrice != null && this.slPrice != null) {
+      const mark = new Decimal(this.markPrice);
+      const tp = new Decimal(this.tpPrice);
+      const sl = new Decimal(this.slPrice);
+      const entry = new Decimal(this.entryPrice);
+      distanceToTpAbs = mark.minus(tp).toFixed(8);
+      distanceToSlAbs = mark.minus(sl).toFixed(8);
+      if (!entry.isZero()) {
+        distanceToTpPct = mark.minus(tp).div(entry).mul(100).toFixed(4);
+        distanceToSlPct = mark.minus(sl).div(entry).mul(100).toFixed(4);
       }
     }
 
@@ -1241,34 +1061,25 @@ export class Trader extends EventEmitter {
     const openStatuses = new Set(['PENDING', 'NEW', 'TRIGGERED', 'PARTIALLY_FILLED']);
     const openOrders = orderList.filter((o) => openStatuses.has(o.status)).length;
     const closedOrders = orderList.filter((o) => !openStatuses.has(o.status)).length;
-    const hedgeStats = this.buildHedgeStats();
-    const pendingOrders = hedgeStats.pendingOrders
-      + (this.shortTpClientOrderId != null && this.status === 'ACTIVE' && this.pendingOrders.has(this.shortTpClientOrderId) ? 1 : 0);
 
-    let distanceToTpPct: string | null = null;
-    let distanceToTpAbs: string | null = null;
-    if (this.shortTpPrice != null && this.markPrice !== '0') {
-      const mark = new Decimal(this.markPrice);
-      const tp = new Decimal(this.shortTpPrice);
-      const abs = mark.minus(tp);
-      distanceToTpAbs = abs.toFixed(8);
-      if (this.shortEntryPrice != null) {
-        distanceToTpPct = abs.div(this.shortEntryPrice).mul(100).toFixed(4);
-      }
-    }
-
-    const totalPnl = this.realizedPnl.plus(this.unrealizedPnl);
-
-    // Attach live entry-order status from order book (SSOT for ladder/orders consistency)
-    const hedgeLevels = this.hedgeLevels.map((h) => {
-      const entryOrder = [...this.orderViews.values()].find(
-        (o) => o.role === 'HEDGE' && o.hedgeLevel === h.level && o.type === 'STOP_LIMIT',
-      );
-      return {
-        ...h,
-        entryOrderStatus: entryOrder?.status ?? h.entryOrderStatus ?? null,
-      };
-    });
+    const currentPosition = this.positionOpen && this.currentSide != null && this.entryPrice != null
+      ? {
+          number: this.currentPositionNumber,
+          side: this.currentSide,
+          entryPrice: this.entryPrice,
+          quantity: this.quantity ?? '0',
+          tpPrice: this.tpPrice ?? '0',
+          slPrice: this.slPrice ?? '0',
+          unrealizedPnl: this.unrealizedPnl.toFixed(8),
+          roiPercent: calcPositionRoi(
+            this.currentSide,
+            this.entryPrice,
+            this.markPrice,
+            this.quantity ?? '0',
+          ).toFixed(4),
+          status: 'OPEN' as const,
+        }
+      : null;
 
     return {
       id: this.id,
@@ -1276,30 +1087,39 @@ export class Trader extends EventEmitter {
       status: this.status,
       realizedPnl: this.realizedPnl.toFixed(8),
       unrealizedPnl: this.unrealizedPnl.toFixed(8),
-      shortUnrealizedPnl: shortUnrealized.toFixed(8),
-      hedgeUnrealizedPnl: hedgeUnrealized.toFixed(8),
-      totalPnl: totalPnl.toFixed(8),
-      hedgeLevel: this.currentHedgeLevel,
-      hedgeLosses: hedgeStats.stopLosses,
-      hedgeWins: hedgeStats.takeProfits,
-      hedgeRecreates: hedgeStats.recreations,
-      hedgeStats,
-      entryPrice: this.shortEntryPrice,
-      tpPrice: this.shortTpPrice,
-      shortSl: null,
+      totalPnl: this.realizedPnl.plus(this.unrealizedPnl).toFixed(8),
       markPrice: this.markPrice,
-      shortQuantity: this.shortQuantity,
-      openOrders,
-      pendingOrders,
-      closedOrders,
+      leverage: this.traderConfig.leverage,
+      currentPosition,
+      stats: {
+        startedAt: this.startedAt?.toISOString() ?? null,
+        endsAt: this.endsAt?.toISOString() ?? null,
+        remainingMs,
+        runtimeMs,
+        currentPositionNumber: this.currentPositionNumber,
+        positionsOpened: this.positionsOpened,
+        positionsClosed: this.positionsClosed,
+        winningPositions: this.winningPositions,
+        losingPositions: this.losingPositions,
+        takeProfits: this.takeProfits,
+        stopLosses: this.stopLosses,
+        longPositions: this.longPositions,
+        shortPositions: this.shortPositions,
+        winRate,
+        totalFees: this.totalFees.toFixed(8),
+      },
+      timeline: [...this.timeline],
       distanceToTpPct,
       distanceToTpAbs,
+      distanceToSlPct,
+      distanceToSlAbs,
+      openOrders,
+      pendingOrders: openOrders,
+      closedOrders,
       orders: orderList,
-      hedgeLevels,
     };
   }
 
-  /** Structured lifecycle logs for end-to-end trader tracing. */
   private lifecycle(event: string, data: Record<string, unknown> = {}): void {
     log.info(`[LIFECYCLE] ${event}`, {
       traderId: this.id,
@@ -1314,15 +1134,13 @@ export class Trader extends EventEmitter {
   getId(): string { return this.id; }
   getRealizedPnl(): string { return this.realizedPnl.toFixed(8); }
   getUnrealizedPnl(): string { return this.unrealizedPnl.toFixed(8); }
-  getHedgeLevels(): HedgeLevel[] { return [...this.hedgeLevels]; }
-  getCurrentHedgeLevel(): number { return this.currentHedgeLevel; }
-  getShortEntryPrice(): string | null { return this.shortEntryPrice; }
-  getShortTpPrice(): string | null { return this.shortTpPrice; }
   getMarkPrice(): string { return this.markPrice; }
-  getShortQuantity(): string | null { return this.shortQuantity; }
   isActive(): boolean { return this.status === 'ACTIVE' && !this.isDestroyed; }
-
-  generateClientOrderId(prefix: string): string {
-    return `${prefix}_${this.id.slice(0, 8)}_${uuidv4().replace(/-/g, '').slice(0, 8)}`;
+  getEndsAt(): Date | null { return this.endsAt; }
+  getCurrentSide(): TradeSide | null { return this.currentSide; }
+  hasOpenPosition(): boolean { return this.positionOpen; }
+  getOpenNotional(): string | null {
+    if (!this.positionOpen || this.entryPrice == null || this.quantity == null) return null;
+    return new Decimal(this.entryPrice).mul(this.quantity).toFixed(8);
   }
 }

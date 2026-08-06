@@ -37,10 +37,10 @@ interface AppConfig {
     positionSize: string;
     leverage: number;
     marginMode: 'ISOLATED' | 'CROSSED';
-    hedgeDistance: string;
-    hedgeTpPercent: string;
-    hedgeSlPercent: string;
-    shortTpPercent: string;
+    traderLifetimeHours: number;
+    takeProfitPercent: string;
+    stopLossPercent: string;
+    startingSide: 'LONG' | 'SHORT';
     refreshInterval: number;
     retryLimit: number;
     feeRate: string;
@@ -76,10 +76,10 @@ const schema = Joi.object({
   POSITION_SIZE: Joi.string().default('100'),
   LEVERAGE: Joi.number().integer().min(1).max(125).default(10),
   MARGIN_MODE: Joi.string().valid('ISOLATED', 'CROSSED').default('ISOLATED'),
-  HEDGE_DISTANCE: Joi.string().default('0.10'),
-  HEDGE_TP_PERCENT: Joi.string().default('0.10'),
-  HEDGE_SL_PERCENT: Joi.string().default('0.03'),
-  SHORT_TP_PERCENT: Joi.string().default('0.10'),
+  TRADER_LIFETIME_HOURS: Joi.number().min(0.001).max(720).default(24),
+  TAKE_PROFIT_PERCENT: Joi.string().default('0.10'),
+  STOP_LOSS_PERCENT: Joi.string().default('0.10'),
+  STARTING_SIDE: Joi.string().valid('SHORT', 'LONG').default('SHORT'),
   REFRESH_INTERVAL: Joi.number().integer().min(5000).default(60000),
   RETRY_LIMIT: Joi.number().integer().min(1).max(20).default(5),
   FEE_RATE: Joi.string().default('0.0004'),
@@ -132,10 +132,10 @@ function loadConfig(): AppConfig {
       positionSize: env.POSITION_SIZE as string,
       leverage: env.LEVERAGE as number,
       marginMode: env.MARGIN_MODE as 'ISOLATED' | 'CROSSED',
-      hedgeDistance: env.HEDGE_DISTANCE as string,
-      hedgeTpPercent: env.HEDGE_TP_PERCENT as string,
-      hedgeSlPercent: env.HEDGE_SL_PERCENT as string,
-      shortTpPercent: env.SHORT_TP_PERCENT as string,
+      traderLifetimeHours: env.TRADER_LIFETIME_HOURS as number,
+      takeProfitPercent: env.TAKE_PROFIT_PERCENT as string,
+      stopLossPercent: env.STOP_LOSS_PERCENT as string,
+      startingSide: env.STARTING_SIDE as 'LONG' | 'SHORT',
       refreshInterval: env.REFRESH_INTERVAL as number,
       retryLimit: env.RETRY_LIMIT as number,
       feeRate: env.FEE_RATE as string,

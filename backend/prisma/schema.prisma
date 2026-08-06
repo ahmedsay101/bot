@@ -1,6 +1,3 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
 generator client {
   provider      = "prisma-client-js"
   binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
@@ -56,9 +53,11 @@ enum PositionSide {
   BOTH
 }
 
+/// SHORT / LONG for V2; HEDGE kept for legacy rows (treat as LONG)
 enum HedgeRole {
   SHORT
   HEDGE
+  LONG
 }
 
 model Trader {
@@ -68,22 +67,35 @@ model Trader {
   status          TraderStatus @default(INITIALIZING)
   leverage        Int
   marginMode      String
-  initialCapital  String       // Decimal stored as string
-  positionSize    String       // Decimal stored as string
-  shortEntryPrice String?      // Decimal stored as string
-  shortTpPrice    String?      // Decimal stored as string
-  currentHedgeLevel Int        @default(0)
-  hedgeEntryPrice String?      // Last hedge entry
-  hedgeTpPrice    String?      // Last hedge take profit
-  hedgeStopPrice  String?      // Last hedge stop loss
-  /// Hedge lifecycle counters (SSOT; restored after restart)
-  hedgeOrdersCreated     Int   @default(0)
-  hedgeOrdersTriggered   Int   @default(0)
-  hedgePositionsOpened   Int   @default(0)
-  hedgePositionsClosed   Int   @default(0)
-  hedgeStopLosses        Int   @default(0)
-  hedgeTakeProfits       Int   @default(0)
-  hedgeRecreations       Int   @default(0)
+  initialCapital  String
+  positionSize    String
+
+  /// Strategy V2 lifetime
+  startedAt       DateTime?
+  endsAt          DateTime?
+
+  /// Current open position
+  currentSide           String?
+  currentPositionNumber Int      @default(0)
+  entryPrice            String?
+  tpPrice               String?
+  slPrice               String?
+  quantity              String?
+
+  /// Lifecycle counters
+  positionsOpened   Int @default(0)
+  positionsClosed   Int @default(0)
+  winningPositions  Int @default(0)
+  losingPositions   Int @default(0)
+  takeProfits       Int @default(0)
+  stopLosses        Int @default(0)
+  longPositions     Int @default(0)
+  shortPositions    Int @default(0)
+  totalFees         String @default("0")
+
+  /// JSON array of PositionTimelineEntry
+  timelineJson      String @default("[]")
+
   realizedPnl     String       @default("0")
   unrealizedPnl   String       @default("0")
   completedAt     DateTime?
@@ -109,12 +121,13 @@ model Order {
   type            OrderType
   status          OrderStatus @default(PENDING)
   role            HedgeRole
+  /// Position number (1-based)
   hedgeLevel      Int         @default(0)
-  quantity        String      // Decimal stored as string
-  price           String?     // Decimal stored as string
-  stopPrice       String?     // Decimal stored as string
+  quantity        String
+  price           String?
+  stopPrice       String?
   filledQuantity  String      @default("0")
-  avgFillPrice    String?     // Decimal stored as string
+  avgFillPrice    String?
   fee             String      @default("0")
   feeCurrency     String?
   reduceOnly      Boolean     @default(false)
@@ -137,13 +150,13 @@ model Position {
   side             PositionSide
   role             HedgeRole
   hedgeLevel       Int          @default(0)
-  entryPrice       String       // Decimal stored as string
-  quantity         String       // Decimal stored as string
+  entryPrice       String
+  quantity         String
   leverage         Int
   unrealizedPnl    String       @default("0")
   realizedPnl      String       @default("0")
-  liquidationPrice String?      // Decimal stored as string
-  markPrice        String?      // Decimal stored as string
+  liquidationPrice String?
+  markPrice        String?
   isOpen           Boolean      @default(true)
   closedAt         DateTime?
   createdAt        DateTime     @default(now())
@@ -164,9 +177,9 @@ model Trade {
   side        OrderSide
   role        HedgeRole
   hedgeLevel  Int       @default(0)
-  quantity    String    // Decimal stored as string
-  price       String    // Decimal stored as string
-  fee         String    // Decimal stored as string
+  quantity    String
+  price       String
+  fee         String
   feeCurrency String
   realizedPnl String    @default("0")
   tradeTime   DateTime
@@ -183,7 +196,7 @@ model TraderStatistics {
   traderId        String   @unique
   symbol          String
   mode            TraderMode
-  shortEntryPrice String
+  shortEntryPrice String   @default("0")
   shortExitPrice  String?
   totalHedgeLevels Int     @default(0)
   hedgeWins       Int      @default(0)
@@ -210,16 +223,11 @@ model GlobalStatistics {
   lastUpdated     DateTime   @default(now())
 }
 
-/// Testing-mode account ledger (single wallet). Live mode uses Binance balances.
 model AccountLedger {
   id              String   @id @default("singleton")
-  /// Wallet / cash balance after realized trades + fees
   balance         String   @default("200")
-  /// Cumulative net realized PnL (after fees)
   realizedPnl     String   @default("0")
-  /// Cumulative fees paid
   totalFees       String   @default("0")
-  /// Day-keyed realized PnL for "today"
   dailyPnl        String   @default("0")
   dailyPnlDate    String   @default("")
   updatedAt       DateTime @updatedAt
@@ -232,10 +240,10 @@ model Configuration {
   positionSize    String   @default("100")
   leverage        Int      @default(10)
   marginMode      String   @default("ISOLATED")
-  hedgeDistance   String   @default("0.10")
-  hedgeTpPercent  String   @default("0.10")
-  hedgeSlPercent  String   @default("0.03")
-  shortTpPercent  String   @default("0.10")
+  traderLifetimeHours Int  @default(24)
+  takeProfitPercent String @default("0.10")
+  stopLossPercent   String @default("0.10")
+  startingSide      String @default("SHORT")
   refreshInterval Int      @default(60000)
   retryLimit      Int      @default(5)
   feeRate         String   @default("0.0004")
@@ -250,7 +258,7 @@ model AppLog {
   level     String
   message   String
   context   String?
-  meta      String?  // JSON blob
+  meta      String?
   timestamp DateTime @default(now())
 
   @@index([level])

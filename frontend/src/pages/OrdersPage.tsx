@@ -19,7 +19,7 @@ export function OrdersPage(): React.ReactElement {
                 <TableCell>Side</TableCell>
                 <TableCell>Type</TableCell>
                 <TableCell>Role</TableCell>
-                <TableCell>L#</TableCell>
+                <TableCell>Pos #</TableCell>
                 <TableCell>Qty</TableCell>
                 <TableCell>Price</TableCell>
                 <TableCell>Stop</TableCell>
@@ -36,7 +36,7 @@ export function OrdersPage(): React.ReactElement {
                   <TableCell><Chip label={o.side} size="small" color={o.side === 'BUY' ? 'success' : 'error'} /></TableCell>
                   <TableCell><Typography variant="caption">{o.type}</Typography></TableCell>
                   <TableCell><Chip label={o.role} size="small" variant="outlined" /></TableCell>
-                  <TableCell>{o.hedgeLevel}</TableCell>
+                  <TableCell>#{o.hedgeLevel}</TableCell>
                   <TableCell>{o.quantity}</TableCell>
                   <TableCell>{o.price != null ? `$${parseFloat(o.price).toFixed(2)}` : '-'}</TableCell>
                   <TableCell>{o.stopPrice != null ? `$${parseFloat(o.stopPrice).toFixed(2)}` : '-'}</TableCell>

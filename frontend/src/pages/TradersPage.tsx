@@ -21,9 +21,10 @@ export function TradersPage(): React.ReactElement {
                 <TableCell>Symbol</TableCell>
                 <TableCell>Mode</TableCell>
                 <TableCell>Status</TableCell>
+                <TableCell>Side</TableCell>
                 <TableCell>Leverage</TableCell>
                 <TableCell>Entry</TableCell>
-                <TableCell>Hedge Level</TableCell>
+                <TableCell>Pos #</TableCell>
                 <TableCell align="right">Realized PnL</TableCell>
                 <TableCell>Created</TableCell>
               </TableRow>
@@ -45,9 +46,10 @@ export function TradersPage(): React.ReactElement {
                       color={t.status === 'ACTIVE' ? 'success' : t.status === 'COMPLETED' ? 'default' : t.status === 'FAILED' ? 'error' : 'warning'}
                     />
                   </TableCell>
+                  <TableCell>{t.currentSide ?? '-'}</TableCell>
                   <TableCell>{t.leverage}x</TableCell>
-                  <TableCell>{t.shortEntryPrice != null ? `$${parseFloat(t.shortEntryPrice).toFixed(2)}` : '-'}</TableCell>
-                  <TableCell>L{t.currentHedgeLevel}</TableCell>
+                  <TableCell>{t.entryPrice != null ? `$${parseFloat(t.entryPrice).toFixed(2)}` : '-'}</TableCell>
+                  <TableCell>#{t.currentPositionNumber ?? 0}</TableCell>
                   <TableCell align="right" sx={{ color: parseFloat(t.realizedPnl) >= 0 ? 'success.main' : 'error.main' }}>
                     ${parseFloat(t.realizedPnl).toFixed(2)}
                   </TableCell>
@@ -86,14 +88,21 @@ export function TraderDetailPage(): React.ReactElement {
         </Grid>
         <Grid item xs={12} sm={6} md={3}>
           <Card elevation={2}><CardContent>
-            <Typography variant="body2" color="text.secondary">Short Entry</Typography>
-            <Typography variant="h6">{trader.shortEntryPrice != null ? `$${parseFloat(trader.shortEntryPrice).toFixed(2)}` : 'N/A'}</Typography>
+            <Typography variant="body2" color="text.secondary">Side / Entry</Typography>
+            <Typography variant="h6">
+              {trader.currentSide ?? '—'}{' '}
+              {trader.entryPrice != null ? `$${parseFloat(trader.entryPrice).toFixed(2)}` : ''}
+            </Typography>
           </CardContent></Card>
         </Grid>
         <Grid item xs={12} sm={6} md={3}>
           <Card elevation={2}><CardContent>
-            <Typography variant="body2" color="text.secondary">Short TP</Typography>
-            <Typography variant="h6" color="success.main">{trader.shortTpPrice != null ? `$${parseFloat(trader.shortTpPrice).toFixed(2)}` : 'N/A'}</Typography>
+            <Typography variant="body2" color="text.secondary">TP / SL</Typography>
+            <Typography variant="h6">
+              {trader.tpPrice != null ? `$${parseFloat(trader.tpPrice).toFixed(2)}` : 'N/A'}
+              {' / '}
+              {trader.slPrice != null ? `$${parseFloat(trader.slPrice).toFixed(2)}` : 'N/A'}
+            </Typography>
           </CardContent></Card>
         </Grid>
         <Grid item xs={12} sm={6} md={3}>

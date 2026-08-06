@@ -1,6 +1,5 @@
 /**
- * Full trader lifecycle: Created → Short → Hedge → Short TP → Complete → Slot free.
- * Uses real SimulationExecutionProvider + mocked Prisma / AccountLedger.
+ * Strategy V2 lifecycle: open → TP (same side) / SL (reverse) → lifetime expiry.
  */
 import Decimal from 'decimal.js';
 import { SimulationExecutionProvider } from '../../src/modules/execution/SimulationExecutionProvider';
@@ -28,10 +27,10 @@ const traderConfig: TraderConfig = {
   positionSize: '100',
   leverage: 10,
   marginMode: 'ISOLATED',
-  hedgeDistance: '0.10',
-  hedgeTpPercent: '0.10',
-  hedgeSlPercent: '0.03',
-  shortTpPercent: '0.10',
+  traderLifetimeHours: 24,
+  takeProfitPercent: '0.10',
+  stopLossPercent: '0.10',
+  startingSide: 'SHORT',
   refreshInterval: 60000,
   retryLimit: 3,
   feeRate: '0.0004',
@@ -94,8 +93,8 @@ function createMockLedger() {
     getAllocation: jest.fn(async () => ({
       totalEquity: new Decimal(200),
       traderEquity: new Decimal(200),
-      positionAllocation: new Decimal(100),
-      positionNotional: new Decimal(1000),
+      positionAllocation: new Decimal(200),
+      positionNotional: new Decimal(2000),
       maxTraders: 1,
       leverage: 10,
     })),
@@ -114,7 +113,24 @@ function createMockLedger() {
   };
 }
 
-describe('Trader complete lifecycle', () => {
+async function bootTrader(
+  id: string,
+  provider: SimulationExecutionProvider,
+  db: ReturnType<typeof createMockDb>,
+  ledger: ReturnType<typeof createMockLedger>,
+  cfg: TraderConfig = traderConfig,
+): Promise<Trader> {
+  provider.onPriceUpdate('BTCUSDT', '100');
+  const trader = new Trader(id, 'BTCUSDT', 'SIMULATION', provider, cfg, db as never, ledger as never);
+  provider.on('orderUpdate', (u) => {
+    void trader.onOrderUpdate(u);
+  });
+  await trader.initialize();
+  await wait(250);
+  return trader;
+}
+
+describe('Trader V2 reversal lifecycle', () => {
   let provider: SimulationExecutionProvider;
   let db: ReturnType<typeof createMockDb>;
   let ledger: ReturnType<typeof createMockLedger>;
@@ -126,325 +142,118 @@ describe('Trader complete lifecycle', () => {
     ledger = createMockLedger();
   });
 
-  it('keeps first hedge PENDING with SL = entry × (1 − hedgeSl%)', async () => {
-    provider.onPriceUpdate('BTCUSDT', '100');
-
-    const trader = new Trader(
-      'trader-hedge-pending',
-      'BTCUSDT',
-      'SIMULATION',
-      provider,
-      traderConfig,
-      db as never,
-      ledger as never,
-    );
-    provider.on('orderUpdate', (u) => {
-      void trader.onOrderUpdate(u);
-    });
-
-    await trader.initialize();
-    await wait(200);
-
-    const summary = trader.toSummary();
-    const hedge = summary.hedgeLevels.find((h) => h.level === 1);
-    expect(hedge).toBeDefined();
-    expect(hedge!.status).toBe('PENDING');
-    expect(hedge!.entryOrderStatus === 'PENDING' || hedge!.entryOrderStatus === 'NEW').toBe(true);
-
-    const shortEntry = trader.getShortEntryPrice()!;
-    expect(hedge!.previousLevelPrice).toBe(shortEntry);
-    // SL is % below hedge entry, not equal to short entry
-    expect(hedge!.stopPrice).not.toBe(shortEntry);
-    expect(parseFloat(hedge!.entryPrice)).toBeGreaterThan(parseFloat(hedge!.stopPrice));
-    expect(parseFloat(hedge!.stopPrice)).toBeGreaterThan(parseFloat(shortEntry));
-
-    expect(summary.hedgeStats.ordersCreated).toBe(1);
-    expect(summary.hedgeStats.pendingOrders).toBe(1);
-    expect(summary.hedgeStats.activePositions).toBe(0);
-
-    // Ladder / orders consistency: open STOP_LIMIT is PENDING, not TRIGGERED
-    const entryOrder = summary.orders.find(
-      (o) => o.role === 'HEDGE' && o.type === 'STOP_LIMIT' && o.hedgeLevel === 1,
-    );
-    expect(entryOrder).toBeDefined();
-    expect(entryOrder!.status).toBe('PENDING');
-
-    trader.destroy();
-  });
-
-  it('promotes hedge to TRIGGERED only after stop is hit', async () => {
-    provider.onPriceUpdate('BTCUSDT', '100');
-
-    const trader = new Trader(
-      'trader-hedge-trigger',
-      'BTCUSDT',
-      'SIMULATION',
-      provider,
-      traderConfig,
-      db as never,
-      ledger as never,
-    );
-    provider.on('orderUpdate', (u) => {
-      void trader.onOrderUpdate(u);
-    });
-
-    await trader.initialize();
-    await wait(200);
-
-    const hedge = trader.getHedgeLevels().find((h) => h.level === 1)!;
-    expect(hedge.status).toBe('PENDING');
-
-    // Drive mark to hedge entry stop (BUY STOP: mark >= entry)
-    provider.onPriceUpdate('BTCUSDT', hedge.entryPrice);
-    await wait(400);
-
-    const after = trader.getHedgeLevels().find((h) => h.level === 1)!;
-    // May be TRIGGERED (limit active) or OPEN (filled if mark crossed limit)
-    expect(['TRIGGERED', 'OPEN', 'HIT_TP', 'HIT_SL'].includes(after.status)).toBe(true);
-    expect(after.status).not.toBe('PENDING');
-    // Position SL stays % below entry
-    expect(after.stopPrice).toBe(hedge.stopPrice);
-    expect(after.stopPrice).not.toBe(trader.getShortEntryPrice());
-
-    const stats = trader.toSummary().hedgeStats;
-    expect(stats.ordersCreated).toBeGreaterThanOrEqual(1);
-    if (after.status === 'OPEN' || after.status === 'TRIGGERED') {
-      expect(stats.ordersTriggered).toBeGreaterThanOrEqual(1);
-    }
-
-    trader.destroy();
-  });
-
-  it('runs Created → Short → Hedge → Short TP → Completed with realized PnL', async () => {
-    provider.onPriceUpdate('BTCUSDT', '100');
-
-    const trader = new Trader(
-      'trader-lifecycle-1',
-      'BTCUSDT',
-      'SIMULATION',
-      provider,
-      traderConfig,
-      db as never,
-      ledger as never,
-    );
-
-    const events: string[] = [];
-    trader.on('traderEvent', (e: { type: string }) => events.push(e.type));
-
-    // Wire sim fills into trader (same as TraderManager / server)
-    provider.on('orderUpdate', (u) => {
-      void trader.onOrderUpdate(u);
-    });
-
-    await trader.initialize();
-    await wait(200);
+  it('opens a single SHORT with TP 10% below and SL 10% above', async () => {
+    const trader = await bootTrader('t-open', provider, db, ledger);
+    const s = trader.toSummary();
 
     expect(trader.getStatus()).toBe('ACTIVE');
-    expect(trader.getShortEntryPrice()).not.toBeNull();
-    expect(trader.getShortTpPrice()).not.toBeNull();
+    expect(s.currentPosition).not.toBeNull();
+    expect(s.currentPosition!.side).toBe('SHORT');
+    expect(s.currentPosition!.number).toBe(1);
+    expect(parseFloat(s.currentPosition!.entryPrice)).toBeCloseTo(100, 0);
+    expect(parseFloat(s.currentPosition!.tpPrice)).toBeCloseTo(90, 0);
+    expect(parseFloat(s.currentPosition!.slPrice)).toBeCloseTo(110, 0);
+    expect(s.stats.positionsOpened).toBe(1);
+    expect(s.stats.shortPositions).toBe(1);
+    expect(trader.hasOpenPosition()).toBe(true);
 
-    const entry = new Decimal(trader.getShortEntryPrice()!);
-    const tp = new Decimal(trader.getShortTpPrice()!);
-    // Short TP is below entry
-    expect(tp.lt(entry)).toBe(true);
+    // Exactly one open position — no hedge ladder
+    expect(s.timeline.length).toBe(1);
+    expect(s.timeline[0]!.closeReason).toBeNull();
 
-    // Drive mark through short TP (BUY TP: mark <= stop)
-    provider.onPriceUpdate('BTCUSDT', tp.toFixed(2));
-    await wait(400);
-
-    expect(events).toContain('COMPLETED');
-    expect(trader.getStatus()).toBe('COMPLETED');
-    expect(ledger.recordRealized).toHaveBeenCalled();
-    // Realized should move (profit on short when price drops to TP)
-    expect(ledger.getRealizedPnl().toNumber()).not.toBe(0);
-
-    // Destroy cleans listeners
     trader.destroy();
-    expect(trader.listenerCount('traderEvent')).toBe(0);
   });
 
-  it('onShortTpFilled is idempotent under duplicate FILLED updates', async () => {
-    provider.onPriceUpdate('BTCUSDT', '100');
-    const trader = new Trader(
-      'trader-lifecycle-2',
-      'BTCUSDT',
-      'SIMULATION',
-      provider,
-      traderConfig,
-      db as never,
-      ledger as never,
-    );
+  it('TP opens another position in the SAME direction', async () => {
+    const trader = await bootTrader('t-tp', provider, db, ledger);
+    const tp = trader.toSummary().currentPosition!.tpPrice;
 
-    let completed = 0;
-    trader.on('traderEvent', (e: { type: string }) => {
-      if (e.type === 'COMPLETED') completed += 1;
-    });
-    provider.on('orderUpdate', (u) => {
-      void trader.onOrderUpdate(u);
-    });
+    provider.onPriceUpdate('BTCUSDT', tp);
+    trader.onPriceUpdate(tp);
+    await wait(500);
 
-    await trader.initialize();
-    await wait(200);
+    const s = trader.toSummary();
+    expect(s.stats.takeProfits).toBe(1);
+    expect(s.stats.positionsClosed).toBe(1);
+    expect(s.currentPosition).not.toBeNull();
+    expect(s.currentPosition!.side).toBe('SHORT');
+    expect(s.currentPosition!.number).toBe(2);
+    expect(s.stats.shortPositions).toBe(2);
+    expect(s.timeline[0]!.closeReason).toBe('TP');
 
-    const tp = trader.getShortTpPrice()!;
-    const shortTpId = [...db.orders.keys()].find((k) => k.startsWith('short_tp_'));
-    expect(shortTpId).toBeDefined();
-
-    // Inject two identical FILLED updates concurrently
-    const fill = {
-      clientOrderId: shortTpId!,
-      exchangeOrderId: 'x',
-      symbol: 'BTCUSDT',
-      status: 'FILLED' as const,
-      filledQuantity: trader.getShortQuantity() ?? '0.01',
-      avgFillPrice: tp,
-      fee: '0.01',
-      feeCurrency: 'USDT',
-      timestamp: Date.now(),
-    };
-
-    await Promise.all([trader.onOrderUpdate(fill), trader.onOrderUpdate(fill)]);
-    await wait(300);
-
-    expect(completed).toBe(1);
+    trader.destroy();
   });
 
-  it('sim rehydrate keeps short TP alive after "restart"', async () => {
-    provider.onPriceUpdate('BTCUSDT', '100');
-    const trader = new Trader(
-      'trader-lifecycle-3',
-      'BTCUSDT',
-      'SIMULATION',
-      provider,
-      traderConfig,
-      db as never,
-      ledger as never,
-    );
-    provider.on('orderUpdate', (u) => {
-      void trader.onOrderUpdate(u);
-    });
+  it('SL opens a position in the OPPOSITE direction', async () => {
+    const trader = await bootTrader('t-sl', provider, db, ledger);
+    const sl = trader.toSummary().currentPosition!.slPrice;
 
-    await trader.initialize();
-    await wait(200);
+    provider.onPriceUpdate('BTCUSDT', sl);
+    trader.onPriceUpdate(sl);
+    await wait(500);
 
-    const entry = trader.getShortEntryPrice()!;
-    const tp = trader.getShortTpPrice()!;
-    const qty = trader.getShortQuantity()!;
-    const shortTpId = [...db.orders.keys()].find((k) => k.startsWith('short_tp_'))!;
+    const s = trader.toSummary();
+    expect(s.stats.stopLosses).toBe(1);
+    expect(s.stats.positionsClosed).toBe(1);
+    expect(s.currentPosition).not.toBeNull();
+    expect(s.currentPosition!.side).toBe('LONG');
+    expect(s.currentPosition!.number).toBe(2);
+    expect(s.stats.longPositions).toBe(1);
+    expect(s.timeline[0]!.closeReason).toBe('SL');
 
-    // Simulate process restart: fresh provider + restored trader
-    const provider2 = new SimulationExecutionProvider(async () => [mockSymbolInfo]);
-    provider2.enablePartialFills = false;
-    provider2.onPriceUpdate('BTCUSDT', '100');
+    trader.destroy();
+  });
 
-    provider2.rehydrate({
-      positions: [{ symbol: 'BTCUSDT', side: 'SHORT', entryPrice: entry, quantity: qty, leverage: 10 }],
-      orders: [
-        {
-          clientOrderId: shortTpId,
-          traderId: 'trader-lifecycle-3',
-          symbol: 'BTCUSDT',
-          side: 'BUY',
-          type: 'TAKE_PROFIT',
-          role: 'SHORT',
-          hedgeLevel: 0,
-          quantity: qty,
-          price: tp,
-          stopPrice: tp,
-          status: 'PENDING',
-          positionSide: 'SHORT',
-        },
-      ],
-    });
+  it('never holds two simultaneous open positions', async () => {
+    const trader = await bootTrader('t-one', provider, db, ledger);
+    expect(trader.hasOpenPosition()).toBe(true);
 
-    const trader2 = new Trader(
-      'trader-lifecycle-3',
-      'BTCUSDT',
-      'SIMULATION',
-      provider2,
-      traderConfig,
-      db as never,
-      ledger as never,
-    );
+    const positions = await provider.getPositions('BTCUSDT');
+    const openSides = positions.filter((p) => new Decimal(p.quantity).abs().gt(0));
+    expect(openSides.length).toBe(1);
+    expect(openSides[0]!.side).toBe('SHORT');
+
+    trader.destroy();
+  });
+
+  it('completes after lifetime elapses', async () => {
+    const shortLife: TraderConfig = { ...traderConfig, traderLifetimeHours: 0.001 };
+    const trader = await bootTrader('t-life', provider, db, ledger, shortLife);
 
     let completed = false;
-    trader2.on('traderEvent', (e: { type: string }) => {
+    trader.on('traderEvent', (e: { type: string }) => {
       if (e.type === 'COMPLETED') completed = true;
     });
-    provider2.on('orderUpdate', (u) => {
-      void trader2.onOrderUpdate(u);
-    });
 
-    await trader2.restore({
-      shortEntryPrice: entry,
-      shortTpPrice: tp,
-      shortQuantity: qty,
-      currentHedgeLevel: 1,
-      hedgeLevels: [],
-      status: 'ACTIVE',
-      realizedPnl: '0',
-      unrealizedPnl: '0',
-      pendingClientOrderIds: [shortTpId],
-      shortClientOrderId: 'short_x',
-      shortTpClientOrderId: shortTpId,
-      activeHedgeClientOrderId: null,
-      hedgeOrderIds: [],
-    });
-
-    provider2.onPriceUpdate('BTCUSDT', tp);
-    await wait(400);
-
+    await wait(4200);
     expect(completed).toBe(true);
-    expect(trader2.getStatus()).toBe('COMPLETED');
-  });
-});
+    expect(trader.getStatus()).toBe('COMPLETED');
+    expect(trader.hasOpenPosition()).toBe(false);
+  }, 10000);
 
-describe('TraderManager replacement contract', () => {
-  it('COMPLETED frees slot and triggers refreshAndFillSlots path', async () => {
-    // Exercise the same wireTraderEvents contract: delete maps + destroy + refill hook
-    const traders = new Map<string, { destroy: () => void }>();
-    const symbolToTrader = new Map<string, string>();
-    const destroy = jest.fn();
-    traders.set('t1', { destroy });
-    symbolToTrader.set('ETHUSDT', 't1');
+  it('persists timeline of TP then SL progression', async () => {
+    const trader = await bootTrader('t-timeline', provider, db, ledger);
 
-    let refillCalled = false;
-    const onCompleted = async (event: { type: string; traderId: string; symbol: string }) => {
-      if (event.type !== 'COMPLETED') return;
-      traders.delete(event.traderId);
-      symbolToTrader.delete(event.symbol);
-      traders.get(event.traderId)?.destroy(); // already deleted — call destroy before delete in real code
-      destroy();
-      refillCalled = true;
-    };
+    // Hit TP → SHORT #2
+    let tp = trader.toSummary().currentPosition!.tpPrice;
+    provider.onPriceUpdate('BTCUSDT', tp);
+    trader.onPriceUpdate(tp);
+    await wait(500);
 
-    // Match real manager order: destroy then delete
-    const realPath = async (event: { type: string; traderId: string; symbol: string }) => {
-      const t = traders.get(event.traderId);
-      traders.delete(event.traderId);
-      symbolToTrader.delete(event.symbol);
-      t?.destroy();
-      refillCalled = true;
-    };
+    // Hit SL on SHORT #2 → LONG #3
+    const sl = trader.toSummary().currentPosition!.slPrice;
+    provider.onPriceUpdate('BTCUSDT', sl);
+    trader.onPriceUpdate(sl);
+    await wait(500);
 
-    await realPath({ type: 'COMPLETED', traderId: 't1', symbol: 'ETHUSDT' });
-    expect(traders.size).toBe(0);
-    expect(symbolToTrader.size).toBe(0);
-    expect(destroy).toHaveBeenCalled();
-    expect(refillCalled).toBe(true);
-    void onCompleted;
-  });
+    const s = trader.toSummary();
+    expect(s.stats.takeProfits).toBe(1);
+    expect(s.stats.stopLosses).toBe(1);
+    expect(s.currentPosition!.side).toBe('LONG');
+    expect(s.currentPosition!.number).toBe(3);
+    expect(s.timeline.filter((t) => t.closeReason === 'TP').length).toBe(1);
+    expect(s.timeline.filter((t) => t.closeReason === 'SL').length).toBe(1);
 
-  it('inferOrderSide restores SHORT MARKET as SELL', () => {
-    // Mirrors TraderManager.inferOrderSide
-    const infer = (o: { side?: string; role: string; type: string }): 'BUY' | 'SELL' => {
-      if (o.side === 'BUY' || o.side === 'SELL') return o.side;
-      if (o.role === 'SHORT') return o.type === 'MARKET' ? 'SELL' : 'BUY';
-      return o.type === 'STOP_LIMIT' ? 'BUY' : 'SELL';
-    };
-    expect(infer({ role: 'SHORT', type: 'MARKET' })).toBe('SELL');
-    expect(infer({ role: 'SHORT', type: 'TAKE_PROFIT' })).toBe('BUY');
-    expect(infer({ role: 'HEDGE', type: 'STOP_LIMIT' })).toBe('BUY');
-    expect(infer({ role: 'HEDGE', type: 'STOP_MARKET' })).toBe('SELL');
+    trader.destroy();
   });
 });

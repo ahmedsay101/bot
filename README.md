@@ -84,26 +84,17 @@ docker compose -f docker-compose.prod.yml up --build -d
 - Never replaces active traders when rankings change
 - Fills freed slots immediately when a trader completes
 
-### Trader Lifecycle
-1. **Initialization**: Open SHORT MARKET → place LONG STOP-LIMIT hedge
-2. **Active**: Manage hedge ladder independently from the short
-3. **Completion**: Triggered when original SHORT reaches take profit
-4. On completion: cancel all hedges → close hedge positions → persist stats → free slot → create new trader
+### Trader Lifecycle (Strategy V2 — Position Reversal)
+1. **Initialization**: Open MARKET position (`STARTING_SIDE`, default SHORT) with TP + SL
+2. **Active**: Always one position. TP → reopen same side; SL → reopen opposite side
+3. **Completion**: After `TRADER_LIFETIME_HOURS` (default 24)
+4. On completion: close position → cancel orders → persist stats → free slot → spawn replacement
 
-### Hedge Ladder (Example: Price = 10)
+### Example (Price = 100, TP/SL = 10%)
 ```
-Short Entry:  10.00  (SELL MARKET)
-Short TP:      8.00  (20% below entry)
-
-Hedge L1 Entry:  11.00  (10% above short entry)
-Hedge L1 Stop:   10.00  (= short entry)
-Hedge L1 TP:     16.50  (50% above hedge entry)
-
-If L1 SL hits → recreate same L1 order indefinitely
-If L1 TP hits → create L2:
-  L2 Entry: 18.15  (16.5 × 1.10)
-  L2 Stop:  16.50  (= previous TP)
-  L2 TP:    27.23  (18.15 × 1.50)
+Position #1 SHORT @ 100
+  TP 90 → Position #2 SHORT
+  SL 110 → Position #2 LONG
 ```
 
 ## Trading Modes
@@ -152,10 +143,10 @@ All trading parameters are configurable via environment variables or the `/api/c
 | `POSITION_SIZE` | 100 | Position size in USDT |
 | `LEVERAGE` | 10 | Futures leverage multiplier |
 | `MARGIN_MODE` | ISOLATED | ISOLATED or CROSSED |
-| `HEDGE_DISTANCE` | 0.10 | Hedge entry distance above previous reference (10%) |
-| `HEDGE_TP_PERCENT` | 0.10 | Hedge take profit above hedge entry (10%) |
-| `HEDGE_SL_PERCENT` | 0.03 | Hedge stop loss below hedge entry (3%) |
-| `SHORT_TP_PERCENT` | 0.10 | Short take profit below entry (10%) |
+| `TRADER_LIFETIME_HOURS` | 24 | Destroy + replace trader after this many hours |
+| `TAKE_PROFIT_PERCENT` | 0.10 | TP distance from entry (reopens same side) |
+| `STOP_LOSS_PERCENT` | 0.10 | SL distance from entry (reopens opposite side) |
+| `STARTING_SIDE` | SHORT | First position side (`SHORT` or `LONG`) |
 | `REFRESH_INTERVAL` | 60000 | Symbol refresh interval (ms) |
 | `FEE_RATE` | 0.0004 | Binance taker fee rate |
 | `SLIPPAGE` | 0.0001 | Simulated market slippage |

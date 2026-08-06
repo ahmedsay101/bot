@@ -8,18 +8,18 @@ export const TESTING_BASE_EQUITY = '200';
 export interface AllocationBreakdown {
   totalEquity: Decimal;
   traderEquity: Decimal;
-  /** Capital allocated to one leg (main short OR hedge). */
+  /** Capital allocated to the single active position. */
   positionAllocation: Decimal;
-  /** Notional for one leg = allocation × leverage. */
+  /** Notional = allocation × leverage. */
   positionNotional: Decimal;
   maxTraders: number;
   leverage: number;
 }
 
 /**
- * Equity → per-trader → half for main / half for hedge → notional.
+ * Equity → per-trader → full allocation → notional (Strategy V2: one position).
  * traderEquity = totalEquity / maxTraders
- * positionAllocation = traderEquity / 2
+ * positionAllocation = traderEquity
  * positionNotional = positionAllocation × leverage
  */
 export function calcAllocation(
@@ -31,7 +31,7 @@ export function calcAllocation(
   const traders = Math.max(1, maxTraders);
   const lev = Math.max(1, leverage);
   const traderEquity = equity.div(traders);
-  const positionAllocation = traderEquity.div(2);
+  const positionAllocation = traderEquity;
   const positionNotional = positionAllocation.mul(lev);
 
   return {

@@ -1,72 +1,111 @@
 /**
- * Centralized strategy calculation service.
- * Used by Trader (Live + Simulation share the same formulas).
- * Percents are decimals: 0.10 = 10%, 0.03 = 3%.
+ * Strategy V2 — single-position reversal.
+ * Percents are decimals: 0.10 = 10%.
+ * Shared by Live and Simulation (execution differs only).
  */
 import Decimal from 'decimal.js';
 
-/** Strategy knobs (decimal fractions). */
-export interface StrategyPercents {
-  /** Distance above previous reference for hedge entry (default 0.10). */
-  hedgeDistance: string;
-  /** Hedge SL below hedge entry (default 0.03). */
-  hedgeSlPercent: string;
-  /** Hedge TP above hedge entry (default 0.10). */
-  hedgeTpPercent: string;
-  /** Short TP below short entry (default 0.10). */
-  shortTpPercent: string;
+export type TradeSide = 'LONG' | 'SHORT';
+
+export interface ReversalPercents {
+  takeProfitPercent: string;
+  stopLossPercent: string;
 }
 
-export interface HedgePricePlan {
-  /** Previous reference used for entry (short entry or prior hedge TP). */
-  previousReference: string;
+export interface PositionPricePlan {
+  side: TradeSide;
   entry: Decimal;
-  stopLoss: Decimal;
   takeProfit: Decimal;
+  stopLoss: Decimal;
 }
 
-/** Short take profit: P × (1 − shortTpPercent). */
-export function calcShortTakeProfit(entryPrice: string | Decimal, shortTpPercent: string): Decimal {
-  return new Decimal(entryPrice).mul(new Decimal(1).minus(shortTpPercent));
+/** Opposite side for SL reversal. */
+export function oppositeSide(side: TradeSide): TradeSide {
+  return side === 'SHORT' ? 'LONG' : 'SHORT';
 }
 
-/** Hedge / next entry: ref × (1 + hedgeDistance). */
-export function calcHedgeEntry(previousReference: string | Decimal, hedgeDistance: string): Decimal {
-  return new Decimal(previousReference).mul(new Decimal(1).plus(hedgeDistance));
-}
-
-/** Hedge stop loss: entry × (1 − hedgeSlPercent). */
-export function calcHedgeStopLoss(hedgeEntry: string | Decimal, hedgeSlPercent: string): Decimal {
-  return new Decimal(hedgeEntry).mul(new Decimal(1).minus(hedgeSlPercent));
-}
-
-/** Hedge take profit: entry × (1 + hedgeTpPercent). */
-export function calcHedgeTakeProfit(hedgeEntry: string | Decimal, hedgeTpPercent: string): Decimal {
-  return new Decimal(hedgeEntry).mul(new Decimal(1).plus(hedgeTpPercent));
-}
-
-/** Next hedge entry from previous hedge TP fill. */
-export function calcNextHedgeEntry(previousHedgeTp: string | Decimal, hedgeDistance: string): Decimal {
-  return calcHedgeEntry(previousHedgeTp, hedgeDistance);
+/** Same side after TP. */
+export function sameSide(side: TradeSide): TradeSide {
+  return side;
 }
 
 /**
- * Build raw (unrounded) hedge prices from a previous reference level.
- * Caller applies Binance tick rounding via adjustPrice.
+ * Take profit from entry.
+ * SHORT: entry × (1 − tp%)  |  LONG: entry × (1 + tp%)
  */
-export function planHedgeFromReference(
-  previousReference: string | Decimal,
-  percents: Pick<StrategyPercents, 'hedgeDistance' | 'hedgeSlPercent' | 'hedgeTpPercent'>,
-): HedgePricePlan {
-  const entry = calcHedgeEntry(previousReference, percents.hedgeDistance);
+export function calcTakeProfit(
+  entryPrice: string | Decimal,
+  side: TradeSide,
+  takeProfitPercent: string,
+): Decimal {
+  const entry = new Decimal(entryPrice);
+  const pct = new Decimal(takeProfitPercent);
+  return side === 'SHORT'
+    ? entry.mul(new Decimal(1).minus(pct))
+    : entry.mul(new Decimal(1).plus(pct));
+}
+
+/**
+ * Stop loss from entry.
+ * SHORT: entry × (1 + sl%)  |  LONG: entry × (1 − sl%)
+ */
+export function calcStopLoss(
+  entryPrice: string | Decimal,
+  side: TradeSide,
+  stopLossPercent: string,
+): Decimal {
+  const entry = new Decimal(entryPrice);
+  const pct = new Decimal(stopLossPercent);
+  return side === 'SHORT'
+    ? entry.mul(new Decimal(1).plus(pct))
+    : entry.mul(new Decimal(1).minus(pct));
+}
+
+/** Build TP/SL around a known fill price. */
+export function planPositionPrices(
+  entryPrice: string | Decimal,
+  side: TradeSide,
+  percents: ReversalPercents,
+): PositionPricePlan {
   return {
-    previousReference: new Decimal(previousReference).toFixed(),
-    entry,
-    stopLoss: calcHedgeStopLoss(entry, percents.hedgeSlPercent),
-    takeProfit: calcHedgeTakeProfit(entry, percents.hedgeTpPercent),
+    side,
+    entry: new Decimal(entryPrice),
+    takeProfit: calcTakeProfit(entryPrice, side, percents.takeProfitPercent),
+    stopLoss: calcStopLoss(entryPrice, side, percents.stopLossPercent),
   };
 }
 
-/** Alias kept for older call sites / tests. */
-export const calcShortTp = calcShortTakeProfit;
-export const calcHedgeTp = calcHedgeTakeProfit;
+/** Market order side to open a position. */
+export function marketSideForPosition(side: TradeSide): 'BUY' | 'SELL' {
+  return side === 'LONG' ? 'BUY' : 'SELL';
+}
+
+/** Unrealized PnL for open position. */
+export function calcPositionUnrealizedPnl(
+  side: TradeSide,
+  entryPrice: string,
+  markPrice: string,
+  quantity: string,
+): Decimal {
+  const entry = new Decimal(entryPrice);
+  const mark = new Decimal(markPrice);
+  const qty = new Decimal(quantity);
+  return side === 'SHORT' ? entry.minus(mark).mul(qty) : mark.minus(entry).mul(qty);
+}
+
+/** ROI as fraction of notional (entry × qty). */
+export function calcPositionRoi(
+  side: TradeSide,
+  entryPrice: string,
+  markPrice: string,
+  quantity: string,
+): Decimal {
+  const notional = new Decimal(entryPrice).mul(quantity);
+  if (notional.isZero()) return new Decimal(0);
+  return calcPositionUnrealizedPnl(side, entryPrice, markPrice, quantity).div(notional).mul(100);
+}
+
+/** Next side after a close. */
+export function nextSideAfterClose(current: TradeSide, reason: 'TP' | 'SL'): TradeSide {
+  return reason === 'TP' ? sameSide(current) : oppositeSide(current);
+}

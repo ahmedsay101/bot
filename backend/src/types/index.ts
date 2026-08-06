@@ -1,14 +1,9 @@
-// Shared domain types for the entire backend
+// Shared domain types for the entire backend — Strategy V2 (position reversal)
 
 export type TraderStatus = 'INITIALIZING' | 'ACTIVE' | 'PAUSED' | 'COMPLETING' | 'COMPLETED' | 'FAILED';
 export type TraderMode = 'LIVE' | 'SIMULATION';
 export type OrderSide = 'BUY' | 'SELL';
 export type OrderType = 'MARKET' | 'LIMIT' | 'STOP_LIMIT' | 'TAKE_PROFIT' | 'STOP_MARKET' | 'TAKE_PROFIT_MARKET';
-/**
- * Order lifecycle (Binance-aligned + TRIGGERED for stop→limit activation):
- * PENDING → (stop touched) → TRIGGERED → FILLED | CANCELED | REJECTED | EXPIRED
- * MARKET orders go straight to FILLED (or NEW briefly).
- */
 export type OrderStatus =
   | 'PENDING'
   | 'NEW'
@@ -19,19 +14,12 @@ export type OrderStatus =
   | 'REJECTED'
   | 'EXPIRED';
 
-/** Human-readable phase for dashboard (derived from OrderStatus + position). */
-export type OrderLifecyclePhase =
-  | 'PENDING'
-  | 'TRIGGERED'
-  | 'FILLED'
-  | 'OPEN_POSITION'
-  | 'CLOSED'
-  | 'COMPLETED'
-  | 'CANCELLED'
-  | 'REJECTED';
 export type PositionSide = 'LONG' | 'SHORT' | 'BOTH';
-export type HedgeRole = 'SHORT' | 'HEDGE';
+/** Order/position role — ENTRY for the single active position (legacy HEDGE = LONG). */
+export type HedgeRole = 'SHORT' | 'HEDGE' | 'LONG';
 export type MarginMode = 'ISOLATED' | 'CROSSED';
+export type TradeSide = 'LONG' | 'SHORT';
+export type CloseReason = 'TP' | 'SL' | 'FORCE' | 'EXPIRED';
 
 export interface SymbolInfo {
   symbol: string;
@@ -67,16 +55,12 @@ export interface OrderRequest {
   side: OrderSide;
   type: OrderType;
   role: HedgeRole;
+  /** Position number (1-based). */
   hedgeLevel: number;
   quantity: string;
   price?: string;
   stopPrice?: string;
   reduceOnly?: boolean;
-  /**
-   * Binance Hedge Mode: LONG | SHORT required.
-   * One-way Mode: BOTH (default).
-   * Derived from role when omitted: SHORT→SHORT, HEDGE→LONG.
-   */
   positionSide?: PositionSide;
 }
 
@@ -121,57 +105,65 @@ export interface TraderConfig {
   positionSize: string;
   leverage: number;
   marginMode: MarginMode;
-  hedgeDistance: string;
-  hedgeTpPercent: string;
-  hedgeSlPercent: string;
-  shortTpPercent: string;
+  /** Trader lifetime in hours (default 24). */
+  traderLifetimeHours: number;
+  takeProfitPercent: string;
+  stopLossPercent: string;
+  startingSide: TradeSide;
   refreshInterval: number;
   retryLimit: number;
   feeRate: string;
   slippage: string;
   mode: TraderMode;
+  /** @deprecated unused in V2 — kept for hot-apply compatibility */
+  hedgeDistance?: string;
+  hedgeTpPercent?: string;
+  hedgeSlPercent?: string;
+  shortTpPercent?: string;
 }
 
-export interface HedgeLevel {
-  level: number;
+/** Closed / active position record for timeline. */
+export interface PositionTimelineEntry {
+  number: number;
+  side: TradeSide;
   entryPrice: string;
-  /**
-   * Position stop-loss = hedgeEntry × (1 − hedgeSlPercent).
-   * NOT the STOP-LIMIT trigger (that equals entryPrice).
-   */
-  stopPrice: string;
-  /**
-   * Previous reference used to derive entry (short entry for L1, prior hedge TP for L2+).
-   * Informational — not the position SL.
-   */
-  previousLevelPrice: string;
-  tpPrice: string;
-  /** Sized independently from main short via hedge allocation × leverage. */
+  exitPrice: string | null;
   quantity: string;
-  /**
-   * Strategy phase (engine SSOT):
-   * PENDING   — STOP-LIMIT resting; stop not reached
-   * TRIGGERED — stop hit; limit order active
-   * OPEN      — long position filled
-   * HIT_TP / HIT_SL / CANCELED — terminal
-   */
-  status: 'PENDING' | 'TRIGGERED' | 'OPEN' | 'HIT_TP' | 'HIT_SL' | 'CANCELED';
-  /** Entry STOP-LIMIT order status from the order book (mirrors OrderStatus). */
-  entryOrderStatus?: OrderStatus | null;
+  closeReason: CloseReason | null;
+  realizedPnl: string | null;
+  openedAt: string;
+  closedAt: string | null;
 }
 
-/** Hedge lifecycle counters — engine SSOT for dashboard. */
-export interface HedgeLifecycleStats {
-  currentHedgeNumber: number;
-  ordersCreated: number;
-  ordersTriggered: number;
+/** Live open position view. */
+export interface CurrentPositionView {
+  number: number;
+  side: TradeSide;
+  entryPrice: string;
+  quantity: string;
+  tpPrice: string;
+  slPrice: string;
+  unrealizedPnl: string;
+  roiPercent: string;
+  status: 'OPEN' | 'SUBMITTED';
+}
+
+export interface TraderLifecycleStats {
+  startedAt: string | null;
+  endsAt: string | null;
+  remainingMs: number;
+  runtimeMs: number;
+  currentPositionNumber: number;
   positionsOpened: number;
   positionsClosed: number;
-  stopLosses: number;
+  winningPositions: number;
+  losingPositions: number;
   takeProfits: number;
-  recreations: number;
-  pendingOrders: number;
-  activePositions: number;
+  stopLosses: number;
+  longPositions: number;
+  shortPositions: number;
+  winRate: string;
+  totalFees: string;
 }
 
 /** Compact trader view for REST + dashboard WebSocket snapshots. */
@@ -181,32 +173,19 @@ export interface TraderSummaryView {
   status: TraderStatus;
   realizedPnl: string;
   unrealizedPnl: string;
-  /** Main short unrealized only */
-  shortUnrealizedPnl: string;
-  hedgeLevel: number;
-  /** @deprecated use hedgeStats.stopLosses */
-  hedgeLosses: number;
-  /** @deprecated use hedgeStats.takeProfits */
-  hedgeWins: number;
-  entryPrice: string | null;
-  tpPrice: string | null;
-  /** Main short has no SL by strategy design */
-  shortSl: null;
+  totalPnl: string;
   markPrice: string;
-  shortQuantity: string | null;
+  leverage: number;
+  currentPosition: CurrentPositionView | null;
+  stats: TraderLifecycleStats;
+  timeline: PositionTimelineEntry[];
+  distanceToTpPct: string | null;
+  distanceToTpAbs: string | null;
+  distanceToSlPct: string | null;
+  distanceToSlAbs: string | null;
   openOrders: number;
   pendingOrders: number;
   closedOrders: number;
-  /** @deprecated use hedgeStats.recreations */
-  hedgeRecreates: number;
-  /** Full hedge lifecycle stats (SSOT). */
-  hedgeStats: HedgeLifecycleStats;
-  /** Distance from mark to short TP as fraction of entry (positive = still above TP for short) */
-  distanceToTpPct: string | null;
-  distanceToTpAbs: string | null;
-  /** realized + unrealized — computed only in the engine */
-  totalPnl: string;
-  hedgeUnrealizedPnl: string;
   orders: Array<{
     clientOrderId: string;
     role: HedgeRole;
@@ -218,7 +197,6 @@ export interface TraderSummaryView {
     hedgeLevel: number;
     quantity: string;
   }>;
-  hedgeLevels: HedgeLevel[];
 }
 
 export type DashboardEvent =
@@ -248,31 +226,6 @@ export type DashboardEvent =
       };
     };
 
-export interface TraderState {
-  id: string;
-  symbol: string;
-  mode: TraderMode;
-  status: TraderStatus;
-  leverage: number;
-  marginMode: string;
-  initialCapital: string;
-  positionSize: string;
-  shortEntryPrice: string | null;
-  shortTpPrice: string | null;
-  currentHedgeLevel: number;
-  hedgeLevels: HedgeLevel[];
-  realizedPnl: string;
-  unrealizedPnl: string;
-  createdAt: Date;
-  updatedAt: Date;
-}
-
-export interface PriceUpdate {
-  symbol: string;
-  price: string;
-  timestamp: number;
-}
-
 export interface OrderUpdate {
   clientOrderId: string;
   exchangeOrderId: string;
@@ -285,19 +238,37 @@ export interface OrderUpdate {
   timestamp: number;
 }
 
-export interface WebSocketEvent {
-  type: 'PRICE_UPDATE' | 'ORDER_UPDATE' | 'ACCOUNT_UPDATE';
-  data: PriceUpdate | OrderUpdate | AccountUpdate;
+export interface PriceUpdate {
+  symbol: string;
+  price: string;
+  timestamp: number;
 }
 
 export interface AccountUpdate {
   balances: Array<{ asset: string; balance: string; availableBalance: string }>;
-  positions: PositionInfo[];
+  positions: Array<{
+    symbol: string;
+    side: 'LONG' | 'SHORT';
+    entryPrice: string;
+    quantity: string;
+    unrealizedPnl: string;
+    leverage: number;
+    liquidationPrice: string;
+    markPrice: string;
+  }>;
   timestamp: number;
 }
 
+export interface AccountInfo {
+  totalWalletBalance: string;
+  availableBalance: string;
+  totalUnrealizedProfit: string;
+  totalMarginBalance: string;
+  positions: PositionInfo[];
+}
+
 export interface SystemHealth {
-  status: 'healthy' | 'degraded' | 'unhealthy';
+  status: string;
   uptime: number;
   database: boolean;
   redis: boolean;
@@ -307,17 +278,4 @@ export interface SystemHealth {
   cpuPercent: number;
   memoryMb: number;
   timestamp: Date;
-}
-
-export interface DashboardSummary {
-  activeTraders: number;
-  totalTraders: number;
-  completedTraders: number;
-  topGainers: Ticker24h[];
-  activeSymbols: string[];
-  realizedPnl: string;
-  unrealizedPnl: string;
-  dailyPnl: string;
-  winRate: string;
-  health: SystemHealth;
 }

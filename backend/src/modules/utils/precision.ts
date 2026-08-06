@@ -1,136 +1,86 @@
 import Decimal from 'decimal.js';
 import type { SymbolInfo } from '../../types';
 
-Decimal.set({ precision: 28, rounding: Decimal.ROUND_HALF_UP });
-
-/**
- * Round a price to the symbol's tick size.
- */
-export function roundToTickSize(price: Decimal | string, tickSize: string): Decimal {
-  const d = new Decimal(price);
-  const tick = new Decimal(tickSize);
-  return d.div(tick).toDecimalPlaces(0, Decimal.ROUND_HALF_UP).mul(tick);
-}
-
-/**
- * Round a quantity to the symbol's step size.
- */
-export function roundToStepSize(qty: Decimal | string, stepSize: string): Decimal {
-  const d = new Decimal(qty);
-  const step = new Decimal(stepSize);
-  return d.div(step).toDecimalPlaces(0, Decimal.ROUND_DOWN).mul(step);
-}
-
-/**
- * Format a price to the symbol's price precision.
- */
-export function formatPrice(price: Decimal | string, pricePrecision: number): string {
-  const precision = Math.max(0, pricePrecision);
-  return new Decimal(price).toDecimalPlaces(precision, Decimal.ROUND_HALF_UP).toFixed(precision);
-}
-
-/** Decimal places implied by a tick/step size (e.g. 0.00001 → 5). */
 export function countDecimals(value: string): number {
-  const normalized = new Decimal(value).toFixed();
-  const idx = normalized.indexOf('.');
-  if (idx === -1) return 0;
-  return normalized.length - idx - 1;
+  const s = value.includes('e') || value.includes('E')
+    ? new Decimal(value).toFixed()
+    : value;
+  const i = s.indexOf('.');
+  return i < 0 ? 0 : s.length - i - 1;
+}
+
+export function roundToTickSize(price: string | Decimal, tickSize: string): Decimal {
+  const p = new Decimal(price);
+  const tick = new Decimal(tickSize);
+  if (tick.isZero()) return p;
+  return p.div(tick).toDecimalPlaces(0, Decimal.ROUND_HALF_UP).mul(tick);
+}
+
+export function roundToStepSize(qty: string | Decimal, stepSize: string): Decimal {
+  const q = new Decimal(qty);
+  const step = new Decimal(stepSize);
+  if (step.isZero()) return q;
+  return q.div(step).toDecimalPlaces(0, Decimal.ROUND_DOWN).mul(step);
 }
 
 /**
- * Format a quantity to the symbol's quantity precision.
+ * Round price to exchange tick. Uses max(pricePrecision, tick decimals)
+ * so micro-priced alts never truncate to zero.
  */
-export function formatQuantity(qty: Decimal | string, quantityPrecision: number): string {
-  return new Decimal(qty).toDecimalPlaces(quantityPrecision, Decimal.ROUND_DOWN).toFixed(quantityPrecision);
+export function adjustPrice(price: string | Decimal, info: SymbolInfo): string {
+  const p = new Decimal(price);
+  if (!p.isFinite() || p.lte(0)) {
+    throw new Error(`Invalid price: ${String(price)}`);
+  }
+  const tickDecimals = countDecimals(info.tickSize);
+  const decimals = Math.max(info.pricePrecision, tickDecimals);
+  const rounded = roundToTickSize(p, info.tickSize);
+  const out = rounded.toFixed(decimals);
+  if (new Decimal(out).lte(0)) {
+    throw new Error(`Price rounded to zero for ${info.symbol}: ${String(price)}`);
+  }
+  return out;
 }
 
-/**
- * Validate a price satisfies Binance filters and return the adjusted value.
- * Uses max(pricePrecision, tickSize decimals) so micro-priced alts never truncate to 0.
- */
-export function adjustPrice(price: Decimal | string, symbolInfo: SymbolInfo): string {
-  const input = new Decimal(price);
-  if (!input.isFinite() || input.lte(0)) {
-    throw new Error(`Invalid price ${price} for ${symbolInfo.symbol}`);
+export function adjustQuantity(qty: string | Decimal, info: SymbolInfo): string {
+  const rounded = roundToStepSize(qty, info.stepSize);
+  const min = new Decimal(info.minQty);
+  if (rounded.lt(min)) {
+    throw new Error(`Quantity ${rounded.toFixed()} below minQty ${info.minQty} for ${info.symbol}`);
   }
-  const tick = new Decimal(symbolInfo.tickSize);
-  if (!tick.isFinite() || tick.lte(0)) {
-    throw new Error(`Invalid tickSize ${symbolInfo.tickSize} for ${symbolInfo.symbol}`);
-  }
-
-  const adjusted = roundToTickSize(input, symbolInfo.tickSize);
-  if (adjusted.lte(0)) {
-    throw new Error(
-      `Price ${price} rounds to zero with tickSize=${symbolInfo.tickSize} for ${symbolInfo.symbol}`,
-    );
-  }
-
-  // Binance pricePrecision can be smaller than tick decimals on some alts — never truncate below tick
-  const precision = Math.max(symbolInfo.pricePrecision, countDecimals(symbolInfo.tickSize));
-  const formatted = formatPrice(adjusted, precision);
-  if (new Decimal(formatted).lte(0)) {
-    throw new Error(
-      `Formatted price is zero for ${symbolInfo.symbol} (raw=${price}, tick=${symbolInfo.tickSize}, precision=${precision})`,
-    );
-  }
-  return formatted;
+  return rounded.toFixed(info.quantityPrecision);
 }
 
-/**
- * Validate and adjust a quantity; throws if below minimums.
- */
-export function adjustQuantity(qty: Decimal | string, symbolInfo: SymbolInfo): string {
-  const adjusted = roundToStepSize(new Decimal(qty), symbolInfo.stepSize);
-  if (adjusted.lt(symbolInfo.minQty)) {
-    throw new Error(
-      `Quantity ${adjusted.toFixed()} is below minimum ${symbolInfo.minQty} for ${symbolInfo.symbol}`,
-    );
-  }
-  return formatQuantity(adjusted, symbolInfo.quantityPrecision);
-}
-
-/**
- * Check that the notional value (price * qty) meets Binance minimum.
- */
-export function validateNotional(price: string, quantity: string, symbolInfo: SymbolInfo): void {
+export function validateNotional(price: string, quantity: string, info: SymbolInfo): void {
   const notional = new Decimal(price).mul(quantity);
-  if (notional.lt(symbolInfo.minNotional)) {
+  const min = new Decimal(info.minNotional);
+  if (notional.lt(min)) {
     throw new Error(
-      `Notional ${notional.toFixed()} is below minimum ${symbolInfo.minNotional} for ${symbolInfo.symbol}`,
+      `Notional ${notional.toFixed()} below minNotional ${info.minNotional} for ${info.symbol}`,
     );
   }
 }
 
-// Strategy price formulas — single source in modules/calc/strategy.ts
+// Strategy V2 — re-export from calc/strategy
 export {
-  calcShortTakeProfit as calcShortTp,
-  calcHedgeEntry,
-  calcHedgeTakeProfit as calcHedgeTp,
-  calcHedgeStopLoss,
-  calcNextHedgeEntry,
-  planHedgeFromReference,
+  calcTakeProfit,
+  calcStopLoss,
+  planPositionPrices,
+  oppositeSide,
+  nextSideAfterClose,
+  marketSideForPosition,
+  calcPositionUnrealizedPnl,
+  calcPositionRoi,
 } from '../calc/strategy';
 
-/**
- * Calculate unrealized PnL for a SHORT position.
- * (entryPrice - markPrice) * quantity
- */
 export function calcShortUnrealizedPnl(entryPrice: string, markPrice: string, quantity: string): Decimal {
   return new Decimal(entryPrice).minus(markPrice).mul(quantity);
 }
 
-/**
- * Calculate unrealized PnL for a LONG position.
- * (markPrice - entryPrice) * quantity
- */
 export function calcLongUnrealizedPnl(entryPrice: string, markPrice: string, quantity: string): Decimal {
   return new Decimal(markPrice).minus(entryPrice).mul(quantity);
 }
 
-/**
- * Calculate fee for a trade.
- * price * quantity * feeRate
- */
 export function calcFee(price: string, quantity: string, feeRate: string): Decimal {
   return new Decimal(price).mul(quantity).mul(feeRate);
 }

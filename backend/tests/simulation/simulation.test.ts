@@ -2,7 +2,7 @@
  * Simulation — Binance Futures-aligned order lifecycle using real mark ticks.
  */
 import { SimulationExecutionProvider } from '../../src/modules/execution/SimulationExecutionProvider';
-import { calcHedgeEntry, calcHedgeTp, calcNextHedgeEntry, calcShortTp } from '../../src/modules/utils/precision';
+import { calcTakeProfit, calcStopLoss, nextSideAfterClose } from '../../src/modules/utils/precision';
 import type { OrderUpdate, SymbolInfo } from '../../src/types';
 
 const mockSymbolInfo: SymbolInfo = {
@@ -219,7 +219,7 @@ describe('SimulationExecutionProvider — Binance-aligned', () => {
     expect(updates[0]?.status).toBe('FILLED');
   });
 
-  it('hedge mode holds SHORT and LONG simultaneously via positionSide', async () => {
+  it('dual-side mode tracks LONG and SHORT positionSides independently', async () => {
     await provider.setHedgeMode(true);
     provider.onPriceUpdate('BTCUSDT', '100');
 
@@ -230,7 +230,7 @@ describe('SimulationExecutionProvider — Binance-aligned', () => {
       side: 'SELL',
       type: 'MARKET',
       role: 'SHORT',
-      hedgeLevel: 0,
+      hedgeLevel: 1,
       quantity: '0.01',
       positionSide: 'SHORT',
     });
@@ -240,8 +240,8 @@ describe('SimulationExecutionProvider — Binance-aligned', () => {
       symbol: 'BTCUSDT',
       side: 'BUY',
       type: 'MARKET',
-      role: 'HEDGE',
-      hedgeLevel: 1,
+      role: 'LONG',
+      hedgeLevel: 2,
       quantity: '0.01',
       positionSide: 'LONG',
     });
@@ -277,11 +277,13 @@ describe('SimulationExecutionProvider — Binance-aligned', () => {
   });
 });
 
-describe('Hedge ladder mathematics', () => {
-  it('matches strategy spec', () => {
-    expect(calcHedgeEntry('100', '0.10').toFixed(2)).toBe('110.00');
-    expect(calcHedgeTp('110', '0.10').toFixed(2)).toBe('121.00');
-    expect(calcShortTp('100', '0.10').toFixed(2)).toBe('90.00');
-    expect(calcNextHedgeEntry('121', '0.10').toFixed(2)).toBe('133.10');
+describe('Reversal mathematics', () => {
+  it('matches strategy V2 TP/SL and side rules', () => {
+    expect(calcTakeProfit('100', 'SHORT', '0.10').toFixed(2)).toBe('90.00');
+    expect(calcStopLoss('100', 'SHORT', '0.10').toFixed(2)).toBe('110.00');
+    expect(calcTakeProfit('100', 'LONG', '0.10').toFixed(2)).toBe('110.00');
+    expect(calcStopLoss('100', 'LONG', '0.10').toFixed(2)).toBe('90.00');
+    expect(nextSideAfterClose('SHORT', 'TP')).toBe('SHORT');
+    expect(nextSideAfterClose('SHORT', 'SL')).toBe('LONG');
   });
 });

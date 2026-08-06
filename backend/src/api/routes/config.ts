@@ -10,7 +10,6 @@ export function createConfigRouter(db: PrismaClient, traderManager?: TraderManag
     if (config == null) {
       config = await db.configuration.create({ data: { id: 'singleton' } });
     }
-    // Prefer live engine values when available
     if (traderManager != null) {
       const runtime = traderManager.getRuntimeConfig();
       res.json({
@@ -19,10 +18,10 @@ export function createConfigRouter(db: PrismaClient, traderManager?: TraderManag
           ...config,
           maxTraders: runtime.maxTraders,
           leverage: runtime.leverage,
-          hedgeDistance: runtime.hedgeDistance,
-          hedgeTpPercent: runtime.hedgeTpPercent,
-          hedgeSlPercent: runtime.hedgeSlPercent,
-          shortTpPercent: runtime.shortTpPercent,
+          traderLifetimeHours: runtime.traderLifetimeHours,
+          takeProfitPercent: runtime.takeProfitPercent,
+          stopLossPercent: runtime.stopLossPercent,
+          startingSide: runtime.startingSide,
           feeRate: runtime.feeRate,
           slippage: runtime.slippage,
           refreshInterval: runtime.refreshInterval,
@@ -40,8 +39,8 @@ export function createConfigRouter(db: PrismaClient, traderManager?: TraderManag
   router.patch('/', async (req: Request, res: Response) => {
     const allowed = [
       'maxTraders', 'initialCapital', 'positionSize', 'leverage',
-      'marginMode', 'hedgeDistance', 'hedgeTpPercent', 'hedgeSlPercent',
-      'shortTpPercent', 'refreshInterval', 'retryLimit', 'feeRate',
+      'marginMode', 'traderLifetimeHours', 'takeProfitPercent', 'stopLossPercent',
+      'startingSide', 'refreshInterval', 'retryLimit', 'feeRate',
       'slippage', 'isPaused',
     ] as const;
 
@@ -58,13 +57,8 @@ export function createConfigRouter(db: PrismaClient, traderManager?: TraderManag
       create: { id: 'singleton', ...update },
     });
 
-    // Hot-apply to running engine (no restart required)
-    if (traderManager != null) {
+    if (traderManager != null && Object.keys(update).length > 0) {
       traderManager.applyRuntimeConfig(update);
-      if (typeof update.isPaused === 'boolean') {
-        if (update.isPaused) await traderManager.pause();
-        else await traderManager.resume();
-      }
     }
 
     res.json({ success: true, data: config });
