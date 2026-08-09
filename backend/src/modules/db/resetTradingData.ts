@@ -16,7 +16,7 @@ export interface ResetTradingDataResult {
 /**
  * Wipe all trading history so the next boot starts fresh.
  * Keeps Configuration (boot re-syncs it from env).
- * Resets testing AccountLedger to 200 USDT and clears GlobalStatistics.
+ * Resets testing AccountLedger to TESTING_BASE_EQUITY and clears GlobalStatistics.
  */
 export async function resetTradingData(db: PrismaClient): Promise<ResetTradingDataResult> {
   // Children first (FK → Trader)

@@ -237,7 +237,7 @@ model GlobalStatistics {
 
 model AccountLedger {
   id              String   @id @default("singleton")
-  balance         String   @default("200")
+  balance         String   @default("2000")
   realizedPnl     String   @default("0")
   totalFees       String   @default("0")
   dailyPnl        String   @default("0")

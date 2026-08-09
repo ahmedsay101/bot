@@ -38,7 +38,7 @@ Testing:
 - Real Binance mark prices (WebSocket + REST fallback).
 - Simulated execution — Binance-aligned order state machine.
 - STOP_MARKET / TAKE_PROFIT evaluated on mark updates.
-- Starting Balance = 200 USDT.
+- Starting Balance = 2000 USDT.
 - Same calculation engine as Live.
 - Open conditionals rehydrated into the sim book after restart.
 
@@ -75,6 +75,6 @@ Created → Assigned Symbol → Open First Position → Trade Continuously → 2
 - Persistent state + restart recovery
 - Runtime config PATCH hot-applies to TraderManager
 - Boot syncs Configuration fields from env
-- `RESET_DB_ON_START=true` (default) wipes traders/orders/positions/trades + resets sim ledger to 200 on every boot
+- `RESET_DB_ON_START=true` (default) wipes traders/orders/positions/trades + resets sim ledger to 2000 on every boot
 - RiskManager validates every placed order
 - No duplicated business logic

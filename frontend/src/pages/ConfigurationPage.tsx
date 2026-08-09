@@ -30,8 +30,8 @@ export function ConfigurationPage(): React.ReactElement {
     <Box>
       <Typography variant="h4" fontWeight="bold" mb={3}>Configuration</Typography>
       <Alert severity="info" sx={{ mb: 2 }}>
-        Equity allocation is automatic: Testing = 200 USDT + realized PnL; Live = Binance Futures balance.
-        Each trader gets Equity / MaxTraders as margin for a single position (notional = trader equity × leverage).
+        Equity allocation is automatic: Testing = 2000 USDT + realized PnL; Live = Binance Futures balance.
+        Each trader gets Equity / MaxTraders as allocation, sized by capital steps (notional = step amount × leverage).
       </Alert>
       {saved && <Alert severity="success" sx={{ mb: 2 }}>Configuration saved successfully</Alert>}
 

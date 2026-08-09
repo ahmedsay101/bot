@@ -32,9 +32,9 @@ describe('allocation', () => {
   });
 
   it('testing equity = 200 + realized pnl', () => {
-    expect(TESTING_BASE_EQUITY).toBe('200');
-    expect(calcTestingEquity('15.5').toFixed(2)).toBe('215.50');
-    expect(calcTestingEquity('-10').toFixed(2)).toBe('190.00');
+    expect(TESTING_BASE_EQUITY).toBe('2000');
+    expect(calcTestingEquity('15.5').toFixed(2)).toBe('2015.50');
+    expect(calcTestingEquity('-10').toFixed(2)).toBe('1990.00');
   });
 
   it('total pnl = realized + unrealized', () => {

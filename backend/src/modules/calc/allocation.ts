@@ -3,7 +3,7 @@ import type { SymbolInfo } from '../../types';
 import { adjustQuantity, validateNotional } from '../utils/precision';
 
 /** Fixed testing-mode base equity (USDT). Realized PnL is added on top. */
-export const TESTING_BASE_EQUITY = '200';
+export const TESTING_BASE_EQUITY = '2000';
 
 export interface AllocationBreakdown {
   totalEquity: Decimal;

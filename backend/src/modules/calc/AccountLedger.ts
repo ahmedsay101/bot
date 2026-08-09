@@ -16,7 +16,7 @@ const log = createContextLogger('AccountLedger');
 
 /**
  * Single source of truth for Balance / Equity / Realized / fees.
- * Testing: persisted AccountLedger row, starts at 200 USDT.
+ * Testing: persisted AccountLedger row, starts at TESTING_BASE_EQUITY USDT.
  * Live: Binance wallet + maintMargin via reconcileFromBinance.
  */
 export class AccountLedger {

@@ -13,8 +13,8 @@ import {
 } from '../../src/modules/calc/maintenanceMargin';
 
 describe('accounting', () => {
-  it('starts testing balance at 200', () => {
-    expect(testingStartingBalance().toFixed(0)).toBe('200');
+  it('starts testing balance at 2000', () => {
+    expect(testingStartingBalance().toFixed(0)).toBe('2000');
   });
 
   it('equity = balance + unrealized', () => {
