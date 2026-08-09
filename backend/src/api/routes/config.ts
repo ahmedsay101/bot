@@ -22,6 +22,7 @@ export function createConfigRouter(db: PrismaClient, traderManager?: TraderManag
           takeProfitPercent: runtime.takeProfitPercent,
           stopLossPercent: runtime.stopLossPercent,
           startingSide: runtime.startingSide,
+          capitalSteps: runtime.capitalSteps,
           feeRate: runtime.feeRate,
           slippage: runtime.slippage,
           refreshInterval: runtime.refreshInterval,
@@ -40,7 +41,7 @@ export function createConfigRouter(db: PrismaClient, traderManager?: TraderManag
     const allowed = [
       'maxTraders', 'initialCapital', 'positionSize', 'leverage',
       'marginMode', 'traderLifetimeHours', 'takeProfitPercent', 'stopLossPercent',
-      'startingSide', 'refreshInterval', 'retryLimit', 'feeRate',
+      'startingSide', 'capitalSteps', 'refreshInterval', 'retryLimit', 'feeRate',
       'slippage', 'isPaused',
     ] as const;
 

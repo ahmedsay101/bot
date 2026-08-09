@@ -30,6 +30,12 @@ import {
   calcPositionRoi,
 } from '../utils/precision';
 import { calcQuantityFromNotional } from '../calc/allocation';
+import {
+  buildStepLadder,
+  calcStepAmount,
+  calcStepNotional,
+  nextStepAfterClose,
+} from '../calc/capitalSteps';
 import type { AccountLedger } from '../calc/AccountLedger';
 import { RiskManager } from '../risk/RiskManager';
 import { createContextLogger } from '../logger';
@@ -73,6 +79,18 @@ export class Trader extends EventEmitter {
   private positionOpen = false;
   private openingNext = false;
   private closeHandled = false;
+
+  /** Fixed at trader create — step amounts never follow PnL. */
+  private traderAllocatedAmount = new Decimal(0);
+  private capitalSteps = 5;
+  private currentStep = 1;
+  private currentStepAmount = new Decimal(0);
+  private highestStepReached = 1;
+  private lowestStepReached = 1;
+  private stepIncreases = 0;
+  private stepDecreases = 0;
+  private step1Trades = 0;
+  private maxStepTrades = 0;
 
   private positionsOpened = 0;
   private positionsClosed = 0;
@@ -149,11 +167,27 @@ export class Trader extends EventEmitter {
     const hours = Math.max(0.001, this.traderConfig.traderLifetimeHours);
     this.endsAt = new Date(this.startedAt.getTime() + hours * 3600_000);
 
+    // Freeze allocation + capital steps for this trader's lifetime
+    const allocation = await this.accountLedger.getAllocation(
+      this.traderConfig.maxTraders,
+      this.traderConfig.leverage,
+    );
+    this.traderAllocatedAmount = allocation.traderEquity;
+    this.capitalSteps = Math.max(1, Math.floor(this.traderConfig.capitalSteps));
+    this.currentStep = 1;
+    this.currentStepAmount = calcStepAmount(this.traderAllocatedAmount, this.capitalSteps, 1);
+    this.highestStepReached = 1;
+    this.lowestStepReached = 1;
+
     this.lifecycle('TRADER_CREATE', {
       mode: this.mode,
       lifetimeHours: hours,
       endsAt: this.endsAt.toISOString(),
       startingSide: this.traderConfig.startingSide,
+      traderAllocatedAmount: this.traderAllocatedAmount.toFixed(8),
+      capitalSteps: this.capitalSteps,
+      currentStep: this.currentStep,
+      currentStepAmount: this.currentStepAmount.toFixed(8),
     });
 
     await this.persistTraderState();
@@ -180,6 +214,16 @@ export class Trader extends EventEmitter {
     tpPrice: string | null;
     slPrice: string | null;
     quantity: string | null;
+    traderAllocatedAmount: string;
+    capitalSteps: number;
+    currentStep: number;
+    currentStepAmount: string;
+    highestStepReached: number;
+    lowestStepReached: number;
+    stepIncreases: number;
+    stepDecreases: number;
+    step1Trades: number;
+    maxStepTrades: number;
     positionsOpened: number;
     positionsClosed: number;
     winningPositions: number;
@@ -218,6 +262,18 @@ export class Trader extends EventEmitter {
     this.tpPrice = state.tpPrice;
     this.slPrice = state.slPrice;
     this.quantity = state.quantity;
+    this.traderAllocatedAmount = new Decimal(state.traderAllocatedAmount || '0');
+    this.capitalSteps = Math.max(1, state.capitalSteps || this.traderConfig.capitalSteps || 5);
+    this.currentStep = Math.max(1, Math.min(this.capitalSteps, state.currentStep || 1));
+    this.currentStepAmount = state.currentStepAmount && state.currentStepAmount !== '0'
+      ? new Decimal(state.currentStepAmount)
+      : calcStepAmount(this.traderAllocatedAmount, this.capitalSteps, this.currentStep);
+    this.highestStepReached = state.highestStepReached || this.currentStep;
+    this.lowestStepReached = state.lowestStepReached || this.currentStep;
+    this.stepIncreases = state.stepIncreases || 0;
+    this.stepDecreases = state.stepDecreases || 0;
+    this.step1Trades = state.step1Trades || 0;
+    this.maxStepTrades = state.maxStepTrades || 0;
     this.positionsOpened = state.positionsOpened;
     this.positionsClosed = state.positionsClosed;
     this.winningPositions = state.winningPositions;
@@ -251,13 +307,33 @@ export class Trader extends EventEmitter {
       void this.complete('EXPIRED');
     } else {
       this.scheduleLifetimeEnd();
+      // Resume continuous trading if restart landed between close and next open
+      if (this.status === 'ACTIVE' && !this.positionOpen) {
+        void this.resumeIdlePosition();
+      }
     }
 
     log.info(`Trader ${this.id} restored for ${this.symbol}`, {
       side: this.currentSide,
       pos: this.currentPositionNumber,
+      step: this.currentStep,
+      allocated: this.traderAllocatedAmount.toFixed(8),
       endsAt: this.endsAt?.toISOString(),
     });
+  }
+
+  /** After restart with no open position — reopen using last close reason + current step. */
+  private async resumeIdlePosition(): Promise<void> {
+    if (this.positionOpen || this.openingNext || this.completing) return;
+    const last = this.timeline[this.timeline.length - 1];
+    let side: TradeSide = this.traderConfig.startingSide;
+    if (last != null && (last.closeReason === 'TP' || last.closeReason === 'SL')) {
+      side = nextSideAfterClose(last.side, last.closeReason);
+    } else if (this.currentSide != null) {
+      side = this.currentSide;
+    }
+    this.lifecycle('RESUME_IDLE', { side, step: this.currentStep });
+    await this.openPosition(side);
   }
 
   async resumeCompleting(): Promise<void> {
@@ -374,7 +450,13 @@ export class Trader extends EventEmitter {
     this.openingNext = true;
     this.closeHandled = false;
     try {
-      const notional = await this.resolvePositionNotional();
+      // Refresh step amount from frozen allocation (SSOT)
+      this.currentStepAmount = calcStepAmount(
+        this.traderAllocatedAmount,
+        this.capitalSteps,
+        this.currentStep,
+      );
+      const notional = this.resolvePositionNotional();
       const mark = this.markPrice !== '0'
         ? this.markPrice
         : await this.executionProvider.getMarkPrice(this.symbol);
@@ -387,6 +469,9 @@ export class Trader extends EventEmitter {
       this.entryPrice = null;
       this.tpPrice = null;
       this.slPrice = null;
+
+      if (this.currentStep === 1) this.step1Trades += 1;
+      if (this.currentStep === this.capitalSteps) this.maxStepTrades += 1;
 
       const clientOrderId = `entry_${this.id}_p${this.currentPositionNumber}_${Date.now()}`;
       this.entryClientOrderId = clientOrderId;
@@ -428,6 +513,9 @@ export class Trader extends EventEmitter {
         number: this.currentPositionNumber,
         side,
         qty,
+        capitalStep: this.currentStep,
+        stepAmount: this.currentStepAmount.toFixed(8),
+        notional: notional.toFixed(8),
       });
     } finally {
       this.openingNext = false;
@@ -460,9 +548,15 @@ export class Trader extends EventEmitter {
     this.timeline.push({
       number: this.currentPositionNumber,
       side: this.currentSide,
+      capitalStep: this.currentStep,
+      stepAmount: this.currentStepAmount.toFixed(8),
       entryPrice: this.entryPrice,
       exitPrice: null,
       quantity: this.quantity ?? '0',
+      leverage: this.traderConfig.leverage,
+      takeProfit: this.tpPrice,
+      stopLoss: this.slPrice,
+      fees: fee.toFixed(8),
       closeReason: null,
       realizedPnl: null,
       openedAt: new Date().toISOString(),
@@ -472,6 +566,12 @@ export class Trader extends EventEmitter {
     await this.upsertPosition(this.currentSide, this.entryPrice, this.quantity ?? '0', true);
     await this.persistTrade(update, roleForSide(this.currentSide), this.currentPositionNumber, fee.neg().toFixed(8));
     await this.placeProtectiveOrders();
+    // Sync TP/SL onto timeline after protective prices are set
+    const lastOpen = this.timeline[this.timeline.length - 1];
+    if (lastOpen != null && lastOpen.number === this.currentPositionNumber) {
+      lastOpen.takeProfit = this.tpPrice;
+      lastOpen.stopLoss = this.slPrice;
+    }
     await this.persistTraderState();
     this.emitSnapshot();
 
@@ -481,6 +581,8 @@ export class Trader extends EventEmitter {
       entry: this.entryPrice,
       tp: this.tpPrice,
       sl: this.slPrice,
+      capitalStep: this.currentStep,
+      stepAmount: this.currentStepAmount.toFixed(8),
     });
   }
 
@@ -604,6 +706,7 @@ export class Trader extends EventEmitter {
       last.exitPrice = fill;
       last.closeReason = reason;
       last.realizedPnl = net.toFixed(8);
+      last.fees = new Decimal(last.fees ?? '0').plus(fee).toFixed(8);
       last.closedAt = new Date().toISOString();
     }
 
@@ -616,11 +719,18 @@ export class Trader extends EventEmitter {
     this.slClientOrderId = null;
     this.entryClientOrderId = null;
 
+    // Advance capital step exactly once (guarded by closeHandled / handledCloseIds)
+    if (reason === 'TP' || reason === 'SL') {
+      this.applyStepProgression(reason);
+    }
+
     this.lifecycle(reason === 'TP' ? 'POSITION_TP' : reason === 'SL' ? 'POSITION_SL' : 'POSITION_CLOSED', {
       number: this.currentPositionNumber,
       side,
       fill,
       net: net.toFixed(8),
+      nextStep: this.currentStep,
+      nextStepAmount: this.currentStepAmount.toFixed(8),
     });
 
     await this.persistTraderState();
@@ -633,9 +743,25 @@ export class Trader extends EventEmitter {
       return;
     }
 
-    // Continuous trading: open next immediately
+    // Continuous trading: open next immediately (direction + capital step already updated)
     const next = nextSideAfterClose(side, reason === 'TP' ? 'TP' : 'SL');
     await this.openPosition(next);
+  }
+
+  /** TP → step+1 (cap); SL → step−1 (floor 1). Idempotent only via close handlers. */
+  private applyStepProgression(reason: 'TP' | 'SL'): void {
+    const prev = this.currentStep;
+    const next = nextStepAfterClose(prev, reason, this.capitalSteps);
+    if (next > prev) this.stepIncreases += 1;
+    if (next < prev) this.stepDecreases += 1;
+    this.currentStep = next;
+    this.currentStepAmount = calcStepAmount(
+      this.traderAllocatedAmount,
+      this.capitalSteps,
+      this.currentStep,
+    );
+    if (this.currentStep > this.highestStepReached) this.highestStepReached = this.currentStep;
+    if (this.currentStep < this.lowestStepReached) this.lowestStepReached = this.currentStep;
   }
 
   private scheduleLifetimeEnd(): void {
@@ -775,12 +901,9 @@ export class Trader extends EventEmitter {
     } satisfies TraderEvent);
   }
 
-  private async resolvePositionNotional(): Promise<Decimal> {
-    const allocation = await this.accountLedger.getAllocation(
-      this.traderConfig.maxTraders,
-      this.traderConfig.leverage,
-    );
-    return allocation.positionNotional;
+  /** Notional = current step margin × leverage (allocation frozen at create). */
+  private resolvePositionNotional(): Decimal {
+    return calcStepNotional(this.currentStepAmount, this.traderConfig.leverage);
   }
 
   private updateUnrealizedPnl(): void {
@@ -836,6 +959,16 @@ export class Trader extends EventEmitter {
         tpPrice: this.tpPrice,
         slPrice: this.slPrice,
         quantity: this.quantity,
+        traderAllocatedAmount: this.traderAllocatedAmount.toFixed(8),
+        capitalSteps: this.capitalSteps,
+        currentStep: this.currentStep,
+        currentStepAmount: this.currentStepAmount.toFixed(8),
+        highestStepReached: this.highestStepReached,
+        lowestStepReached: this.lowestStepReached,
+        stepIncreases: this.stepIncreases,
+        stepDecreases: this.stepDecreases,
+        step1Trades: this.step1Trades,
+        maxStepTrades: this.maxStepTrades,
         positionsOpened: this.positionsOpened,
         positionsClosed: this.positionsClosed,
         winningPositions: this.winningPositions,
@@ -1066,6 +1199,8 @@ export class Trader extends EventEmitter {
       ? {
           number: this.currentPositionNumber,
           side: this.currentSide,
+          capitalStep: this.currentStep,
+          stepAmount: this.currentStepAmount.toFixed(8),
           entryPrice: this.entryPrice,
           quantity: this.quantity ?? '0',
           tpPrice: this.tpPrice ?? '0',
@@ -1081,6 +1216,12 @@ export class Trader extends EventEmitter {
         }
       : null;
 
+    const ladder = buildStepLadder(this.traderAllocatedAmount, this.capitalSteps).map((s) => ({
+      step: s.step,
+      amount: s.amount.toFixed(8),
+      isCurrent: s.step === this.currentStep,
+    }));
+
     return {
       id: this.id,
       symbol: this.symbol,
@@ -1090,6 +1231,19 @@ export class Trader extends EventEmitter {
       totalPnl: this.realizedPnl.plus(this.unrealizedPnl).toFixed(8),
       markPrice: this.markPrice,
       leverage: this.traderConfig.leverage,
+      capital: {
+        traderAllocatedAmount: this.traderAllocatedAmount.toFixed(8),
+        capitalSteps: this.capitalSteps,
+        currentStep: this.currentStep,
+        currentStepAmount: this.currentStepAmount.toFixed(8),
+        steps: ladder,
+        highestStepReached: this.highestStepReached,
+        lowestStepReached: this.lowestStepReached,
+        stepIncreases: this.stepIncreases,
+        stepDecreases: this.stepDecreases,
+        step1Trades: this.step1Trades,
+        maxStepTrades: this.maxStepTrades,
+      },
       currentPosition,
       stats: {
         startedAt: this.startedAt?.toISOString() ?? null,
@@ -1107,6 +1261,13 @@ export class Trader extends EventEmitter {
         shortPositions: this.shortPositions,
         winRate,
         totalFees: this.totalFees.toFixed(8),
+        currentStep: this.currentStep,
+        highestStepReached: this.highestStepReached,
+        lowestStepReached: this.lowestStepReached,
+        stepIncreases: this.stepIncreases,
+        stepDecreases: this.stepDecreases,
+        step1Trades: this.step1Trades,
+        maxStepTrades: this.maxStepTrades,
       },
       timeline: [...this.timeline],
       distanceToTpPct,

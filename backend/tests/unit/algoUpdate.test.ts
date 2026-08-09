@@ -31,6 +31,7 @@ const traderConfig: TraderConfig = {
   takeProfitPercent: '0.10',
   stopLossPercent: '0.10',
   startingSide: 'SHORT',
+  capitalSteps: 5,
   refreshInterval: 60000,
   retryLimit: 2,
   feeRate: '0.0004',

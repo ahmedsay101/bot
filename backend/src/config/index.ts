@@ -41,6 +41,7 @@ interface AppConfig {
     takeProfitPercent: string;
     stopLossPercent: string;
     startingSide: 'LONG' | 'SHORT';
+    capitalSteps: number;
     refreshInterval: number;
     retryLimit: number;
     feeRate: string;
@@ -80,6 +81,7 @@ const schema = Joi.object({
   TAKE_PROFIT_PERCENT: Joi.string().default('0.10'),
   STOP_LOSS_PERCENT: Joi.string().default('0.10'),
   STARTING_SIDE: Joi.string().valid('SHORT', 'LONG').default('SHORT'),
+  CAPITAL_STEPS: Joi.number().integer().min(1).max(100).default(5),
   REFRESH_INTERVAL: Joi.number().integer().min(5000).default(60000),
   RETRY_LIMIT: Joi.number().integer().min(1).max(20).default(5),
   FEE_RATE: Joi.string().default('0.0004'),
@@ -136,6 +138,7 @@ function loadConfig(): AppConfig {
       takeProfitPercent: env.TAKE_PROFIT_PERCENT as string,
       stopLossPercent: env.STOP_LOSS_PERCENT as string,
       startingSide: env.STARTING_SIDE as 'LONG' | 'SHORT',
+      capitalSteps: env.CAPITAL_STEPS as number,
       refreshInterval: env.REFRESH_INTERVAL as number,
       retryLimit: env.RETRY_LIMIT as number,
       feeRate: env.FEE_RATE as string,

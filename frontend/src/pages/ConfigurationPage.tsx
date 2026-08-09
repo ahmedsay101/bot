@@ -111,6 +111,17 @@ export function ConfigurationPage(): React.ReactElement {
             </Grid>
             <Grid item xs={12} sm={6} md={4}>
               <TextField
+                label="Capital Steps"
+                type="number"
+                value={current.capitalSteps ?? 5}
+                onChange={(e) => handleChange('capitalSteps', parseInt(e.target.value, 10))}
+                fullWidth
+                inputProps={{ min: 1, max: 100 }}
+                helperText="Allocation divided into N steps (TP +1, SL −1)"
+              />
+            </Grid>
+            <Grid item xs={12} sm={6} md={4}>
+              <TextField
                 label="Take Profit %"
                 value={current.takeProfitPercent ?? '0.10'}
                 helperText="e.g. 0.10 = 10% — TP opens same-side position"

@@ -1,0 +1,73 @@
+import Decimal from 'decimal.js';
+import {
+  buildStepLadder,
+  calcStepAmount,
+  calcStepNotional,
+  calcStepUnit,
+  clampStep,
+  nextStepAfterClose,
+  simulateStepSequence,
+} from '../../src/modules/calc/capitalSteps';
+import { nextSideAfterClose } from '../../src/modules/calc/strategy';
+
+describe('capital step calculation', () => {
+  it('divides $100 into 5 steps: 20,40,60,80,100', () => {
+    const ladder = buildStepLadder('100', 5);
+    expect(ladder.map((s) => s.amount.toFixed(0))).toEqual(['20', '40', '60', '80', '100']);
+    expect(calcStepUnit('100', 5).toFixed(0)).toBe('20');
+  });
+
+  it('divides $100 into 10 steps', () => {
+    const ladder = buildStepLadder('100', 10);
+    expect(ladder).toHaveLength(10);
+    expect(ladder[0]!.amount.toFixed(0)).toBe('10');
+    expect(ladder[9]!.amount.toFixed(0)).toBe('100');
+  });
+
+  it('divides $100 into 3 steps with Decimal precision', () => {
+    expect(calcStepAmount('100', 3, 1).toFixed(8)).toBe(
+      new Decimal(100).div(3).toFixed(8),
+    );
+    expect(calcStepAmount('100', 3, 3).toFixed(8)).toBe('100.00000000');
+  });
+
+  it('TP progression 1→2→3→4→5→5', () => {
+    expect(simulateStepSequence(5, ['TP', 'TP', 'TP', 'TP', 'TP'])).toEqual([1, 2, 3, 4, 5, 5]);
+  });
+
+  it('SL progression 5→4→3→2→1→1', () => {
+    expect(simulateStepSequence(5, ['SL', 'SL', 'SL', 'SL', 'SL'], 5)).toEqual([5, 4, 3, 2, 1, 1]);
+  });
+
+  it('mixed TP/SL sequence', () => {
+    expect(simulateStepSequence(5, ['TP', 'TP', 'SL', 'TP', 'SL', 'SL'])).toEqual([
+      1, 2, 3, 2, 3, 2, 1,
+    ]);
+  });
+
+  it('never goes below 1 or above max', () => {
+    expect(nextStepAfterClose(1, 'SL', 5)).toBe(1);
+    expect(nextStepAfterClose(5, 'TP', 5)).toBe(5);
+    expect(clampStep(0, 5)).toBe(1);
+    expect(clampStep(99, 5)).toBe(5);
+  });
+
+  it('direction rules remain unchanged with steps', () => {
+    expect(nextSideAfterClose('SHORT', 'TP')).toBe('SHORT');
+    expect(nextSideAfterClose('LONG', 'TP')).toBe('LONG');
+    expect(nextSideAfterClose('SHORT', 'SL')).toBe('LONG');
+    expect(nextSideAfterClose('LONG', 'SL')).toBe('SHORT');
+  });
+
+  it('notional = step margin × leverage', () => {
+    expect(calcStepNotional('20', 5).toFixed(0)).toBe('100');
+    expect(calcStepNotional(calcStepAmount('100', 5, 3), 10).toFixed(0)).toBe('600');
+  });
+
+  it('PnL does not affect step amounts (fixed allocation)', () => {
+    const a = calcStepAmount('100', 5, 3);
+    const b = calcStepAmount('100', 5, 3); // same allocation regardless of +20 or -15 PnL
+    expect(a.equals(b)).toBe(true);
+    expect(a.toFixed(0)).toBe('60');
+  });
+});

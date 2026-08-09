@@ -100,6 +100,8 @@ export interface TraderOrderView {
 export interface CurrentPositionView {
   number: number;
   side: 'LONG' | 'SHORT';
+  capitalStep: number;
+  stepAmount: string;
   entryPrice: string;
   quantity: string;
   tpPrice: string;
@@ -107,6 +109,26 @@ export interface CurrentPositionView {
   unrealizedPnl: string;
   roiPercent: string;
   status: 'OPEN' | 'SUBMITTED';
+}
+
+export interface CapitalStepView {
+  step: number;
+  amount: string;
+  isCurrent: boolean;
+}
+
+export interface CapitalProgressView {
+  traderAllocatedAmount: string;
+  capitalSteps: number;
+  currentStep: number;
+  currentStepAmount: string;
+  steps: CapitalStepView[];
+  highestStepReached: number;
+  lowestStepReached: number;
+  stepIncreases: number;
+  stepDecreases: number;
+  step1Trades: number;
+  maxStepTrades: number;
 }
 
 export interface TraderLifecycleStats {
@@ -125,14 +147,27 @@ export interface TraderLifecycleStats {
   shortPositions: number;
   winRate: string;
   totalFees: string;
+  currentStep: number;
+  highestStepReached: number;
+  lowestStepReached: number;
+  stepIncreases: number;
+  stepDecreases: number;
+  step1Trades: number;
+  maxStepTrades: number;
 }
 
 export interface PositionTimelineEntry {
   number: number;
   side: 'LONG' | 'SHORT';
+  capitalStep: number;
+  stepAmount: string;
   entryPrice: string;
   exitPrice: string | null;
   quantity: string;
+  leverage?: number;
+  takeProfit?: string | null;
+  stopLoss?: string | null;
+  fees?: string | null;
   closeReason: 'TP' | 'SL' | 'FORCE' | 'EXPIRED' | null;
   realizedPnl: string | null;
   openedAt: string;
@@ -148,6 +183,7 @@ export interface TraderSummary {
   totalPnl: string;
   markPrice: string;
   leverage: number;
+  capital: CapitalProgressView;
   currentPosition: CurrentPositionView | null;
   stats: TraderLifecycleStats;
   timeline: PositionTimelineEntry[];
@@ -308,6 +344,7 @@ export interface Configuration {
   takeProfitPercent: string;
   stopLossPercent: string;
   startingSide: 'LONG' | 'SHORT';
+  capitalSteps: number;
   refreshInterval: number;
   retryLimit: number;
   feeRate: string;

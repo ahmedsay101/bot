@@ -83,24 +83,21 @@ export class WebSocketManager extends EventEmitter {
     const existing = this.subscriptions.get(key);
     if (existing != null) {
       clearInterval(existing.pingInterval);
-      this.safeTerminate(existing.ws);
+      existing.ws.removeAllListeners();
+      existing.ws.terminate();
       this.subscriptions.delete(key);
     }
 
     return new Promise((resolve, reject) => {
       const ws = new WebSocket(url);
-      let settled = false;
 
       const connectTimeout = setTimeout(() => {
-        if (settled) return;
-        settled = true;
-        this.safeTerminate(ws);
+        ws.removeAllListeners();
+        ws.terminate();
         reject(new Error(`WS connect timeout for ${key}`));
       }, 15000);
 
       const onOpen = (): void => {
-        if (settled) return;
-        settled = true;
         clearTimeout(connectTimeout);
         log.debug(`WS opened: ${key}`);
 
@@ -111,12 +108,13 @@ export class WebSocketManager extends EventEmitter {
 
           if (cur.isAlive) {
             cur.isAlive = false;
-            try { ws.ping(); } catch { /* ignore */ }
+            ws.ping();
           } else {
             // Self-clear before reconnecting — prevents double-reconnect with onClose
             clearInterval(ping);
+            cur.ws.removeAllListeners('close');
+            cur.ws.terminate();
             this.subscriptions.delete(key);
-            this.safeTerminate(ws);
             log.warn(`WS heartbeat missed for ${key} — reconnecting`);
             void this.reconnectStream(key, url, handler);
           }
@@ -128,17 +126,8 @@ export class WebSocketManager extends EventEmitter {
       };
 
       const onError = (err: Error): void => {
-        // Ignore terminate-during-CONNECTING noise
-        if (err.message.includes('closed before the connection was established')) {
-          log.debug(`WS early-close for ${key}`);
-          return;
-        }
         log.error(`WS error for ${key}: ${err.message}`);
-        if (!settled && !this.subscriptions.has(key)) {
-          settled = true;
-          clearTimeout(connectTimeout);
-          reject(err);
-        }
+        if (!this.subscriptions.has(key)) reject(err);
       };
 
       const onClose = (code: number, reason: Buffer): void => {
@@ -227,18 +216,12 @@ export class WebSocketManager extends EventEmitter {
 
     if (eventType === 'ORDER_TRADE_UPDATE') {
       const order = data.o as Record<string, unknown>;
-      // Prefer client order id; fall back to algo client id when engine order has empty `c`
-      const clientOrderId = (order.c as string) || (order.caid as string) || '';
-      if (!clientOrderId) {
-        log.warn('ORDER_TRADE_UPDATE missing client order id', { symbol: order.s, orderId: order.i });
-        return;
-      }
       const update: OrderUpdate = {
-        clientOrderId,
-        exchangeOrderId: String(order.i ?? order.aid ?? ''),
+        clientOrderId: order.c as string,
+        exchangeOrderId: String(order.i),
         symbol: order.s as string,
-        status: this.mapBinanceOrderStatus(order.X as string),
-        filledQuantity: (order.z as string) || '0',
+        status: order.X as OrderUpdate['status'],
+        filledQuantity: order.z as string,
         avgFillPrice: (order.ap as string) || null,
         fee: (order.n as string) || null,
         feeCurrency: (order.N as string) || null,
@@ -249,55 +232,6 @@ export class WebSocketManager extends EventEmitter {
       if (this.seenEventIds.has(eventId)) return;
       this.seenEventIds.add(eventId);
 
-      this.emit('orderUpdate', update);
-    } else if (eventType === 'ALGO_UPDATE') {
-      // Conditional / algo orders (STOP, TAKE_PROFIT, STOP_MARKET, …) — client id is `caid`
-      const order = (data.o ?? data) as Record<string, unknown>;
-      const clientOrderId = (order.caid as string) || (order.c as string) || '';
-      if (!clientOrderId) {
-        log.warn('ALGO_UPDATE missing caid', { raw: order });
-        return;
-      }
-      // Algo payloads often omit avg price — fall back to last/limit/stop/trigger
-      const avgFillPrice =
-        (order.ap as string)
-        || (order.avgPrice as string)
-        || (order.L as string)
-        || (order.p as string)
-        || (order.sp as string)
-        || (order.triggerPrice as string)
-        || null;
-      const filledQuantity =
-        (order.z as string)
-        || (order.executedQty as string)
-        || (order.aq as string)
-        || '0';
-      const update: OrderUpdate = {
-        clientOrderId,
-        exchangeOrderId: String(order.aid ?? order.algoId ?? order.i ?? ''),
-        symbol: (order.s as string) || (data.s as string) || '',
-        status: this.mapBinanceOrderStatus((order.X as string) || (order.x as string) || ''),
-        filledQuantity,
-        avgFillPrice,
-        fee: (order.n as string) || null,
-        feeCurrency: (order.N as string) || null,
-        timestamp: (data.E as number) || Date.now(),
-      };
-
-      if (!update.symbol) {
-        log.warn('ALGO_UPDATE missing symbol', { clientOrderId });
-        return;
-      }
-
-      const eventId = `algo:${update.exchangeOrderId}:${update.status}:${update.timestamp}`;
-      if (this.seenEventIds.has(eventId)) return;
-      this.seenEventIds.add(eventId);
-
-      log.debug('ALGO_UPDATE → orderUpdate', {
-        clientId: clientOrderId,
-        status: update.status,
-        symbol: update.symbol,
-      });
       this.emit('orderUpdate', update);
     } else if (eventType === 'ACCOUNT_UPDATE') {
       const accountData = data.a as Record<string, unknown>;
@@ -318,43 +252,6 @@ export class WebSocketManager extends EventEmitter {
       }));
       const update: AccountUpdate = { balances, positions, timestamp: data.E as number };
       this.emit('accountUpdate', update);
-    }
-  }
-
-  /** Normalize Binance / algo status strings onto our OrderStatus. */
-  private mapBinanceOrderStatus(raw: string): OrderUpdate['status'] {
-    const s = (raw || '').toUpperCase();
-    if (s === 'NEW' || s === 'WORKING') return 'NEW';
-    if (s === 'PENDING' || s === 'PENDING_NEW') return 'PENDING';
-    if (s === 'TRIGGERED' || s === 'TRIGGERING') return 'TRIGGERED';
-    if (s === 'PARTIALLY_FILLED') return 'PARTIALLY_FILLED';
-    if (s === 'FILLED' || s === 'FINISHED') return 'FILLED';
-    if (s === 'CANCELED' || s === 'CANCELLED') return 'CANCELED';
-    if (s === 'REJECTED') return 'REJECTED';
-    if (s === 'EXPIRED') return 'EXPIRED';
-    // Unknown — treat as NEW so we don't drop the update entirely
-    log.warn('Unknown Binance order status', { status: raw });
-    return 'NEW';
-  }
-
-  /**
-   * Terminate without throwing when the socket is still CONNECTING.
-   * The `ws` package can throw "WebSocket was closed before the connection was established"
-   * which previously crashed the process via uncaughtException.
-   */
-  private safeTerminate(ws: WebSocket): void {
-    try {
-      ws.removeAllListeners('open');
-      ws.removeAllListeners('message');
-      ws.removeAllListeners('close');
-      ws.removeAllListeners('pong');
-      // Swallow late error events from terminate-during-CONNECTING
-      ws.on('error', () => {});
-      if (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN) {
-        ws.terminate();
-      }
-    } catch (err) {
-      log.debug('safeTerminate ignored error', { error: String(err) });
     }
   }
 

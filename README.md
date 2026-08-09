@@ -147,6 +147,7 @@ All trading parameters are configurable via environment variables or the `/api/c
 | `TAKE_PROFIT_PERCENT` | 0.10 | TP distance from entry (reopens same side) |
 | `STOP_LOSS_PERCENT` | 0.10 | SL distance from entry (reopens opposite side) |
 | `STARTING_SIDE` | SHORT | First position side (`SHORT` or `LONG`) |
+| `CAPITAL_STEPS` | 5 | Allocation divided into N capital steps (TP +1 / SL −1) |
 | `REFRESH_INTERVAL` | 60000 | Symbol refresh interval (ms) |
 | `FEE_RATE` | 0.0004 | Binance taker fee rate |
 | `SLIPPAGE` | 0.0001 | Simulated market slippage |

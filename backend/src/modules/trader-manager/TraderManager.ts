@@ -201,7 +201,7 @@ export class TraderManager extends EventEmitter {
     const keys = [
       'maxTraders', 'initialCapital', 'positionSize', 'leverage', 'marginMode',
       'traderLifetimeHours', 'takeProfitPercent', 'stopLossPercent', 'startingSide',
-      'refreshInterval', 'retryLimit', 'feeRate', 'slippage',
+      'capitalSteps', 'refreshInterval', 'retryLimit', 'feeRate', 'slippage',
     ] as const;
     for (const k of keys) {
       if (k in patch && patch[k] != null) cfg[k] = patch[k];
@@ -325,6 +325,16 @@ export class TraderManager extends EventEmitter {
           tpPrice: dbTrader.tpPrice,
           slPrice: dbTrader.slPrice,
           quantity: dbTrader.quantity,
+          traderAllocatedAmount: dbTrader.traderAllocatedAmount,
+          capitalSteps: dbTrader.capitalSteps,
+          currentStep: dbTrader.currentStep,
+          currentStepAmount: dbTrader.currentStepAmount,
+          highestStepReached: dbTrader.highestStepReached,
+          lowestStepReached: dbTrader.lowestStepReached,
+          stepIncreases: dbTrader.stepIncreases,
+          stepDecreases: dbTrader.stepDecreases,
+          step1Trades: dbTrader.step1Trades,
+          maxStepTrades: dbTrader.maxStepTrades,
           positionsOpened: dbTrader.positionsOpened,
           positionsClosed: dbTrader.positionsClosed,
           winningPositions: dbTrader.winningPositions,

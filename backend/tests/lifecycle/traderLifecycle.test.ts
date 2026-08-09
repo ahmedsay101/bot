@@ -31,6 +31,7 @@ const traderConfig: TraderConfig = {
   takeProfitPercent: '0.10',
   stopLossPercent: '0.10',
   startingSide: 'SHORT',
+  capitalSteps: 5,
   refreshInterval: 60000,
   retryLimit: 3,
   feeRate: '0.0004',
@@ -157,14 +158,20 @@ describe('Trader V2 reversal lifecycle', () => {
     expect(s.stats.shortPositions).toBe(1);
     expect(trader.hasOpenPosition()).toBe(true);
 
-    // Exactly one open position — no hedge ladder
+    // Capital steps: start at Step 1 = allocation / 5
+    expect(s.capital.currentStep).toBe(1);
+    expect(s.capital.capitalSteps).toBe(5);
+    expect(parseFloat(s.capital.traderAllocatedAmount)).toBeCloseTo(200, 0);
+    expect(parseFloat(s.capital.currentStepAmount)).toBeCloseTo(40, 0); // 200/5
+    expect(s.currentPosition!.capitalStep).toBe(1);
     expect(s.timeline.length).toBe(1);
     expect(s.timeline[0]!.closeReason).toBeNull();
+    expect(s.timeline[0]!.capitalStep).toBe(1);
 
     trader.destroy();
   });
 
-  it('TP opens another position in the SAME direction', async () => {
+  it('TP opens another position in the SAME direction and steps up', async () => {
     const trader = await bootTrader('t-tp', provider, db, ledger);
     const tp = trader.toSummary().currentPosition!.tpPrice;
 
@@ -180,11 +187,14 @@ describe('Trader V2 reversal lifecycle', () => {
     expect(s.currentPosition!.number).toBe(2);
     expect(s.stats.shortPositions).toBe(2);
     expect(s.timeline[0]!.closeReason).toBe('TP');
+    expect(s.capital.currentStep).toBe(2);
+    expect(parseFloat(s.capital.currentStepAmount)).toBeCloseTo(80, 0); // 200 * 2/5
+    expect(s.stats.stepIncreases).toBe(1);
 
     trader.destroy();
   });
 
-  it('SL opens a position in the OPPOSITE direction', async () => {
+  it('SL opens OPPOSITE direction and steps down (floor at 1)', async () => {
     const trader = await bootTrader('t-sl', provider, db, ledger);
     const sl = trader.toSummary().currentPosition!.slPrice;
 
@@ -200,6 +210,9 @@ describe('Trader V2 reversal lifecycle', () => {
     expect(s.currentPosition!.number).toBe(2);
     expect(s.stats.longPositions).toBe(1);
     expect(s.timeline[0]!.closeReason).toBe('SL');
+    // Was step 1, SL keeps step 1
+    expect(s.capital.currentStep).toBe(1);
+    expect(s.stats.stepDecreases).toBe(0);
 
     trader.destroy();
   });
@@ -231,16 +244,16 @@ describe('Trader V2 reversal lifecycle', () => {
     expect(trader.hasOpenPosition()).toBe(false);
   }, 10000);
 
-  it('persists timeline of TP then SL progression', async () => {
+  it('persists timeline of TP then SL progression with steps', async () => {
     const trader = await bootTrader('t-timeline', provider, db, ledger);
 
-    // Hit TP → SHORT #2
-    let tp = trader.toSummary().currentPosition!.tpPrice;
+    // Hit TP → SHORT #2 at step 2
+    const tp = trader.toSummary().currentPosition!.tpPrice;
     provider.onPriceUpdate('BTCUSDT', tp);
     trader.onPriceUpdate(tp);
     await wait(500);
 
-    // Hit SL on SHORT #2 → LONG #3
+    // Hit SL on SHORT #2 → LONG #3 at step 1
     const sl = trader.toSummary().currentPosition!.slPrice;
     provider.onPriceUpdate('BTCUSDT', sl);
     trader.onPriceUpdate(sl);
@@ -251,9 +264,77 @@ describe('Trader V2 reversal lifecycle', () => {
     expect(s.stats.stopLosses).toBe(1);
     expect(s.currentPosition!.side).toBe('LONG');
     expect(s.currentPosition!.number).toBe(3);
+    expect(s.capital.currentStep).toBe(1);
+    expect(s.timeline[0]!.capitalStep).toBe(1);
+    expect(s.timeline[1]!.capitalStep).toBe(2);
+    expect(s.timeline[2]!.capitalStep).toBe(1);
     expect(s.timeline.filter((t) => t.closeReason === 'TP').length).toBe(1);
     expect(s.timeline.filter((t) => t.closeReason === 'SL').length).toBe(1);
 
     trader.destroy();
+  });
+
+  it('restores capital step from persisted state (no reset to 1)', async () => {
+    const trader = await bootTrader('t-restore-step', provider, db, ledger);
+    const tp = trader.toSummary().currentPosition!.tpPrice;
+    provider.onPriceUpdate('BTCUSDT', tp);
+    trader.onPriceUpdate(tp);
+    await wait(500);
+    expect(trader.toSummary().capital.currentStep).toBe(2);
+
+    const snap = trader.toSummary();
+    trader.destroy();
+
+    const trader2 = new Trader(
+      't-restore-step-2',
+      'BTCUSDT',
+      'SIMULATION',
+      provider,
+      traderConfig,
+      db as never,
+      ledger as never,
+    );
+    await trader2.restore({
+      status: 'ACTIVE',
+      realizedPnl: snap.realizedPnl,
+      unrealizedPnl: '0',
+      startedAt: new Date(snap.stats.startedAt!),
+      endsAt: new Date(snap.stats.endsAt!),
+      currentSide: snap.currentPosition!.side,
+      currentPositionNumber: snap.currentPosition!.number,
+      entryPrice: snap.currentPosition!.entryPrice,
+      tpPrice: snap.currentPosition!.tpPrice,
+      slPrice: snap.currentPosition!.slPrice,
+      quantity: snap.currentPosition!.quantity,
+      traderAllocatedAmount: snap.capital.traderAllocatedAmount,
+      capitalSteps: snap.capital.capitalSteps,
+      currentStep: snap.capital.currentStep,
+      currentStepAmount: snap.capital.currentStepAmount,
+      highestStepReached: snap.capital.highestStepReached,
+      lowestStepReached: snap.capital.lowestStepReached,
+      stepIncreases: snap.capital.stepIncreases,
+      stepDecreases: snap.capital.stepDecreases,
+      step1Trades: snap.capital.step1Trades,
+      maxStepTrades: snap.capital.maxStepTrades,
+      positionsOpened: snap.stats.positionsOpened,
+      positionsClosed: snap.stats.positionsClosed,
+      winningPositions: snap.stats.winningPositions,
+      losingPositions: snap.stats.losingPositions,
+      takeProfits: snap.stats.takeProfits,
+      stopLosses: snap.stats.stopLosses,
+      longPositions: snap.stats.longPositions,
+      shortPositions: snap.stats.shortPositions,
+      totalFees: snap.stats.totalFees,
+      timelineJson: JSON.stringify(snap.timeline),
+      pendingClientOrderIds: [],
+      entryClientOrderId: null,
+      tpClientOrderId: null,
+      slClientOrderId: null,
+      positionOpen: true,
+    });
+
+    expect(trader2.toSummary().capital.currentStep).toBe(2);
+    expect(parseFloat(trader2.toSummary().capital.currentStepAmount)).toBeCloseTo(80, 0);
+    trader2.destroy();
   });
 });

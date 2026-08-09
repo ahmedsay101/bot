@@ -73,6 +73,16 @@ export {
   calcPositionRoi,
 } from '../calc/strategy';
 
+export {
+  calcStepAmount,
+  calcStepUnit,
+  buildStepLadder,
+  nextStepAfterClose,
+  clampStep,
+  calcStepNotional,
+  simulateStepSequence,
+} from '../calc/capitalSteps';
+
 export function calcShortUnrealizedPnl(entryPrice: string, markPrice: string, quantity: string): Decimal {
   return new Decimal(entryPrice).minus(markPrice).mul(quantity);
 }

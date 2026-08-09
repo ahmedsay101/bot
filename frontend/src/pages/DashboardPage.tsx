@@ -11,7 +11,7 @@ import {
   useEmergencyStop,
 } from '../hooks/useQueries';
 import { useSystemStore } from '../stores/systemStore';
-import type { TraderSummary, PositionTimelineEntry } from '../services/api';
+import type { TraderSummary, PositionTimelineEntry, CapitalProgressView } from '../services/api';
 
 function money(v: string | number | null | undefined, dp = 2): string {
   const n = parseFloat(String(v ?? '0'));
@@ -134,26 +134,74 @@ function PositionViz({ trader }: { trader: TraderSummary }): React.ReactElement 
   );
 }
 
+function CapitalSteps({ capital }: { capital: CapitalProgressView }): React.ReactElement {
+  return (
+    <Box sx={{ mt: 0.75 }}>
+      <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 0.75, mb: 1 }}>
+        <Stat label="Trader Allocation" value={money(capital.traderAllocatedAmount)} />
+        <Stat label="Current Step" value={`${capital.currentStep} / ${capital.capitalSteps}`} />
+        <Stat label="Position Allocation" value={money(capital.currentStepAmount)} />
+        <Stat label="Highest / Lowest" value={`${capital.highestStepReached} / ${capital.lowestStepReached}`} />
+      </Box>
+      <Stack spacing={0.4}>
+        {capital.steps.map((s) => (
+          <Box
+            key={s.step}
+            sx={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 1,
+              px: 1,
+              py: 0.45,
+              borderRadius: 1,
+              bgcolor: s.isCurrent ? 'rgba(33, 150, 243, 0.12)' : 'transparent',
+              border: s.isCurrent ? '1px solid rgba(33, 150, 243, 0.45)' : '1px solid transparent',
+            }}
+          >
+            <Typography sx={{ color: s.isCurrent ? '#2196f3' : 'text.secondary', fontSize: 14, lineHeight: 1 }}>
+              {s.isCurrent ? '●' : s.step < capital.currentStep ? '●' : '○'}
+            </Typography>
+            <Typography
+              variant="body2"
+              fontWeight={s.isCurrent ? 700 : 500}
+              sx={{ flex: 1, fontSize: 13, color: s.isCurrent ? '#2196f3' : 'inherit' }}
+            >
+              Step {s.step}
+              {s.isCurrent ? '  ← CURRENT' : ''}
+            </Typography>
+            <Typography fontFamily="monospace" fontWeight={700} sx={{ fontSize: 13 }}>
+              {money(s.amount)}
+            </Typography>
+          </Box>
+        ))}
+      </Stack>
+    </Box>
+  );
+}
+
 function Timeline({ entries }: { entries: PositionTimelineEntry[] }): React.ReactElement {
-  const list = entries.slice(-8);
+  const list = [...entries].slice(-10).reverse();
   if (list.length === 0) {
     return <Typography variant="caption" color="text.secondary">No positions yet</Typography>;
   }
   return (
     <Stack spacing={0.75} sx={{ mt: 0.75 }}>
       {list.map((e) => (
-        <Box key={`${e.number}-${e.openedAt}`}>
-          <Typography variant="body2" fontWeight={700} fontFamily="monospace">
-            #{e.number} · {e.side}
+        <Box
+          key={`${e.number}-${e.openedAt}`}
+          sx={{ display: 'flex', justifyContent: 'space-between', gap: 1, alignItems: 'baseline' }}
+        >
+          <Typography variant="body2" fontWeight={700} fontFamily="monospace" sx={{ fontSize: 13 }}>
+            #{e.number}{' '}
+            <Box component="span" sx={{ color: e.side === 'SHORT' ? '#f44336' : '#4caf50' }}>{e.side}</Box>
+            {' · '}Step {e.capitalStep ?? '—'}{' '}
+            {e.stepAmount != null ? money(e.stepAmount) : ''}
           </Typography>
-          <Typography variant="caption" color="text.secondary">
-            Entry ${px(e.entryPrice)}
-            {e.closeReason != null && ` → ${e.closeReason === 'TP' ? 'Take Profit' : e.closeReason === 'SL' ? 'Stop Loss' : e.closeReason}`}
-            {e.realizedPnl != null && ` · ${pnl(e.realizedPnl)}`}
+          <Typography variant="caption" fontWeight={700} sx={{
+            color: e.closeReason === 'TP' ? '#4caf50' : e.closeReason === 'SL' ? '#f44336' : 'text.secondary',
+          }}>
+            {e.closeReason == null ? 'OPEN' : e.closeReason}
           </Typography>
-          {e.closeReason == null && (
-            <Chip label="OPEN" size="small" color="success" sx={{ height: 18, fontSize: 10, ml: 0.5 }} />
-          )}
         </Box>
       ))}
     </Stack>
@@ -206,11 +254,21 @@ function TraderCard({ trader }: { trader: TraderSummary }): React.ReactElement {
           </Typography>
         </Box>
 
+        <Typography variant="caption" color="text.secondary" fontWeight={700}>CAPITAL STEPS</Typography>
+        {trader.capital != null ? (
+          <CapitalSteps capital={trader.capital} />
+        ) : (
+          <Typography variant="caption" color="text.secondary">—</Typography>
+        )}
+
+        <Divider sx={{ my: 1.5 }} />
         <Typography variant="caption" color="text.secondary" fontWeight={700}>CURRENT POSITION</Typography>
         {pos != null ? (
           <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 0.75, mt: 0.5, mb: 1 }}>
             <Stat label="Number" value={`#${pos.number}`} />
             <Stat label="Side" value={pos.side} />
+            <Stat label="Step" value={`${pos.capitalStep ?? trader.capital?.currentStep ?? '—'} / ${trader.capital?.capitalSteps ?? '—'}`} />
+            <Stat label="Allocation" value={money(pos.stepAmount ?? trader.capital?.currentStepAmount)} />
             <Stat label="Entry" value={`$${px(pos.entryPrice)}`} />
             <Stat label="Mark" value={`$${px(trader.markPrice)}`} />
             <Stat label="Qty" value={pos.quantity} />
@@ -231,10 +289,10 @@ function TraderCard({ trader }: { trader: TraderSummary }): React.ReactElement {
         <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 0.75, mt: 0.5 }}>
           <Stat label="Opened" value={String(stats.positionsOpened)} />
           <Stat label="Closed" value={String(stats.positionsClosed)} />
-          <Stat label="Wins" value={String(stats.winningPositions)} />
-          <Stat label="Losses" value={String(stats.losingPositions)} />
           <Stat label="Take Profits" value={String(stats.takeProfits)} />
           <Stat label="Stop Losses" value={String(stats.stopLosses)} />
+          <Stat label="Step ↑ / ↓" value={`${stats.stepIncreases ?? 0} / ${stats.stepDecreases ?? 0}`} />
+          <Stat label="Step-1 / Max" value={`${stats.step1Trades ?? 0} / ${stats.maxStepTrades ?? 0}`} />
           <Stat label="Win Rate" value={`${stats.winRate}%`} />
           <Stat label="Fees" value={money(stats.totalFees)} />
           <Stat label="Realized" value={pnl(trader.realizedPnl)} color={col(trader.realizedPnl)} />
@@ -244,7 +302,7 @@ function TraderCard({ trader }: { trader: TraderSummary }): React.ReactElement {
         </Box>
 
         <Divider sx={{ my: 1.5 }} />
-        <Typography variant="caption" color="text.secondary" fontWeight={700}>TIMELINE</Typography>
+        <Typography variant="caption" color="text.secondary" fontWeight={700}>POSITION HISTORY</Typography>
         <Timeline entries={trader.timeline} />
       </CardContent>
     </Card>

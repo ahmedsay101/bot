@@ -82,6 +82,18 @@ model Trader {
   slPrice               String?
   quantity              String?
 
+  /// Capital step progression (frozen allocation at trader create)
+  traderAllocatedAmount String @default("0")
+  capitalSteps          Int    @default(5)
+  currentStep           Int    @default(1)
+  currentStepAmount     String @default("0")
+  highestStepReached    Int    @default(1)
+  lowestStepReached     Int    @default(1)
+  stepIncreases         Int    @default(0)
+  stepDecreases         Int    @default(0)
+  step1Trades           Int    @default(0)
+  maxStepTrades         Int    @default(0)
+
   /// Lifecycle counters
   positionsOpened   Int @default(0)
   positionsClosed   Int @default(0)
@@ -244,6 +256,7 @@ model Configuration {
   takeProfitPercent String @default("0.10")
   stopLossPercent   String @default("0.10")
   startingSide      String @default("SHORT")
+  capitalSteps      Int    @default(5)
   refreshInterval Int      @default(60000)
   retryLimit      Int      @default(5)
   feeRate         String   @default("0.0004")

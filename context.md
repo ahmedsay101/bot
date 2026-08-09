@@ -15,10 +15,12 @@ Production-grade Binance Futures trading platform with Live and Testing modes sh
 ## Strategy V2 — Position Reversal
 - One trader per symbol; one active position at a time (no hedges).
 - Trader lifetime is elapsed time (`traderLifetimeHours`, default 24h), not PnL.
-- On start: open MARKET position (`startingSide`, default SHORT) sized with full trader equity × leverage.
+- On start: freeze trader allocation; open MARKET at **capital Step 1** (`startingSide`, default SHORT).
+- Capital steps (`CAPITAL_STEPS`, default 5): Step N margin = allocation × N / steps; notional = margin × leverage.
 - Place Take Profit and Stop Loss (defaults 10% each, configurable decimals e.g. `0.10`).
-- **TP hit** → immediately open a new MARKET position in the **same** direction.
-- **SL hit** → immediately open a new MARKET position in the **opposite** direction.
+- **TP hit** → step +1 (cap at max) + same direction.
+- **SL hit** → step −1 (floor at 1) + opposite direction.
+- Step amounts are fixed from create-time allocation — not affected by PnL/balance.
 - Continuous trading until lifetime ends.
 - After lifetime: close position, cancel orders, persist stats, destroy trader, free slot, spawn next top-gainer trader.
 - Binance dual-side (hedge) mode may still be used for positionSide LONG/SHORT, but strategy never holds two legs.
