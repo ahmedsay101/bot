@@ -148,7 +148,10 @@ export interface CurrentPositionView {
   number: number;
   side: TradeSide;
   capitalStep: number;
+  /** USD margin used for this position (historical step amount). */
   stepAmount: string;
+  /** Notional = stepAmount × leverage. */
+  positionNotional: string;
   entryPrice: string;
   quantity: string;
   tpPrice: string;
@@ -166,10 +169,18 @@ export interface CapitalStepView {
 
 /** Capital step progression SSOT for dashboard. */
 export interface CapitalProgressView {
+  /** Frozen original USD allocation for this trader (not PnL / equity). */
   traderAllocatedAmount: string;
+  /** Alias of capitalSteps — total steps in the ladder. */
+  totalSteps: number;
   capitalSteps: number;
   currentStep: number;
+  /** USD margin for the current step (allocation × step / totalSteps). */
+  currentStepAllocation: string;
+  /** @deprecated use currentStepAllocation — kept for compatibility */
   currentStepAmount: string;
+  /** Notional = currentStepAllocation × leverage (not the same as allocation). */
+  positionNotional: string;
   steps: CapitalStepView[];
   highestStepReached: number;
   lowestStepReached: number;

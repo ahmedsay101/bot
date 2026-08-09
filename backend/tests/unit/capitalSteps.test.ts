@@ -70,4 +70,41 @@ describe('capital step calculation', () => {
     expect(a.equals(b)).toBe(true);
     expect(a.toFixed(0)).toBe('60');
   });
+
+  describe('dashboard allocation examples (SSOT)', () => {
+    it('Example 1: $100 / 5 steps → step 1 = $20', () => {
+      expect(calcStepAmount('100', 5, 1).toFixed(2)).toBe('20.00');
+    });
+
+    it('Example 2: $100 / 5 steps → step 3 = $60', () => {
+      expect(calcStepAmount('100', 5, 3).toFixed(2)).toBe('60.00');
+    });
+
+    it('Example 3: $100 / 5 steps → step 5 = $100', () => {
+      expect(calcStepAmount('100', 5, 5).toFixed(2)).toBe('100.00');
+    });
+
+    it('Example 4: $100 / 3 steps → step 2 ≈ $66.67', () => {
+      const amt = calcStepAmount('100', 3, 2);
+      expect(amt.toFixed(2)).toBe('66.67');
+      expect(amt.toFixed(8)).toBe(new Decimal(100).mul(2).div(3).toFixed(8));
+    });
+
+    it('Example 5: current step allocation never exceeds trader allocation', () => {
+      for (const steps of [3, 5, 10]) {
+        for (let s = 1; s <= steps; s++) {
+          const alloc = calcStepAmount('100', steps, s);
+          expect(alloc.lte(100)).toBe(true);
+        }
+      }
+      expect(calcStepAmount('100', 5, 5).eq(100)).toBe(true);
+    });
+
+    it('position notional is separate from step allocation', () => {
+      const stepAlloc = calcStepAmount('100', 5, 3); // $60
+      expect(stepAlloc.toFixed(2)).toBe('60.00');
+      expect(calcStepNotional(stepAlloc, 5).toFixed(2)).toBe('300.00');
+    });
+  });
 });
+

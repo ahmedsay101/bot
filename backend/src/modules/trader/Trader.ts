@@ -1195,12 +1195,24 @@ export class Trader extends EventEmitter {
     const openOrders = orderList.filter((o) => openStatuses.has(o.status)).length;
     const closedOrders = orderList.filter((o) => !openStatuses.has(o.status)).length;
 
+    // Capital SSOT — always derive from frozen allocation + current step
+    const stepAllocation = calcStepAmount(
+      this.traderAllocatedAmount,
+      this.capitalSteps,
+      this.currentStep,
+    );
+    this.currentStepAmount = stepAllocation;
+    const positionNotional = calcStepNotional(stepAllocation, this.traderConfig.leverage);
+    const stepAllocationStr = stepAllocation.toFixed(8);
+    const positionNotionalStr = positionNotional.toFixed(8);
+
     const currentPosition = this.positionOpen && this.currentSide != null && this.entryPrice != null
       ? {
           number: this.currentPositionNumber,
           side: this.currentSide,
           capitalStep: this.currentStep,
-          stepAmount: this.currentStepAmount.toFixed(8),
+          stepAmount: stepAllocationStr,
+          positionNotional: positionNotionalStr,
           entryPrice: this.entryPrice,
           quantity: this.quantity ?? '0',
           tpPrice: this.tpPrice ?? '0',
@@ -1233,9 +1245,12 @@ export class Trader extends EventEmitter {
       leverage: this.traderConfig.leverage,
       capital: {
         traderAllocatedAmount: this.traderAllocatedAmount.toFixed(8),
+        totalSteps: this.capitalSteps,
         capitalSteps: this.capitalSteps,
         currentStep: this.currentStep,
-        currentStepAmount: this.currentStepAmount.toFixed(8),
+        currentStepAllocation: stepAllocationStr,
+        currentStepAmount: stepAllocationStr,
+        positionNotional: positionNotionalStr,
         steps: ladder,
         highestStepReached: this.highestStepReached,
         lowestStepReached: this.lowestStepReached,

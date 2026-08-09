@@ -102,6 +102,7 @@ export interface CurrentPositionView {
   side: 'LONG' | 'SHORT';
   capitalStep: number;
   stepAmount: string;
+  positionNotional: string;
   entryPrice: string;
   quantity: string;
   tpPrice: string;
@@ -119,9 +120,12 @@ export interface CapitalStepView {
 
 export interface CapitalProgressView {
   traderAllocatedAmount: string;
+  totalSteps: number;
   capitalSteps: number;
   currentStep: number;
+  currentStepAllocation: string;
   currentStepAmount: string;
+  positionNotional: string;
   steps: CapitalStepView[];
   highestStepReached: number;
   lowestStepReached: number;
