@@ -1,412 +1,365 @@
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import {
-  Box, Grid, Card, CardContent, Typography, Chip, Button, Stack, Divider, LinearProgress,
+  Box, Grid, Card, CardContent, Typography, Chip, Button,
+  LinearProgress, Divider,
 } from '@mui/material';
-import { Warning } from '@mui/icons-material';
+import { AccountBalanceWallet, Warning } from '@mui/icons-material';
 import {
+  useGlobalStats,
   useStatsSummary,
   useActiveTraders,
   usePauseTraders,
   useResumeTraders,
   useEmergencyStop,
 } from '../hooks/useQueries';
-import { useSystemStore } from '../stores/systemStore';
-import type { TraderSummary, PositionTimelineEntry, CapitalProgressView } from '../services/api';
+import type { TraderSummary, HedgeLevelInfo } from '../services/api';
 
-function money(v: string | number | null | undefined, dp = 2): string {
+// ─── helpers ────────────────────────────────────────────────────────────────
+
+function fmt(v: string | number | null | undefined, dp = 4): string {
   const n = parseFloat(String(v ?? '0'));
-  if (!isFinite(n)) return '—';
+  if (!isFinite(n) || isNaN(n)) return '—';
   return `$${n.toFixed(dp)}`;
 }
 
-function pnl(v: string | number, dp = 2): string {
-  const n = typeof v === 'number' ? v : parseFloat(v);
+function pnlCol(v: string): string {
+  const n = parseFloat(v);
+  if (n > 0) return '#4caf50';
+  if (n < 0) return '#f44336';
+  return '#757575';
+}
+
+function pnlStr(v: string, dp = 4): string {
+  const n = parseFloat(v);
   if (!isFinite(n)) return '—';
   return `${n >= 0 ? '+' : ''}${n.toFixed(dp)}`;
 }
 
-function col(v: string | number): string {
-  const n = typeof v === 'number' ? v : parseFloat(v);
-  if (n > 0) return '#4caf50';
-  if (n < 0) return '#f44336';
-  return 'inherit';
+// ─── price ruler ────────────────────────────────────────────────────────────
+
+interface Level {
+  price: number;
+  label: string;
+  color: string;
+  dashed?: boolean;
+  isMark?: boolean;
 }
 
-function px(p: string | null | undefined): string {
-  if (p == null) return '—';
-  const n = parseFloat(p);
-  if (!isFinite(n) || n === 0) return '—';
-  if (n >= 100) return n.toFixed(2);
-  if (n >= 1) return n.toFixed(4);
-  return n.toFixed(6);
-}
+function PriceRuler({ trader }: { trader: TraderSummary }): React.ReactElement | null {
+  const mark  = parseFloat(trader.markPrice);
+  const entry = trader.entryPrice != null ? parseFloat(trader.entryPrice) : null;
+  const tp    = trader.tpPrice    != null ? parseFloat(trader.tpPrice)    : null;
 
-function formatDuration(ms: number): string {
-  if (ms <= 0) return '0:00:00';
-  const s = Math.floor(ms / 1000);
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  const sec = s % 60;
-  return `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
-}
-
-function Stat({ label, value, color }: { label: string; value: string; color?: string }): React.ReactElement {
-  return (
-    <Box sx={{ minWidth: 0 }}>
-      <Typography variant="caption" color="text.secondary" display="block" sx={{ fontSize: 11 }}>{label}</Typography>
-      <Typography
-        variant="body2"
-        fontWeight={700}
-        fontFamily="monospace"
-        sx={{ color: color ?? 'inherit', fontSize: { xs: 12, sm: 13 }, wordBreak: 'break-word' }}
-      >
-        {value}
-      </Typography>
-    </Box>
-  );
-}
-
-function Metric({ label, value, color }: { label: string; value: string; color?: string }): React.ReactElement {
-  return (
-    <Card sx={{ height: '100%' }}>
-      <CardContent sx={{ py: 1.5, '&:last-child': { pb: 1.5 } }}>
-        <Typography variant="caption" color="text.secondary">{label}</Typography>
-        <Typography variant="h6" fontWeight={800} sx={{ color: color ?? 'inherit', fontSize: { xs: '1.1rem', sm: '1.25rem' } }}>
-          {value}
-        </Typography>
-      </CardContent>
-    </Card>
-  );
-}
-
-/** Price ladder for current position only. */
-function PositionViz({ trader }: { trader: TraderSummary }): React.ReactElement {
-  const pos = trader.currentPosition;
-  if (pos == null) {
+  if (!isFinite(mark) || mark === 0) {
     return (
-      <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
-        No open position
-      </Typography>
+      <Box sx={{ py: 2, textAlign: 'center' }}>
+        <Typography variant="caption" color="text.secondary">Awaiting price feed…</Typography>
+      </Box>
     );
   }
 
-  type Rung = { key: string; price: number; label: string; accent: string; isMark?: boolean; detail?: string };
-  const mark = parseFloat(trader.markPrice) || 0;
-  const rungs: Rung[] = [
-    { key: 'tp', price: parseFloat(pos.tpPrice) || 0, label: 'Take Profit', accent: '#4caf50', detail: trader.distanceToTpPct != null ? `${trader.distanceToTpPct}%` : undefined },
-    { key: 'entry', price: parseFloat(pos.entryPrice) || 0, label: `Entry (${pos.side})`, accent: '#2196f3' },
-    { key: 'sl', price: parseFloat(pos.slPrice) || 0, label: 'Stop Loss', accent: '#f44336', detail: trader.distanceToSlPct != null ? `${trader.distanceToSlPct}%` : undefined },
-    { key: 'mark', price: mark, label: '▸ Current Price', accent: '#fff', isMark: true },
-  ];
-  rungs.sort((a, b) => b.price - a.price);
+  const levels: Level[] = [];
 
-  return (
-    <Box sx={{ mt: 1.5 }}>
-      <Typography variant="caption" color="text.secondary" fontWeight={700}>POSITION</Typography>
-      <Stack spacing={0.5} sx={{ mt: 0.75 }}>
-        {rungs.map((r) => (
-          <Box
-            key={r.key}
-            sx={{
-              display: 'flex', alignItems: 'center', gap: 1,
-              py: r.isMark ? 0.75 : 0.4, px: 1, borderRadius: 1,
-              bgcolor: r.isMark ? 'rgba(255,255,255,0.08)' : 'transparent',
-              border: r.isMark ? '1px solid rgba(255,255,255,0.25)' : '1px solid transparent',
-              minHeight: 34,
-            }}
-          >
-            <Box sx={{ width: 4, alignSelf: 'stretch', borderRadius: 1, bgcolor: r.accent, flexShrink: 0 }} />
-            <Box sx={{ flex: 1, minWidth: 0 }}>
-              <Typography variant="body2" fontWeight={r.isMark ? 700 : 600} sx={{ color: r.accent, fontSize: 13 }}>
-                {r.label}
-              </Typography>
-              {r.detail != null && (
-                <Typography variant="caption" color="text.secondary" sx={{ fontSize: 11 }}>Dist {r.detail}</Typography>
-              )}
-            </Box>
-            <Typography fontFamily="monospace" fontWeight={700} sx={{ color: r.accent, fontSize: 13 }}>
-              ${px(String(r.price))}
-            </Typography>
-          </Box>
-        ))}
-      </Stack>
-    </Box>
-  );
-}
+  if (tp    != null && tp    > 0) levels.push({ price: tp,    label: 'Short TP',    color: '#4caf50' });
+  if (entry != null && entry > 0) levels.push({ price: entry, label: 'Short Entry', color: '#2196f3' });
 
-function CapitalSteps({ capital }: { capital: CapitalProgressView }): React.ReactElement {
-  return (
-    <Box sx={{ mt: 0.75 }}>
-      <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 0.75, mb: 1 }}>
-        <Stat label="Trader Allocation" value={money(capital.traderAllocatedAmount)} />
-        <Stat label="Current Step" value={`${capital.currentStep} / ${capital.capitalSteps}`} />
-        <Stat label="Position Allocation" value={money(capital.currentStepAmount)} />
-        <Stat label="Highest / Lowest" value={`${capital.highestStepReached} / ${capital.lowestStepReached}`} />
-      </Box>
-      <Stack spacing={0.4}>
-        {capital.steps.map((s) => (
-          <Box
-            key={s.step}
-            sx={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 1,
-              px: 1,
-              py: 0.45,
-              borderRadius: 1,
-              bgcolor: s.isCurrent ? 'rgba(33, 150, 243, 0.12)' : 'transparent',
-              border: s.isCurrent ? '1px solid rgba(33, 150, 243, 0.45)' : '1px solid transparent',
-            }}
-          >
-            <Typography sx={{ color: s.isCurrent ? '#2196f3' : 'text.secondary', fontSize: 14, lineHeight: 1 }}>
-              {s.isCurrent ? '●' : s.step < capital.currentStep ? '●' : '○'}
-            </Typography>
-            <Typography
-              variant="body2"
-              fontWeight={s.isCurrent ? 700 : 500}
-              sx={{ flex: 1, fontSize: 13, color: s.isCurrent ? '#2196f3' : 'inherit' }}
-            >
-              Step {s.step}
-              {s.isCurrent ? '  ← CURRENT' : ''}
-            </Typography>
-            <Typography fontFamily="monospace" fontWeight={700} sx={{ fontSize: 13 }}>
-              {money(s.amount)}
-            </Typography>
-          </Box>
-        ))}
-      </Stack>
-    </Box>
-  );
-}
-
-function Timeline({ entries }: { entries: PositionTimelineEntry[] }): React.ReactElement {
-  const list = [...entries].slice(-10).reverse();
-  if (list.length === 0) {
-    return <Typography variant="caption" color="text.secondary">No positions yet</Typography>;
+  for (const h of trader.hedgeLevels) {
+    if (h.status === 'CANCELED') continue;
+    // ACTIVE = stop-limit order placed but not yet triggered (dashed)
+    // OPEN   = position is filled and live (solid)
+    const isPositionOpen = h.status === 'OPEN';
+    if (parseFloat(h.tpPrice)    > 0) levels.push({ price: parseFloat(h.tpPrice),    label: `L${h.level} Hedge TP`,    color: '#8bc34a', dashed: !isPositionOpen });
+    if (parseFloat(h.entryPrice) > 0) levels.push({ price: parseFloat(h.entryPrice), label: `L${h.level} Hedge Entry`,  color: '#ff9800', dashed: !isPositionOpen });
+    if (parseFloat(h.stopPrice)  > 0) levels.push({ price: parseFloat(h.stopPrice),  label: `L${h.level} Hedge Stop`,   color: '#f44336', dashed: !isPositionOpen });
   }
+
+  levels.push({ price: mark, label: '◀ Mark', color: '#ffffff', isMark: true });
+
+  const prices = levels.map(l => l.price).filter(p => p > 0 && isFinite(p));
+  if (prices.length === 0) return null;
+
+  const hi  = Math.max(...prices) * 1.018;
+  const lo  = Math.min(...prices) * 0.982;
+  const rng = hi - lo || 1;
+  const pct = (p: number): number => ((hi - p) / rng) * 100;
+
+  const sorted  = [...levels].sort((a, b) => b.price - a.price);
+  const HEIGHT  = Math.max(180, sorted.length * 34);
+  const mag     = Math.floor(Math.log10(mark));
+  const dp      = Math.max(2, 5 - mag);
+
   return (
-    <Stack spacing={0.75} sx={{ mt: 0.75 }}>
-      {list.map((e) => (
-        <Box
-          key={`${e.number}-${e.openedAt}`}
-          sx={{ display: 'flex', justifyContent: 'space-between', gap: 1, alignItems: 'baseline' }}
-        >
-          <Typography variant="body2" fontWeight={700} fontFamily="monospace" sx={{ fontSize: 13 }}>
-            #{e.number}{' '}
-            <Box component="span" sx={{ color: e.side === 'SHORT' ? '#f44336' : '#4caf50' }}>{e.side}</Box>
-            {' · '}Step {e.capitalStep ?? '—'}{' '}
-            {e.stepAmount != null ? money(e.stepAmount) : ''}
-          </Typography>
-          <Typography variant="caption" fontWeight={700} sx={{
-            color: e.closeReason === 'TP' ? '#4caf50' : e.closeReason === 'SL' ? '#f44336' : 'text.secondary',
+    <Box sx={{ position: 'relative', height: HEIGHT, my: 1 }}>
+      {/* vertical spine */}
+      <Box sx={{ position: 'absolute', left: 98, top: 0, bottom: 0, width: 1, bgcolor: 'rgba(255,255,255,0.06)' }} />
+
+      {sorted.map((lvl, i) => (
+        <Box key={`${lvl.label}-${i}`} sx={{
+          position: 'absolute',
+          top: `${pct(lvl.price)}%`,
+          left: 0, right: 0,
+          transform: 'translateY(-50%)',
+          display: 'flex', alignItems: 'center',
+          zIndex: lvl.isMark ? 2 : 1,
+        }}>
+          <Typography sx={{
+            width: 92, textAlign: 'right', pr: 0.75,
+            fontSize: lvl.isMark ? 12 : 11,
+            fontFamily: 'monospace',
+            fontWeight: lvl.isMark ? 700 : 400,
+            color: lvl.color,
+            whiteSpace: 'nowrap',
           }}>
-            {e.closeReason == null ? 'OPEN' : e.closeReason}
+            ${lvl.price.toFixed(dp)}
+          </Typography>
+
+          <Box sx={{
+            width: lvl.isMark ? 10 : 7, height: lvl.isMark ? 10 : 7,
+            borderRadius: '50%', bgcolor: lvl.color, flexShrink: 0,
+            boxShadow: lvl.isMark ? `0 0 8px ${lvl.color}` : 'none',
+            zIndex: 2,
+          }} />
+
+          <Box sx={{
+            flex: 1, height: lvl.isMark ? 2 : 1,
+            bgcolor: lvl.color,
+            opacity: lvl.isMark ? 0.5 : 0.25,
+            mx: 0.5,
+          }} />
+
+          <Typography sx={{
+            fontSize: 10, color: lvl.color, whiteSpace: 'nowrap', pl: 0.5,
+            fontWeight: lvl.isMark ? 700 : 400,
+          }}>
+            {lvl.label}
+            {!lvl.isMark && (
+              <Box component="span" sx={{ ml: 0.5, opacity: 0.6 }}>
+                {lvl.dashed ? '(pending)' : '(active)'}
+              </Box>
+            )}
           </Typography>
         </Box>
       ))}
-    </Stack>
+    </Box>
   );
 }
 
-function TraderCard({ trader }: { trader: TraderSummary }): React.ReactElement {
-  const pos = trader.currentPosition;
-  const stats = trader.stats;
-  const lifetimeHours = stats.startedAt && stats.endsAt
-    ? (new Date(stats.endsAt).getTime() - new Date(stats.startedAt).getTime())
-    : 24 * 3600_000;
-  const progress = lifetimeHours > 0
-    ? Math.min(100, ((lifetimeHours - stats.remainingMs) / lifetimeHours) * 100)
-    : 0;
+// ─── hedge progress bar ──────────────────────────────────────────────────────
+
+function HedgeProgress({ trader }: { trader: TraderSummary }): React.ReactElement | null {
+  const entry     = parseFloat(trader.entryPrice ?? '0');
+  const mark      = parseFloat(trader.markPrice);
+  const nextHedge = trader.hedgeLevels.find(h => h.status === 'PENDING' || h.status === 'ACTIVE');
+  const hedgeE    = parseFloat(nextHedge?.entryPrice ?? '0');
+
+  if (entry === 0 || hedgeE === 0 || !isFinite(mark)) return null;
+
+  const pct   = Math.min(100, Math.max(0, ((mark - entry) / (hedgeE - entry)) * 100));
+  const color: 'success' | 'warning' | 'error' = pct < 50 ? 'success' : pct < 80 ? 'warning' : 'error';
 
   return (
-    <Card sx={{ border: '1px solid', borderColor: 'divider', height: '100%' }}>
-      <CardContent sx={{ p: { xs: 1.5, sm: 2 } }}>
-        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 1, mb: 1 }}>
-          <Box sx={{ display: 'flex', gap: 0.75, alignItems: 'center', flexWrap: 'wrap' }}>
-            <Typography variant="h5" fontWeight={800} sx={{ fontSize: { xs: '1.25rem', sm: '1.5rem' } }}>
-              {trader.symbol.replace('USDT', '')}
-            </Typography>
-            <Chip label={trader.status} size="small" color={trader.status === 'ACTIVE' ? 'success' : 'default'} />
-            {pos != null && (
-              <Chip
-                label={pos.side}
-                size="small"
-                color={pos.side === 'SHORT' ? 'error' : 'success'}
-                variant="outlined"
-              />
+    <Box sx={{ mt: 1.5 }}>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+        <Typography variant="caption" color="text.secondary">
+          Distance to L{(nextHedge as HedgeLevelInfo).level} hedge trigger
+        </Typography>
+        <Typography variant="caption" sx={{
+          fontWeight: 600,
+          color: color === 'error' ? '#f44336' : color === 'warning' ? '#ff9800' : '#4caf50',
+        }}>
+          {pct.toFixed(0)}%
+        </Typography>
+      </Box>
+      <LinearProgress variant="determinate" value={pct} color={color} sx={{ borderRadius: 1, height: 5 }} />
+    </Box>
+  );
+}
+
+// ─── trader card ─────────────────────────────────────────────────────────────
+
+function TraderCard({ trader }: { trader: TraderSummary }): React.ReactElement {
+  const isActive = trader.status === 'ACTIVE';
+  const hedged   = trader.hedgeLevels.some(h => h.status === 'OPEN');
+
+  return (
+    <Card sx={{
+      border: '1px solid',
+      borderColor: isActive
+        ? hedged ? 'rgba(255,152,0,0.35)' : 'rgba(33,150,243,0.25)'
+        : 'divider',
+      height: '100%',
+    }}>
+      <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
+
+        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+            <Typography variant="h6" fontWeight={700} sx={{ letterSpacing: 0.5 }}>{trader.symbol}</Typography>
+            <Chip label={trader.status} size="small" sx={{
+              height: 20, fontSize: 10, borderRadius: 1,
+              bgcolor: isActive ? 'rgba(76,175,80,0.15)' : 'rgba(255,255,255,0.07)',
+              color: isActive ? '#4caf50' : 'text.secondary',
+            }} />
+            {trader.hedgeLevel > 0 && (
+              <Chip label={`L${trader.hedgeLevel} Hedge`} size="small" sx={{
+                height: 20, fontSize: 10, borderRadius: 1,
+                bgcolor: 'rgba(255,152,0,0.15)', color: '#ff9800',
+              }} />
             )}
           </Box>
-          <Typography fontWeight={800} sx={{ color: col(trader.totalPnl), fontSize: 18 }}>
-            {pnl(trader.totalPnl)}
-          </Typography>
-        </Box>
-
-        <Box sx={{ mb: 1.5 }}>
-          <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
-            <Typography variant="caption" color="text.secondary">Time remaining</Typography>
-            <Typography variant="caption" fontFamily="monospace" fontWeight={700}>
-              {formatDuration(stats.remainingMs)}
+          <Box sx={{ textAlign: 'right' }}>
+            <Typography variant="caption" color="text.secondary" display="block">Unrealized</Typography>
+            <Typography variant="body2" fontWeight={700} sx={{ color: pnlCol(trader.unrealizedPnl) }}>
+              {pnlStr(trader.unrealizedPnl, 4)} USDT
             </Typography>
           </Box>
-          <LinearProgress variant="determinate" value={progress} sx={{ height: 6, borderRadius: 1 }} />
-          <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
-            Runtime {formatDuration(stats.runtimeMs)} · ${px(trader.markPrice)}
-          </Typography>
         </Box>
 
-        <Typography variant="caption" color="text.secondary" fontWeight={700}>CAPITAL STEPS</Typography>
-        {trader.capital != null ? (
-          <CapitalSteps capital={trader.capital} />
-        ) : (
-          <Typography variant="caption" color="text.secondary">—</Typography>
-        )}
+        <Divider sx={{ mb: 1, opacity: 0.15 }} />
+        <PriceRuler trader={trader} />
+        <HedgeProgress trader={trader} />
+        <Divider sx={{ mt: 1.5, mb: 1, opacity: 0.15 }} />
 
-        <Divider sx={{ my: 1.5 }} />
-        <Typography variant="caption" color="text.secondary" fontWeight={700}>CURRENT POSITION</Typography>
-        {pos != null ? (
-          <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 0.75, mt: 0.5, mb: 1 }}>
-            <Stat label="Number" value={`#${pos.number}`} />
-            <Stat label="Side" value={pos.side} />
-            <Stat label="Step" value={`${pos.capitalStep ?? trader.capital?.currentStep ?? '—'} / ${trader.capital?.capitalSteps ?? '—'}`} />
-            <Stat label="Allocation" value={money(pos.stepAmount ?? trader.capital?.currentStepAmount)} />
-            <Stat label="Entry" value={`$${px(pos.entryPrice)}`} />
-            <Stat label="Mark" value={`$${px(trader.markPrice)}`} />
-            <Stat label="Qty" value={pos.quantity} />
-            <Stat label="Leverage" value={`${trader.leverage}x`} />
-            <Stat label="PnL" value={pnl(pos.unrealizedPnl)} color={col(pos.unrealizedPnl)} />
-            <Stat label="ROI" value={`${parseFloat(pos.roiPercent).toFixed(2)}%`} color={col(pos.roiPercent)} />
-            <Stat label="Take Profit" value={`$${px(pos.tpPrice)}`} />
-            <Stat label="Stop Loss" value={`$${px(pos.slPrice)}`} />
+        <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
+          <Box>
+            <Typography variant="caption" color="text.secondary">Realized PnL</Typography>
+            <Typography variant="body2" fontWeight={600} sx={{ color: pnlCol(trader.realizedPnl) }}>
+              {pnlStr(trader.realizedPnl, 4)} USDT
+            </Typography>
           </Box>
-        ) : (
-          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', my: 1 }}>Waiting for fill…</Typography>
-        )}
-
-        <PositionViz trader={trader} />
-
-        <Divider sx={{ my: 1.5 }} />
-        <Typography variant="caption" color="text.secondary" fontWeight={700}>STATISTICS</Typography>
-        <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 0.75, mt: 0.5 }}>
-          <Stat label="Opened" value={String(stats.positionsOpened)} />
-          <Stat label="Closed" value={String(stats.positionsClosed)} />
-          <Stat label="Take Profits" value={String(stats.takeProfits)} />
-          <Stat label="Stop Losses" value={String(stats.stopLosses)} />
-          <Stat label="Step ↑ / ↓" value={`${stats.stepIncreases ?? 0} / ${stats.stepDecreases ?? 0}`} />
-          <Stat label="Step-1 / Max" value={`${stats.step1Trades ?? 0} / ${stats.maxStepTrades ?? 0}`} />
-          <Stat label="Win Rate" value={`${stats.winRate}%`} />
-          <Stat label="Fees" value={money(stats.totalFees)} />
-          <Stat label="Realized" value={pnl(trader.realizedPnl)} color={col(trader.realizedPnl)} />
-          <Stat label="Unrealized" value={pnl(trader.unrealizedPnl)} color={col(trader.unrealizedPnl)} />
-          <Stat label="Longs" value={String(stats.longPositions)} />
-          <Stat label="Shorts" value={String(stats.shortPositions)} />
+          <Box sx={{ textAlign: 'center' }}>
+            <Typography variant="caption" color="text.secondary">Entry</Typography>
+            <Typography variant="body2">{fmt(trader.entryPrice)}</Typography>
+          </Box>
+          <Box sx={{ textAlign: 'right' }}>
+            <Typography variant="caption" color="text.secondary">TP Target</Typography>
+            <Typography variant="body2" sx={{ color: '#4caf50' }}>{fmt(trader.tpPrice)}</Typography>
+          </Box>
         </Box>
 
-        <Divider sx={{ my: 1.5 }} />
-        <Typography variant="caption" color="text.secondary" fontWeight={700}>POSITION HISTORY</Typography>
-        <Timeline entries={trader.timeline} />
       </CardContent>
     </Card>
   );
 }
 
+// ─── main page ───────────────────────────────────────────────────────────────
+
 export function DashboardPage(): React.ReactElement {
+  const { data: stats   } = useGlobalStats();
   const { data: summary } = useStatsSummary();
   const { data: traders } = useActiveTraders();
-  const pause = usePauseTraders();
-  const resume = useResumeTraders();
-  const emergency = useEmergencyStop();
-  const wsOk = useSystemStore((s) => s.dashboardWsConnected);
-  const [confirmStop, setConfirmStop] = useState(false);
-  const botStatus = summary?.botStatus;
+  const pauseMutation  = usePauseTraders();
+  const resumeMutation = useResumeTraders();
+  const stopMutation   = useEmergencyStop();
 
-  const list = traders ?? [];
-
-  useEffect(() => {
-    if (!confirmStop) return;
-    const t = setTimeout(() => setConfirmStop(false), 4000);
-    return () => clearTimeout(t);
-  }, [confirmStop]);
+  const isLive = stats?.tradingMode === 'LIVE';
+  const gainers = summary?.topGainers ?? [];
 
   return (
     <Box>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2, flexWrap: 'wrap', gap: 1 }}>
-        <Typography variant="h4" fontWeight={800}>Dashboard</Typography>
-        <Stack direction="row" spacing={1} alignItems="center">
-          <Chip label={summary?.tradingMode ?? '—'} size="small" />
-          <Chip label={wsOk ? 'Live' : 'Reconnecting'} color={wsOk ? 'success' : 'warning'} size="small" />
-          <Chip label={botStatus ?? summary?.botStatus ?? '—'} size="small" variant="outlined" />
-          <Button size="small" variant="outlined" onClick={() => pause.mutate()} disabled={pause.isPending}>Pause</Button>
-          <Button size="small" variant="outlined" onClick={() => resume.mutate()} disabled={resume.isPending}>Resume</Button>
-          <Button
-            size="small"
-            color="error"
-            variant={confirmStop ? 'contained' : 'outlined'}
-            startIcon={<Warning />}
-            onClick={() => {
-              if (!confirmStop) { setConfirmStop(true); return; }
-              emergency.mutate();
-              setConfirmStop(false);
-            }}
-          >
-            {confirmStop ? 'Confirm Stop' : 'Emergency'}
+      {/* ── compact summary bar ── */}
+      <Box sx={{
+        display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 2,
+        p: 1.5, mb: 2, borderRadius: 2,
+        bgcolor: 'background.paper', border: '1px solid', borderColor: 'divider',
+      }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <AccountBalanceWallet fontSize="small" color="primary" />
+          <Box>
+            <Typography variant="caption" color="text.secondary" display="block">Total Equity</Typography>
+            <Typography variant="body1" fontWeight={700}>{fmt(stats?.totalEquity, 2)}</Typography>
+          </Box>
+          <Chip label={stats?.tradingMode ?? '…'} size="small" color={isLive ? 'error' : 'info'} />
+        </Box>
+
+        <Divider orientation="vertical" flexItem />
+
+        {[
+          { label: 'Per Trader',                                         value: fmt(stats?.equityPerTrader, 2)   },
+          { label: `Notional ×${stats?.leverage ?? '?'}x`,              value: fmt(stats?.positionNotional, 2), color: 'primary.main' },
+          { label: 'Active',                                             value: `${stats?.activeTraders ?? 0} / ${stats?.maxTraders ?? 0}` },
+          { label: 'Daily PnL',  color: pnlCol(stats?.dailyPnl ?? '0'), value: fmt(stats?.dailyPnl, 2)          },
+          { label: 'Win Rate',                                           value: `${stats?.winRate ?? 0}%`        },
+        ].map(item => (
+          <Box key={item.label}>
+            <Typography variant="caption" color="text.secondary" display="block">{item.label}</Typography>
+            <Typography variant="body2" fontWeight={600} sx={{ color: item.color ?? 'text.primary' }}>{item.value}</Typography>
+          </Box>
+        ))}
+
+        <Box sx={{ ml: 'auto', display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+          <Button size="small" variant="outlined" color="warning"
+            onClick={() => pauseMutation.mutate()} disabled={pauseMutation.isPending}>
+            Pause All
           </Button>
-        </Stack>
+          <Button size="small" variant="outlined" color="success"
+            onClick={() => resumeMutation.mutate()} disabled={resumeMutation.isPending}>
+            Resume
+          </Button>
+          <Button size="small" variant="contained" color="error" startIcon={<Warning />}
+            onClick={() => { if (window.confirm('EMERGENCY STOP — close all positions?')) stopMutation.mutate(); }}>
+            Emergency Stop
+          </Button>
+        </Box>
       </Box>
 
-      <Grid container spacing={1.5} sx={{ mb: 2 }}>
-        <Grid item xs={6} sm={4} md={3}><Metric label="Balance" value={money(summary?.balance)} /></Grid>
-        <Grid item xs={6} sm={4} md={3}><Metric label="Equity" value={money(summary?.equity ?? summary?.totalEquity)} /></Grid>
-        <Grid item xs={6} sm={4} md={3}>
-          <Metric label="Unrealized" value={pnl(summary?.totalUnrealizedPnl ?? '0')} color={col(summary?.totalUnrealizedPnl ?? '0')} />
-        </Grid>
-        <Grid item xs={6} sm={4} md={3}>
-          <Metric label="Realized" value={pnl(summary?.totalRealizedPnl ?? '0')} color={col(summary?.totalRealizedPnl ?? '0')} />
-        </Grid>
-        <Grid item xs={6} sm={4} md={3}>
-          <Metric label="Today" value={pnl(summary?.dailyPnl ?? '0')} color={col(summary?.dailyPnl ?? '0')} />
-        </Grid>
-        <Grid item xs={6} sm={4} md={3}>
-          <Metric label="Traders" value={`${summary?.activeTraders ?? list.length} / ${summary?.maxTraders ?? 0}`} />
-        </Grid>
-        <Grid item xs={6} sm={4} md={3}>
-          <Metric label="Positions" value={String(summary?.openPositions ?? list.filter((t) => t.currentPosition != null).length)} />
-        </Grid>
-        <Grid item xs={6} sm={4} md={3}>
-          <Metric label="Mode" value={summary?.tradingMode ?? '—'} />
-        </Grid>
-      </Grid>
-
+      {/* ── content: traders + gainers sidebar ── */}
       <Grid container spacing={2}>
-        <Grid item xs={12} md={8}>
-          <Typography variant="h6" fontWeight={700} mb={1}>Active Traders</Typography>
-          {list.length === 0 ? (
-            <Typography color="text.secondary">No active traders — waiting for top gainers…</Typography>
+        {/* trader cards */}
+        <Grid item xs={12} md={gainers.length > 0 ? 9 : 12}>
+          {traders == null || traders.length === 0 ? (
+            <Box sx={{ textAlign: 'center', py: 10, color: 'text.secondary' }}>
+              <Typography variant="h6" gutterBottom>No active traders</Typography>
+              <Typography variant="body2">The bot is scanning for opportunities…</Typography>
+            </Box>
           ) : (
             <Grid container spacing={2}>
-              {list.map((t) => (
-                <Grid item xs={12} key={t.id}>
+              {traders.map(t => (
+                <Grid item xs={12} lg={6} key={t.id}>
                   <TraderCard trader={t} />
                 </Grid>
               ))}
             </Grid>
           )}
         </Grid>
-        <Grid item xs={12} md={4}>
-          <Card>
-            <CardContent>
-              <Typography variant="h6" fontWeight={700} mb={1}>Top Gainers</Typography>
-              {(summary?.topGainers ?? []).slice(0, 10).map((g) => (
-                <Box key={g.symbol} sx={{ display: 'flex', justifyContent: 'space-between', py: 0.5 }}>
-                  <Typography variant="body2" fontWeight={600}>{g.symbol.replace('USDT', '')}</Typography>
-                  <Typography variant="body2" sx={{ color: col(g.priceChangePercent) }} fontFamily="monospace">
-                    {parseFloat(g.priceChangePercent).toFixed(2)}%
-                  </Typography>
-                </Box>
-              ))}
-            </CardContent>
-          </Card>
-        </Grid>
+
+        {/* top gainers sidebar */}
+        {gainers.length > 0 && (
+          <Grid item xs={12} md={3}>
+            <Card sx={{ position: 'sticky', top: 16 }}>
+              <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
+                <Typography variant="subtitle2" fontWeight={700} sx={{ mb: 1, opacity: 0.7, letterSpacing: 0.5 }}>
+                  TOP GAINERS
+                </Typography>
+                {gainers.slice(0, 15).map(g => {
+                  const pct = parseFloat(g.priceChangePercent);
+                  const color = pct >= 0 ? '#4caf50' : '#f44336';
+                  return (
+                    <Box key={g.symbol} sx={{
+                      display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                      py: 0.5, borderBottom: '1px solid', borderColor: 'divider',
+                      '&:last-child': { borderBottom: 'none' },
+                    }}>
+                      <Typography variant="caption" fontFamily="monospace" fontWeight={600}>
+                        {g.symbol.replace('USDT', '')}
+                      </Typography>
+                      <Box sx={{ textAlign: 'right' }}>
+                        <Typography variant="caption" sx={{ color, fontWeight: 700, display: 'block' }}>
+                          {pct >= 0 ? '+' : ''}{pct.toFixed(2)}%
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary" sx={{ fontSize: 10 }}>
+                          ${parseFloat(g.lastPrice).toFixed(4)}
+                        </Typography>
+                      </Box>
+                    </Box>
+                  );
+                })}
+              </CardContent>
+            </Card>
+          </Grid>
+        )}
       </Grid>
     </Box>
   );
 }
+
+
