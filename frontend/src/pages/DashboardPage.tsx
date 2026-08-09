@@ -345,7 +345,7 @@ export function DashboardPage(): React.ReactElement {
   const wsOk = useSystemStore((s) => s.dashboardWsConnected);
   const [confirmStop, setConfirmStop] = useState(false);
   const botStatus = summary?.botStatus;
-
+  const gainers = summary?.topGainers ?? [];
   const list = traders ?? [];
 
   useEffect(() => {
@@ -397,19 +397,65 @@ export function DashboardPage(): React.ReactElement {
         </Grid>
       </Grid>
 
-      {list.length === 0 ? (
-        <Card><CardContent sx={{ textAlign: 'center', py: 6 }}>
-          <Typography color="text.secondary">No active traders — scanning top gainers…</Typography>
-        </CardContent></Card>
-      ) : (
-        <Grid container spacing={2}>
-          {list.map((t) => (
-            <Grid item xs={12} lg={6} key={t.id}>
-              <TraderCard trader={t} />
+      <Grid container spacing={2}>
+        <Grid item xs={12} md={gainers.length > 0 ? 9 : 12}>
+          {list.length === 0 ? (
+            <Card><CardContent sx={{ textAlign: 'center', py: 6 }}>
+              <Typography color="text.secondary">No active traders — scanning top gainers…</Typography>
+            </CardContent></Card>
+          ) : (
+            <Grid container spacing={2}>
+              {list.map((t) => (
+                <Grid item xs={12} lg={6} key={t.id}>
+                  <TraderCard trader={t} />
+                </Grid>
+              ))}
             </Grid>
-          ))}
+          )}
         </Grid>
-      )}
+
+        {gainers.length > 0 && (
+          <Grid item xs={12} md={3}>
+            <Card sx={{ position: 'sticky', top: 16 }}>
+              <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
+                <Typography variant="subtitle2" fontWeight={700} sx={{ mb: 1, opacity: 0.7, letterSpacing: 0.5 }}>
+                  TOP GAINERS
+                </Typography>
+                {gainers.slice(0, 15).map((g) => {
+                  const pct = parseFloat(g.priceChangePercent);
+                  const color = pct >= 0 ? '#4caf50' : '#f44336';
+                  return (
+                    <Box
+                      key={g.symbol}
+                      sx={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        py: 0.5,
+                        borderBottom: '1px solid',
+                        borderColor: 'divider',
+                        '&:last-child': { borderBottom: 'none' },
+                      }}
+                    >
+                      <Typography variant="caption" fontFamily="monospace" fontWeight={600}>
+                        {g.symbol.replace('USDT', '')}
+                      </Typography>
+                      <Box sx={{ textAlign: 'right' }}>
+                        <Typography variant="caption" sx={{ color, fontWeight: 700, display: 'block' }}>
+                          {pct >= 0 ? '+' : ''}{pct.toFixed(2)}%
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary" sx={{ fontSize: 10 }}>
+                          ${parseFloat(g.lastPrice).toFixed(4)}
+                        </Typography>
+                      </Box>
+                    </Box>
+                  );
+                })}
+              </CardContent>
+            </Card>
+          </Grid>
+        )}
+      </Grid>
     </Box>
   );
 }
