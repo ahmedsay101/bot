@@ -35,14 +35,21 @@ describe('capital step calculation', () => {
     expect(simulateStepSequence(5, ['TP', 'TP', 'TP', 'TP', 'TP'])).toEqual([1, 2, 3, 4, 5, 5]);
   });
 
-  it('SL progression 5→4→3→2→1→1', () => {
-    expect(simulateStepSequence(5, ['SL', 'SL', 'SL', 'SL', 'SL'], 5)).toEqual([5, 4, 3, 2, 1, 1]);
+  it('SL always resets directly to Step 1 from any step', () => {
+    expect(nextStepAfterClose(1, 'SL', 5)).toBe(1);
+    expect(nextStepAfterClose(2, 'SL', 5)).toBe(1);
+    expect(nextStepAfterClose(3, 'SL', 5)).toBe(1);
+    expect(nextStepAfterClose(4, 'SL', 5)).toBe(1);
+    expect(nextStepAfterClose(5, 'SL', 5)).toBe(1);
+    // Not gradual: 5 → 1, never 5→4→3→2→1
+    expect(simulateStepSequence(5, ['SL'], 5)).toEqual([5, 1]);
   });
 
-  it('mixed TP/SL sequence', () => {
-    expect(simulateStepSequence(5, ['TP', 'TP', 'SL', 'TP', 'SL', 'SL'])).toEqual([
-      1, 2, 3, 2, 3, 2, 1,
-    ]);
+  it('mixed sequence with SL resets', () => {
+    // 1 -TP→ 2 -TP→ 3 -TP→ 4 -SL→ 1 -TP→ 2 -TP→ 3 -SL→ 1
+    expect(
+      simulateStepSequence(5, ['TP', 'TP', 'TP', 'SL', 'TP', 'TP', 'SL']),
+    ).toEqual([1, 2, 3, 4, 1, 2, 3, 1]);
   });
 
   it('never goes below 1 or above max', () => {
@@ -59,6 +66,14 @@ describe('capital step calculation', () => {
     expect(nextSideAfterClose('LONG', 'SL')).toBe('SHORT');
   });
 
+  it('SL reset uses Step 1 allocation (not intermediate)', () => {
+    const alloc = '100';
+    const steps = 5;
+    // Was step 4 ($80), after SL → step 1 ($20)
+    expect(calcStepAmount(alloc, steps, nextStepAfterClose(4, 'SL', steps)).toFixed(2)).toBe('20.00');
+    expect(calcStepAmount(alloc, steps, nextStepAfterClose(5, 'SL', steps)).toFixed(2)).toBe('20.00');
+  });
+
   it('notional = step margin × leverage', () => {
     expect(calcStepNotional('20', 5).toFixed(0)).toBe('100');
     expect(calcStepNotional(calcStepAmount('100', 5, 3), 10).toFixed(0)).toBe('600');
@@ -66,7 +81,7 @@ describe('capital step calculation', () => {
 
   it('PnL does not affect step amounts (fixed allocation)', () => {
     const a = calcStepAmount('100', 5, 3);
-    const b = calcStepAmount('100', 5, 3); // same allocation regardless of +20 or -15 PnL
+    const b = calcStepAmount('100', 5, 3);
     expect(a.equals(b)).toBe(true);
     expect(a.toFixed(0)).toBe('60');
   });
@@ -93,18 +108,17 @@ describe('capital step calculation', () => {
     it('Example 5: current step allocation never exceeds trader allocation', () => {
       for (const steps of [3, 5, 10]) {
         for (let s = 1; s <= steps; s++) {
-          const alloc = calcStepAmount('100', steps, s);
-          expect(alloc.lte(100)).toBe(true);
+          const a = calcStepAmount('100', steps, s);
+          expect(a.lte(100)).toBe(true);
         }
       }
       expect(calcStepAmount('100', 5, 5).eq(100)).toBe(true);
     });
 
     it('position notional is separate from step allocation', () => {
-      const stepAlloc = calcStepAmount('100', 5, 3); // $60
+      const stepAlloc = calcStepAmount('100', 5, 3);
       expect(stepAlloc.toFixed(2)).toBe('60.00');
       expect(calcStepNotional(stepAlloc, 5).toFixed(2)).toBe('300.00');
     });
   });
 });
-

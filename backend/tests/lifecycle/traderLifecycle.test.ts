@@ -194,7 +194,7 @@ describe('Trader V2 reversal lifecycle', () => {
     trader.destroy();
   });
 
-  it('SL opens OPPOSITE direction and steps down (floor at 1)', async () => {
+  it('SL opens OPPOSITE direction and resets to Step 1', async () => {
     const trader = await bootTrader('t-sl', provider, db, ledger);
     const sl = trader.toSummary().currentPosition!.slPrice;
 
@@ -210,9 +210,10 @@ describe('Trader V2 reversal lifecycle', () => {
     expect(s.currentPosition!.number).toBe(2);
     expect(s.stats.longPositions).toBe(1);
     expect(s.timeline[0]!.closeReason).toBe('SL');
-    // Was step 1, SL keeps step 1
+    // Was step 1, SL stays at step 1 with one reset counted
     expect(s.capital.currentStep).toBe(1);
-    expect(s.stats.stepDecreases).toBe(0);
+    expect(s.stats.stepResets).toBe(1);
+    expect(parseFloat(s.capital.currentStepAllocation || s.capital.currentStepAmount)).toBeCloseTo(40, 0);
 
     trader.destroy();
   });
@@ -244,7 +245,7 @@ describe('Trader V2 reversal lifecycle', () => {
     expect(trader.hasOpenPosition()).toBe(false);
   }, 10000);
 
-  it('persists timeline of TP then SL progression with steps', async () => {
+  it('persists timeline of TP then SL reset to Step 1', async () => {
     const trader = await bootTrader('t-timeline', provider, db, ledger);
 
     // Hit TP → SHORT #2 at step 2
@@ -252,8 +253,9 @@ describe('Trader V2 reversal lifecycle', () => {
     provider.onPriceUpdate('BTCUSDT', tp);
     trader.onPriceUpdate(tp);
     await wait(500);
+    expect(trader.toSummary().capital.currentStep).toBe(2);
 
-    // Hit SL on SHORT #2 → LONG #3 at step 1
+    // Hit SL on SHORT #2 → LONG #3 at step 1 (reset, not step-by-step)
     const sl = trader.toSummary().currentPosition!.slPrice;
     provider.onPriceUpdate('BTCUSDT', sl);
     trader.onPriceUpdate(sl);
@@ -265,11 +267,42 @@ describe('Trader V2 reversal lifecycle', () => {
     expect(s.currentPosition!.side).toBe('LONG');
     expect(s.currentPosition!.number).toBe(3);
     expect(s.capital.currentStep).toBe(1);
+    expect(s.stats.stepResets).toBe(1);
+    expect(parseFloat(s.capital.currentStepAllocation || s.capital.currentStepAmount)).toBeCloseTo(40, 0);
     expect(s.timeline[0]!.capitalStep).toBe(1);
     expect(s.timeline[1]!.capitalStep).toBe(2);
     expect(s.timeline[2]!.capitalStep).toBe(1);
     expect(s.timeline.filter((t) => t.closeReason === 'TP').length).toBe(1);
     expect(s.timeline.filter((t) => t.closeReason === 'SL').length).toBe(1);
+
+    trader.destroy();
+  });
+
+  it('SL from high step resets atomically to Step 1 allocation', async () => {
+    const trader = await bootTrader('t-sl-reset', provider, db, ledger);
+
+    // Climb to step 4 via 3 TPs
+    for (let i = 0; i < 3; i++) {
+      const tp = trader.toSummary().currentPosition!.tpPrice;
+      provider.onPriceUpdate('BTCUSDT', tp);
+      trader.onPriceUpdate(tp);
+      await wait(500);
+    }
+    expect(trader.toSummary().capital.currentStep).toBe(4);
+    expect(parseFloat(trader.toSummary().capital.currentStepAllocation)).toBeCloseTo(160, 0); // 200*4/5
+
+    const sl = trader.toSummary().currentPosition!.slPrice;
+    const sideBefore = trader.toSummary().currentPosition!.side;
+    provider.onPriceUpdate('BTCUSDT', sl);
+    trader.onPriceUpdate(sl);
+    await wait(500);
+
+    const s = trader.toSummary();
+    expect(s.capital.currentStep).toBe(1);
+    expect(parseFloat(s.capital.currentStepAllocation)).toBeCloseTo(40, 0); // Step 1 only
+    expect(s.stats.stepResets).toBe(1);
+    expect(s.currentPosition!.side).toBe(sideBefore === 'SHORT' ? 'LONG' : 'SHORT');
+    expect(s.currentPosition!.capitalStep).toBe(1);
 
     trader.destroy();
   });
@@ -314,6 +347,7 @@ describe('Trader V2 reversal lifecycle', () => {
       lowestStepReached: snap.capital.lowestStepReached,
       stepIncreases: snap.capital.stepIncreases,
       stepDecreases: snap.capital.stepDecreases,
+      stepResets: snap.capital.stepResets,
       step1Trades: snap.capital.step1Trades,
       maxStepTrades: snap.capital.maxStepTrades,
       positionsOpened: snap.stats.positionsOpened,

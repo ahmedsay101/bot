@@ -89,6 +89,7 @@ export class Trader extends EventEmitter {
   private lowestStepReached = 1;
   private stepIncreases = 0;
   private stepDecreases = 0;
+  private stepResets = 0;
   private step1Trades = 0;
   private maxStepTrades = 0;
 
@@ -222,6 +223,7 @@ export class Trader extends EventEmitter {
     lowestStepReached: number;
     stepIncreases: number;
     stepDecreases: number;
+    stepResets: number;
     step1Trades: number;
     maxStepTrades: number;
     positionsOpened: number;
@@ -272,6 +274,7 @@ export class Trader extends EventEmitter {
     this.lowestStepReached = state.lowestStepReached || this.currentStep;
     this.stepIncreases = state.stepIncreases || 0;
     this.stepDecreases = state.stepDecreases || 0;
+    this.stepResets = state.stepResets || 0;
     this.step1Trades = state.step1Trades || 0;
     this.maxStepTrades = state.maxStepTrades || 0;
     this.positionsOpened = state.positionsOpened;
@@ -748,12 +751,16 @@ export class Trader extends EventEmitter {
     await this.openPosition(next);
   }
 
-  /** TP → step+1 (cap); SL → step−1 (floor 1). Idempotent only via close handlers. */
+  /** TP → step+1 (cap); SL → reset to Step 1. Idempotent via closeHandled / handledCloseIds. */
   private applyStepProgression(reason: 'TP' | 'SL'): void {
     const prev = this.currentStep;
     const next = nextStepAfterClose(prev, reason, this.capitalSteps);
-    if (next > prev) this.stepIncreases += 1;
-    if (next < prev) this.stepDecreases += 1;
+    if (reason === 'TP' && next > prev) this.stepIncreases += 1;
+    if (reason === 'SL') {
+      // One atomic reset per SL — never count intermediate levels
+      this.stepResets += 1;
+      if (prev > 1) this.stepDecreases += 1; // legacy: one decrease event, not N levels
+    }
     this.currentStep = next;
     this.currentStepAmount = calcStepAmount(
       this.traderAllocatedAmount,
@@ -762,6 +769,12 @@ export class Trader extends EventEmitter {
     );
     if (this.currentStep > this.highestStepReached) this.highestStepReached = this.currentStep;
     if (this.currentStep < this.lowestStepReached) this.lowestStepReached = this.currentStep;
+    this.lifecycle('STEP_PROGRESSION', {
+      reason,
+      from: prev,
+      to: this.currentStep,
+      stepAmount: this.currentStepAmount.toFixed(8),
+    });
   }
 
   private scheduleLifetimeEnd(): void {
@@ -967,6 +980,7 @@ export class Trader extends EventEmitter {
         lowestStepReached: this.lowestStepReached,
         stepIncreases: this.stepIncreases,
         stepDecreases: this.stepDecreases,
+        stepResets: this.stepResets,
         step1Trades: this.step1Trades,
         maxStepTrades: this.maxStepTrades,
         positionsOpened: this.positionsOpened,
@@ -1256,6 +1270,7 @@ export class Trader extends EventEmitter {
         lowestStepReached: this.lowestStepReached,
         stepIncreases: this.stepIncreases,
         stepDecreases: this.stepDecreases,
+        stepResets: this.stepResets,
         step1Trades: this.step1Trades,
         maxStepTrades: this.maxStepTrades,
       },
@@ -1281,6 +1296,7 @@ export class Trader extends EventEmitter {
         lowestStepReached: this.lowestStepReached,
         stepIncreases: this.stepIncreases,
         stepDecreases: this.stepDecreases,
+        stepResets: this.stepResets,
         step1Trades: this.step1Trades,
         maxStepTrades: this.maxStepTrades,
       },

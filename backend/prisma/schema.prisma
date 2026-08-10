@@ -91,6 +91,8 @@ model Trader {
   lowestStepReached     Int    @default(1)
   stepIncreases         Int    @default(0)
   stepDecreases         Int    @default(0)
+  /// SL events that reset capital step to 1 (counted once per SL, not per level)
+  stepResets            Int    @default(0)
   step1Trades           Int    @default(0)
   maxStepTrades         Int    @default(0)
 

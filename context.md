@@ -19,7 +19,7 @@ Production-grade Binance Futures trading platform with Live and Testing modes sh
 - Capital steps (`CAPITAL_STEPS`, default 5): Step N margin = allocation × N / steps; notional = margin × leverage.
 - Place Take Profit and Stop Loss (defaults 10% each, configurable decimals e.g. `0.10`).
 - **TP hit** → step +1 (cap at max) + same direction.
-- **SL hit** → step −1 (floor at 1) + opposite direction.
+- **SL hit** → capital step resets atomically to Step 1 + opposite direction.
 - Step amounts are fixed from create-time allocation — not affected by PnL/balance.
 - Continuous trading until lifetime ends.
 - After lifetime: close position, cancel orders, persist stats, destroy trader, free slot, spawn next top-gainer trader.

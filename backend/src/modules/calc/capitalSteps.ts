@@ -46,7 +46,7 @@ export function clampStep(step: number, capitalSteps: number): number {
 
 /**
  * Next capital step after a close.
- * TP → +1 (cap at max); SL → −1 (floor at 1).
+ * TP → +1 (cap at max); SL → always reset to Step 1 (atomic, not gradual).
  */
 export function nextStepAfterClose(
   currentStep: number,
@@ -56,7 +56,7 @@ export function nextStepAfterClose(
   const max = Math.max(1, Math.floor(capitalSteps));
   const cur = clampStep(currentStep, max);
   if (reason === 'TP') return Math.min(max, cur + 1);
-  return Math.max(1, cur - 1);
+  return 1;
 }
 
 /** Notional = step margin × leverage. */

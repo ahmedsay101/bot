@@ -322,7 +322,7 @@ function TraderCard({ trader }: { trader: TraderSummary }): React.ReactElement {
           <Stat label="Closed" value={String(stats.positionsClosed)} />
           <Stat label="Take Profits" value={String(stats.takeProfits)} />
           <Stat label="Stop Losses" value={String(stats.stopLosses)} />
-          <Stat label="Step ↑ / ↓" value={`${stats.stepIncreases ?? 0} / ${stats.stepDecreases ?? 0}`} />
+          <Stat label="Step ↑ / Resets" value={`${stats.stepIncreases ?? 0} / ${stats.stepResets ?? 0}`} />
           <Stat label="Win Rate" value={`${stats.winRate}%`} />
           <Stat label="Realized" value={pnl(trader.realizedPnl)} color={col(trader.realizedPnl)} />
           <Stat label="Unrealized" value={pnl(trader.unrealizedPnl)} color={col(trader.unrealizedPnl)} />

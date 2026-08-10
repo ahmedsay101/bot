@@ -186,6 +186,8 @@ export interface CapitalProgressView {
   lowestStepReached: number;
   stepIncreases: number;
   stepDecreases: number;
+  /** SL → Step 1 transitions (one per SL, not per intermediate level). */
+  stepResets: number;
   step1Trades: number;
   maxStepTrades: number;
 }
@@ -211,6 +213,7 @@ export interface TraderLifecycleStats {
   lowestStepReached: number;
   stepIncreases: number;
   stepDecreases: number;
+  stepResets: number;
   step1Trades: number;
   maxStepTrades: number;
 }

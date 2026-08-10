@@ -333,6 +333,7 @@ export class TraderManager extends EventEmitter {
           lowestStepReached: dbTrader.lowestStepReached,
           stepIncreases: dbTrader.stepIncreases,
           stepDecreases: dbTrader.stepDecreases,
+          stepResets: dbTrader.stepResets,
           step1Trades: dbTrader.step1Trades,
           maxStepTrades: dbTrader.maxStepTrades,
           positionsOpened: dbTrader.positionsOpened,
