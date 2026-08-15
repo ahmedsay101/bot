@@ -108,6 +108,9 @@ export interface CurrentPositionView {
   tpPrice: string;
   slPrice: string;
   unrealizedPnl: string;
+  estimatedExitFee?: string;
+  netUnrealizedPnl?: string;
+  entryFee?: string;
   roiPercent: string;
   status: 'OPEN' | 'SUBMITTED';
 }
@@ -151,7 +154,11 @@ export interface TraderLifecycleStats {
   longPositions: number;
   shortPositions: number;
   winRate: string;
+  consecutiveStopLosses?: number;
+  consecutiveStopLossLimit?: number;
+  grossRealizedPnl?: string;
   totalFees: string;
+  netRealizedPnl?: string;
   currentStep: number;
   highestStepReached: number;
   lowestStepReached: number;
@@ -174,6 +181,10 @@ export interface PositionTimelineEntry {
   takeProfit?: string | null;
   stopLoss?: string | null;
   fees?: string | null;
+  entryFee?: string | null;
+  exitFee?: string | null;
+  totalFees?: string | null;
+  grossPnl?: string | null;
   closeReason: 'TP' | 'SL' | 'FORCE' | 'EXPIRED' | null;
   realizedPnl: string | null;
   openedAt: string;
@@ -187,6 +198,8 @@ export interface TraderSummary {
   realizedPnl: string;
   unrealizedPnl: string;
   totalPnl: string;
+  grossRealizedPnl?: string;
+  totalFees?: string;
   markPrice: string;
   leverage: number;
   capital: CapitalProgressView;
@@ -277,6 +290,16 @@ export interface GlobalStats {
   tradingMode: string;
 }
 
+export interface SymbolBlockView {
+  symbol: string;
+  reason: string;
+  consecutiveStopLosses: number;
+  blockedAt: string;
+  blockedUntil: string;
+  remainingMs: number;
+  traderId: string | null;
+}
+
 export interface StatsSummary {
   balance?: string;
   equity?: string;
@@ -291,7 +314,15 @@ export interface StatsSummary {
   totalEquity?: string;
   totalPnl?: string;
   totalRealizedPnl: string;
+  grossRealizedPnl?: string;
+  netRealizedPnl?: string;
+  totalFees?: string;
   totalUnrealizedPnl: string;
+  currentBalance?: string;
+  highestBalance24h?: string;
+  lowestBalance24h?: string;
+  blockedSymbols?: SymbolBlockView[];
+  consecutiveStopLossLimit?: number;
   tradingMode?: string;
   botStatus?: string;
   equityPerTrader?: string;

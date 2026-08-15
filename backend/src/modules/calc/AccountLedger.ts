@@ -8,6 +8,11 @@ import {
   testingStartingBalance,
   type AccountSnapshot,
 } from './accounting';
+import {
+  calcBalanceRange24h,
+  selectExpiredBalanceSnapshotIds,
+  type BalanceRange24h,
+} from './balanceHistory';
 import { calcAllocation } from './allocation';
 import { calcTotalMaintenanceMargin } from './maintenanceMargin';
 import { createContextLogger } from '../logger';
@@ -18,6 +23,11 @@ const log = createContextLogger('AccountLedger');
  * Single source of truth for Balance / Equity / Realized / fees.
  * Testing: persisted AccountLedger row, starts at TESTING_BASE_EQUITY USDT.
  * Live: Binance wallet + maintMargin via reconcileFromBinance.
+ *
+ * Realized PnL is always net of trading fees (gross − fees).
+ * totalFees accumulates entry + exit commissions (once each).
+ *
+ * BalanceSnapshot rows track wallet balance for rolling 24h high/low.
  */
 export class AccountLedger {
   private balance = testingStartingBalance();
@@ -29,6 +39,9 @@ export class AccountLedger {
   /** Last Binance maint margin from reconcile (live). */
   private liveMaintMargin: Decimal | null = null;
   private lastReconcileAt = 0;
+  /** Last balance written to BalanceSnapshot (skip duplicate unchanged). */
+  private lastRecordedBalance: string | null = null;
+  private cleanupInFlight = false;
 
   constructor(
     private readonly db: PrismaClient,
@@ -61,11 +74,96 @@ export class AccountLedger {
     }
 
     this.loaded = true;
+    await this.ensureInitialBalanceSnapshot();
   }
 
   /**
-   * Pull wallet + maint margin + today's REALIZED_PNL from Binance.
-   * Safe to call frequently; rate-limited to once per 2s internally.
+   * Seed history with current balance if empty (new bot / after reset).
+   */
+  private async ensureInitialBalanceSnapshot(): Promise<void> {
+    try {
+      const count = await this.db.balanceSnapshot.count();
+      if (count === 0) {
+        await this.recordBalanceSnapshot(this.balance, true);
+      } else {
+        const latest = await this.db.balanceSnapshot.findFirst({
+          orderBy: { recordedAt: 'desc' },
+        });
+        this.lastRecordedBalance = latest?.balance ?? null;
+      }
+    } catch (err) {
+      log.warn('Failed to seed balance snapshot', { error: String(err) });
+    }
+  }
+
+  /**
+   * Persist a wallet-balance point when it changes (or force on seed).
+   */
+  private async recordBalanceSnapshot(
+    balance: Decimal | string,
+    force = false,
+  ): Promise<void> {
+    const bal = new Decimal(balance).toFixed(8);
+    if (!force && this.lastRecordedBalance != null && this.lastRecordedBalance === bal) {
+      return;
+    }
+    try {
+      await this.db.balanceSnapshot.create({
+        data: { balance: bal, recordedAt: new Date() },
+      });
+      this.lastRecordedBalance = bal;
+      void this.cleanupExpiredSnapshots();
+    } catch (err) {
+      log.warn('Failed to record balance snapshot', { error: String(err) });
+    }
+  }
+
+  private async cleanupExpiredSnapshots(): Promise<void> {
+    if (this.cleanupInFlight) return;
+    this.cleanupInFlight = true;
+    try {
+      const now = Date.now();
+      // Load a bounded set of old rows for cleanup decisions
+      const old = await this.db.balanceSnapshot.findMany({
+        where: {
+          recordedAt: { lt: new Date(now - 24 * 60 * 60 * 1000) },
+        },
+        orderBy: { recordedAt: 'asc' },
+        select: { id: true, recordedAt: true },
+      });
+      const toDelete = selectExpiredBalanceSnapshotIds(old, now);
+      if (toDelete.length > 0) {
+        await this.db.balanceSnapshot.deleteMany({ where: { id: { in: toDelete } } });
+      }
+    } catch (err) {
+      log.debug('Balance snapshot cleanup failed', { error: String(err) });
+    } finally {
+      this.cleanupInFlight = false;
+    }
+  }
+
+  /**
+   * Rolling 24h high/low from persisted snapshots + current balance.
+   * Survives restart; frontend must not recalculate.
+   */
+  async getBalanceRange24h(currentOverride?: Decimal | string): Promise<BalanceRange24h> {
+    await this.ensureLoaded();
+    const current = currentOverride != null ? new Decimal(currentOverride) : this.balance;
+    const now = Date.now();
+    // Fetch window + one day buffer so anchor is available after restart
+    const since = new Date(now - 48 * 60 * 60 * 1000);
+    const rows = await this.db.balanceSnapshot.findMany({
+      where: { recordedAt: { gte: since } },
+      orderBy: { recordedAt: 'asc' },
+      select: { balance: true, recordedAt: true },
+    });
+    return calcBalanceRange24h(current, rows, now);
+  }
+
+  /**
+   * Pull wallet + maint margin from Binance.
+   * Compare COMMISSION / REALIZED_PNL income against local fill accounting — log diffs,
+   * do not silently overwrite local realized / fees (fill path is authoritative for bot trades).
    */
   async reconcileFromBinance(): Promise<void> {
     if (this.mode !== 'LIVE') return;
@@ -75,38 +173,68 @@ export class AccountLedger {
 
     try {
       const info = await this.binanceClient.getAccountInfo();
-      this.balance = new Decimal(info.walletBalance);
+      const wallet = new Decimal(info.walletBalance);
+      const prev = this.balance;
+      this.balance = wallet;
       this.liveMaintMargin = new Decimal(info.maintMargin);
+
+      if (!wallet.eq(prev) || this.lastRecordedBalance == null) {
+        await this.recordBalanceSnapshot(wallet);
+      }
 
       const todayStart = new Date();
       todayStart.setUTCHours(0, 0, 0, 0);
-      const income = await this.binanceClient.getIncome({
-        incomeType: 'REALIZED_PNL',
-        startTime: todayStart.getTime(),
-        limit: 1000,
-      });
-      let day = new Decimal(0);
-      let fees = new Decimal(0);
-      for (const row of income) {
-        if (row.incomeType === 'REALIZED_PNL') day = day.plus(row.income);
-        if (row.incomeType === 'COMMISSION') fees = fees.plus(new Decimal(row.income).abs());
-      }
-      this.dailyPnl = day;
+      const startTime = todayStart.getTime();
+
+      const [pnlToday, commissionToday] = await Promise.all([
+        this.binanceClient.getIncome({
+          incomeType: 'REALIZED_PNL',
+          startTime,
+          limit: 1000,
+        }),
+        this.binanceClient.getIncome({
+          incomeType: 'COMMISSION',
+          startTime,
+          limit: 1000,
+        }),
+      ]);
+
+      let dayGross = new Decimal(0);
+      for (const row of pnlToday) dayGross = dayGross.plus(row.income);
+      let dayFees = new Decimal(0);
+      for (const row of commissionToday) dayFees = dayFees.plus(new Decimal(row.income).abs());
+
+      this.dailyPnl = dayGross.minus(dayFees);
       this.dailyPnlDate = new Date().toISOString().slice(0, 10);
 
-      // Cumulative realized from REALIZED_PNL income (best-effort)
-      const allPnl = await this.binanceClient.getIncome({
-        incomeType: 'REALIZED_PNL',
-        limit: 1000,
-      });
-      let realized = new Decimal(0);
-      for (const row of allPnl) realized = realized.plus(row.income);
-      this.realizedPnl = realized;
+      const [allPnl, allFees] = await Promise.all([
+        this.binanceClient.getIncome({ incomeType: 'REALIZED_PNL', limit: 1000 }),
+        this.binanceClient.getIncome({ incomeType: 'COMMISSION', limit: 1000 }),
+      ]);
+      let binanceGross = new Decimal(0);
+      for (const row of allPnl) binanceGross = binanceGross.plus(row.income);
+      let binanceFees = new Decimal(0);
+      for (const row of allFees) binanceFees = binanceFees.plus(new Decimal(row.income).abs());
+      const binanceNet = binanceGross.minus(binanceFees);
+
+      const feeDiff = this.totalFees.minus(binanceFees).abs();
+      const netDiff = this.realizedPnl.minus(binanceNet).abs();
+      if (feeDiff.gte('0.01') || netDiff.gte('0.01')) {
+        log.warn('Binance fee/PnL reconciliation discrepancy (local fill accounting kept)', {
+          localNetRealized: this.realizedPnl.toFixed(8),
+          binanceNetRealized: binanceNet.toFixed(8),
+          localFees: this.totalFees.toFixed(8),
+          binanceFees: binanceFees.toFixed(8),
+          binanceGrossRealized: binanceGross.toFixed(8),
+          walletBalance: this.balance.toFixed(8),
+        });
+      }
 
       log.debug('Reconciled from Binance', {
         balance: this.balance.toFixed(4),
         maint: this.liveMaintMargin.toFixed(4),
-        daily: this.dailyPnl.toFixed(4),
+        dailyNet: this.dailyPnl.toFixed(4),
+        localFees: this.totalFees.toFixed(4),
       });
     } catch (err) {
       log.warn('Binance reconcile failed', { error: String(err) });
@@ -120,10 +248,13 @@ export class AccountLedger {
   async recordRealized(grossPnl: Decimal | string, fee: Decimal | string): Promise<Decimal> {
     await this.ensureLoaded();
     if (this.mode !== 'SIMULATION') {
-      // Live: Binance is source of truth; track locally until next reconcile
+      // Live: Binance wallet is balance SSOT; track local net + fees until next reconcile
       const next = applyRealizedTrade(this.balance, this.realizedPnl, this.totalFees, grossPnl, fee);
       this.realizedPnl = next.realizedPnl;
       this.totalFees = next.totalFees;
+      // Optimistic local balance for high/low until Binance reconcile confirms
+      this.balance = next.balance;
+      await this.recordBalanceSnapshot(this.balance);
       return next.netPnl;
     }
 
@@ -150,10 +281,13 @@ export class AccountLedger {
       },
     });
 
+    await this.recordBalanceSnapshot(this.balance);
+
     log.info('Balance updated', {
       netPnl: next.netPnl.toFixed(8),
       balance: this.balance.toFixed(4),
       realized: this.realizedPnl.toFixed(4),
+      fees: this.totalFees.toFixed(4),
     });
 
     return next.netPnl;
@@ -172,12 +306,21 @@ export class AccountLedger {
     return this.realizedPnl;
   }
 
+  getTotalFees(): Decimal {
+    return this.totalFees;
+  }
+
+  /** Gross realized = net + fees (when all fees are trading commissions). */
+  getGrossRealizedPnl(): Decimal {
+    return this.realizedPnl.plus(this.totalFees);
+  }
+
   async getSnapshot(params: {
     unrealizedPnl: Decimal | string;
     openNotionals: Array<Decimal | string>;
     leverage: number;
     dailyPnlOverride?: Decimal | string;
-  }): Promise<AccountSnapshot> {
+  }): Promise<AccountSnapshot & BalanceRange24h> {
     await this.ensureLoaded();
 
     if (this.mode === 'LIVE') {
@@ -203,7 +346,14 @@ export class AccountLedger {
             ? new Decimal(info.maintMargin)
             : calcTotalMaintenanceMargin(params.openNotionals));
 
-        this.balance = wallet;
+        if (!wallet.eq(this.balance)) {
+          this.balance = wallet;
+          await this.recordBalanceSnapshot(wallet);
+        } else {
+          this.balance = wallet;
+        }
+
+        const range = await this.getBalanceRange24h(wallet);
 
         return {
           balance: wallet.toFixed(8),
@@ -216,13 +366,15 @@ export class AccountLedger {
           usedMargin: usedMargin.toFixed(8),
           availableMargin: available.toFixed(8),
           maintenanceMargin: maint.toFixed(8),
+          ...range,
+          currentBalance: wallet.toFixed(8),
         };
       } catch (err) {
         log.error('Live account snapshot failed', { error: String(err) });
       }
     }
 
-    return buildAccountSnapshot({
+    const base = buildAccountSnapshot({
       balance: this.balance,
       realizedPnl: this.realizedPnl,
       unrealizedPnl: params.unrealizedPnl,
@@ -231,6 +383,12 @@ export class AccountLedger {
       openNotionals: params.openNotionals,
       leverage: params.leverage,
     });
+    const range = await this.getBalanceRange24h(this.balance);
+    return {
+      ...base,
+      ...range,
+      currentBalance: base.balance,
+    };
   }
 
   /** Position sizing uses Balance (wallet), not equity-with-unrealized. */

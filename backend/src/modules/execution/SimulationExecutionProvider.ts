@@ -12,8 +12,9 @@ import type {
 } from '../../types';
 import { createContextLogger } from '../logger';
 import { sleep } from '../utils/retry';
-import { calcFee, adjustPrice, adjustQuantity } from '../utils/precision';
+import { adjustPrice, adjustQuantity } from '../utils/precision';
 import { config } from '../../config';
+import { estimateExecutionFee, feeRatesFromConfig } from '../calc/fees';
 
 const log = createContextLogger('SimulationExecutionProvider');
 
@@ -462,7 +463,8 @@ export class SimulationExecutionProvider extends EventEmitter implements IExecut
 
     const prevFilled = new Decimal(order.result.filledQuantity || '0');
     const newFilledTotal = prevFilled.plus(fillQty);
-    const fee = calcFee(fillPrice, fillQty.toFixed(), config.trading.feeRate);
+    const rates = feeRatesFromConfig(config.trading);
+    const fee = estimateExecutionFee(fillPrice, fillQty.toFixed(), rates.takerFeeRate);
     const prevFee = new Decimal(order.result.fee || '0');
     const avgPx = new Decimal(fillPrice)
       .toDecimalPlaces(symbolInfo.pricePrecision)

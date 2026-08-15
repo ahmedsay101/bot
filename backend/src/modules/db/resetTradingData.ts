@@ -20,13 +20,15 @@ export interface ResetTradingDataResult {
  */
 export async function resetTradingData(db: PrismaClient): Promise<ResetTradingDataResult> {
   // Children first (FK → Trader)
-  const [trades, orders, positions, statistics, traders, logs] = await db.$transaction([
+  const [trades, orders, positions, statistics, traders, logs, balanceSnapshots, symbolBlocks] = await db.$transaction([
     db.trade.deleteMany({}),
     db.order.deleteMany({}),
     db.position.deleteMany({}),
     db.traderStatistics.deleteMany({}),
     db.trader.deleteMany({}),
     db.appLog.deleteMany({}),
+    db.balanceSnapshot.deleteMany({}),
+    db.symbolBlock.deleteMany({}),
   ]);
 
   const today = new Date().toISOString().slice(0, 10);
@@ -49,6 +51,11 @@ export async function resetTradingData(db: PrismaClient): Promise<ResetTradingDa
       dailyPnl: '0',
       dailyPnlDate: today,
     },
+  });
+
+  // Seed fresh 24h high/low baseline
+  await db.balanceSnapshot.create({
+    data: { balance: starting, recordedAt: new Date() },
   });
 
   await db.globalStatistics.upsert({
@@ -84,6 +91,10 @@ export async function resetTradingData(db: PrismaClient): Promise<ResetTradingDa
     logs: logs.count,
   };
 
-  log.warn('[LIFECYCLE] DB_RESET — trading history cleared; starting fresh', result);
+  log.warn('[LIFECYCLE] DB_RESET — trading history cleared; starting fresh', {
+    ...result,
+    balanceSnapshots: balanceSnapshots.count,
+    symbolBlocks: symbolBlocks.count,
+  });
   return result;
 }

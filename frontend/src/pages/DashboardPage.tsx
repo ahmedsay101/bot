@@ -11,7 +11,7 @@ import {
   useEmergencyStop,
 } from '../hooks/useQueries';
 import { useSystemStore } from '../stores/systemStore';
-import type { TraderSummary, PositionTimelineEntry, CapitalProgressView } from '../services/api';
+import type { TraderSummary, PositionTimelineEntry, CapitalProgressView, SymbolBlockView } from '../services/api';
 
 function money(v: string | number | null | undefined, dp = 2): string {
   const n = parseFloat(String(v ?? '0'));
@@ -74,6 +74,91 @@ function Metric({ label, value, color }: { label: string; value: string; color?:
         <Typography variant="h6" fontWeight={800} sx={{ color: color ?? 'inherit', fontSize: { xs: '1.1rem', sm: '1.25rem' } }}>
           {value}
         </Typography>
+      </CardContent>
+    </Card>
+  );
+}
+
+function formatRemaining(ms: number): string {
+  if (ms <= 0) return 'expired';
+  const totalMin = Math.floor(ms / 60000);
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  if (h <= 0) return `${m}m`;
+  return `${h}h ${m}m`;
+}
+
+function BlockedSymbolsPanel({ blocks }: { blocks: SymbolBlockView[] }): React.ReactElement | null {
+  if (blocks.length === 0) return null;
+  return (
+    <Card sx={{ mb: 2 }}>
+      <CardContent sx={{ py: 1.5, '&:last-child': { pb: 1.5 } }}>
+        <Typography variant="subtitle2" fontWeight={700} sx={{ mb: 1, opacity: 0.8 }}>
+          Blocked Symbols
+        </Typography>
+        <Stack spacing={1}>
+          {blocks.map((b) => (
+            <Box key={b.symbol} sx={{ display: 'flex', justifyContent: 'space-between', gap: 1, flexWrap: 'wrap' }}>
+              <Box>
+                <Typography fontWeight={800} fontFamily="monospace">{b.symbol.replace('USDT', '')}</Typography>
+                <Typography variant="caption" color="text.secondary" display="block">
+                  {b.reason} · SL streak {b.consecutiveStopLosses}
+                </Typography>
+              </Box>
+              <Box sx={{ textAlign: 'right' }}>
+                <Chip label={`Remaining ${formatRemaining(b.remainingMs)}`} size="small" color="warning" variant="outlined" />
+                <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.25 }}>
+                  Until {new Date(b.blockedUntil).toLocaleString()}
+                </Typography>
+              </Box>
+            </Box>
+          ))}
+        </Stack>
+      </CardContent>
+    </Card>
+  );
+}
+
+/** Backend-provided 24h balance range — display only. */
+function BalanceRangeBar({
+  low,
+  high,
+  current,
+}: {
+  low?: string;
+  high?: string;
+  current?: string;
+}): React.ReactElement | null {
+  const lo = parseFloat(String(low ?? ''));
+  const hi = parseFloat(String(high ?? ''));
+  const cur = parseFloat(String(current ?? ''));
+  if (![lo, hi, cur].every((n) => isFinite(n))) return null;
+  const span = hi - lo;
+  const pct = span <= 0 ? 50 : Math.min(100, Math.max(0, ((cur - lo) / span) * 100));
+  return (
+    <Card sx={{ mb: 2 }}>
+      <CardContent sx={{ py: 1.25, '&:last-child': { pb: 1.25 } }}>
+        <Typography variant="caption" color="text.secondary" fontWeight={700}>24h Balance Range</Typography>
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 0.5, mb: 0.75 }}>
+          <Typography variant="caption" fontFamily="monospace">{money(lo)}</Typography>
+          <Typography variant="caption" fontFamily="monospace" fontWeight={700}>{money(cur)}</Typography>
+          <Typography variant="caption" fontFamily="monospace">{money(hi)}</Typography>
+        </Box>
+        <Box sx={{ position: 'relative', height: 8, borderRadius: 1, bgcolor: 'action.hover' }}>
+          <Box
+            sx={{
+              position: 'absolute',
+              left: `calc(${pct}% - 6px)`,
+              top: -2,
+              width: 12,
+              height: 12,
+              borderRadius: '50%',
+              bgcolor: 'primary.main',
+              border: '2px solid',
+              borderColor: 'background.paper',
+            }}
+          />
+        </Box>
       </CardContent>
     </Card>
   );
@@ -213,30 +298,44 @@ function Timeline({ entries }: { entries: PositionTimelineEntry[] }): React.Reac
   return (
     <Stack spacing={0.75} sx={{ mt: 0.75 }}>
       {list.map((e) => (
-        <Box
-          key={`${e.number}-${e.openedAt}`}
-          sx={{ display: 'flex', justifyContent: 'space-between', gap: 1, alignItems: 'baseline' }}
-        >
-          <Typography variant="body2" fontWeight={700} fontFamily="monospace" sx={{ fontSize: 13 }}>
-            #{e.number}{' '}
-            <Box component="span" sx={{ color: e.side === 'SHORT' ? '#f44336' : '#4caf50' }}>{e.side}</Box>
-            {' · '}Step {e.capitalStep ?? '—'}{' '}
-            {e.stepAmount != null ? money(e.stepAmount) : ''}
-          </Typography>
-          <Typography variant="caption" fontWeight={700} sx={{
-            color: e.closeReason === 'TP' ? '#4caf50' : e.closeReason === 'SL' ? '#f44336' : 'text.secondary',
-          }}>
-            {e.closeReason == null ? 'OPEN' : e.closeReason}
-          </Typography>
+        <Box key={`${e.number}-${e.openedAt}`} sx={{ borderBottom: '1px solid', borderColor: 'divider', pb: 0.75 }}>
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1, alignItems: 'baseline' }}>
+            <Typography variant="body2" fontWeight={700} fontFamily="monospace" sx={{ fontSize: 13 }}>
+              #{e.number}{' '}
+              <Box component="span" sx={{ color: e.side === 'SHORT' ? '#f44336' : '#4caf50' }}>{e.side}</Box>
+              {' · '}Step {e.capitalStep ?? '—'}{' '}
+              {e.stepAmount != null ? money(e.stepAmount) : ''}
+            </Typography>
+            <Typography variant="caption" fontWeight={700} sx={{
+              color: e.closeReason === 'TP' ? '#4caf50' : e.closeReason === 'SL' ? '#f44336' : 'text.secondary',
+            }}>
+              {e.closeReason == null ? 'OPEN' : e.closeReason}
+            </Typography>
+          </Box>
+          {e.closedAt != null ? (
+            <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 0.25, mt: 0.35 }}>
+              <Typography variant="caption" color="text.secondary">Gross {pnl(e.grossPnl ?? '0')}</Typography>
+              <Typography variant="caption" color="text.secondary">Entry fee {pnl(`-${e.entryFee ?? '0'}`)}</Typography>
+              <Typography variant="caption" color="text.secondary">Exit fee {pnl(`-${e.exitFee ?? '0'}`)}</Typography>
+              <Typography variant="caption" color="text.secondary">Total fees {pnl(`-${e.totalFees ?? e.fees ?? '0'}`)}</Typography>
+              <Typography variant="caption" fontWeight={700} sx={{ color: col(e.realizedPnl ?? '0'), gridColumn: '1 / -1' }}>
+                Net {pnl(e.realizedPnl ?? '0')}
+              </Typography>
+            </Box>
+          ) : e.entryFee != null ? (
+            <Typography variant="caption" color="text.secondary">Entry fee {pnl(`-${e.entryFee}`)}</Typography>
+          ) : null}
         </Box>
       ))}
     </Stack>
   );
 }
 
-function TraderCard({ trader }: { trader: TraderSummary }): React.ReactElement {
+function TraderCard({ trader, gainers }: { trader: TraderSummary; gainers?: Array<{ symbol: string; priceChangePercent: string }> }): React.ReactElement {
   const pos = trader.currentPosition;
   const stats = trader.stats;
+  const gainerIdx = gainers?.findIndex((g) => g.symbol === trader.symbol) ?? -1;
+  const gainer = gainerIdx >= 0 ? gainers![gainerIdx] : null;
   const capital = trader.capital;
   const lifetimeHours = stats.startedAt && stats.endsAt
     ? (new Date(stats.endsAt).getTime() - new Date(stats.startedAt).getTime())
@@ -259,6 +358,13 @@ function TraderCard({ trader }: { trader: TraderSummary }): React.ReactElement {
               {trader.symbol.replace('USDT', '')}
             </Typography>
             <Chip label={trader.status} size="small" color={trader.status === 'ACTIVE' ? 'success' : 'default'} />
+            {gainer != null && (
+              <Chip
+                label={`#${gainerIdx + 1} · ${parseFloat(gainer.priceChangePercent).toFixed(2)}%`}
+                size="small"
+                variant="outlined"
+              />
+            )}
             {pos != null && (
               <Chip
                 label={pos.side}
@@ -306,7 +412,9 @@ function TraderCard({ trader }: { trader: TraderSummary }): React.ReactElement {
             <Stat label="Mark" value={`$${px(trader.markPrice)}`} />
             <Stat label="Take Profit" value={`$${px(pos.tpPrice)}`} />
             <Stat label="Stop Loss" value={`$${px(pos.slPrice)}`} />
-            <Stat label="PnL" value={pnl(pos.unrealizedPnl)} color={col(pos.unrealizedPnl)} />
+            <Stat label="Gross Unreal." value={pnl(pos.unrealizedPnl)} color={col(pos.unrealizedPnl)} />
+            <Stat label="Est. Exit Fee" value={pnl(`-${pos.estimatedExitFee ?? '0'}`)} color="#f44336" />
+            <Stat label="Net Unreal." value={pnl(pos.netUnrealizedPnl ?? pos.unrealizedPnl)} color={col(pos.netUnrealizedPnl ?? pos.unrealizedPnl)} />
             <Stat label="ROI" value={`${parseFloat(pos.roiPercent).toFixed(2)}%`} color={col(pos.roiPercent)} />
           </Box>
         ) : (
@@ -324,7 +432,14 @@ function TraderCard({ trader }: { trader: TraderSummary }): React.ReactElement {
           <Stat label="Stop Losses" value={String(stats.stopLosses)} />
           <Stat label="Step ↑ / Resets" value={`${stats.stepIncreases ?? 0} / ${stats.stepResets ?? 0}`} />
           <Stat label="Win Rate" value={`${stats.winRate}%`} />
-          <Stat label="Realized" value={pnl(trader.realizedPnl)} color={col(trader.realizedPnl)} />
+          <Stat
+            label="Consecutive SL"
+            value={`${stats.consecutiveStopLosses ?? 0} / ${stats.consecutiveStopLossLimit ?? 3}`}
+            color={(stats.consecutiveStopLosses ?? 0) >= (stats.consecutiveStopLossLimit ?? 3) ? '#f44336' : undefined}
+          />
+          <Stat label="Gross PnL" value={pnl(trader.grossRealizedPnl ?? stats.grossRealizedPnl ?? '0')} color={col(trader.grossRealizedPnl ?? stats.grossRealizedPnl ?? '0')} />
+          <Stat label="Trading Fees" value={pnl(`-${trader.totalFees ?? stats.totalFees ?? '0'}`)} color="#f44336" />
+          <Stat label="Net PnL" value={pnl(trader.realizedPnl)} color={col(trader.realizedPnl)} />
           <Stat label="Unrealized" value={pnl(trader.unrealizedPnl)} color={col(trader.unrealizedPnl)} />
         </Box>
 
@@ -380,14 +495,39 @@ export function DashboardPage(): React.ReactElement {
         </Stack>
       </Box>
 
-      <Grid container spacing={1.5} mb={2}>
-        <Grid item xs={6} sm={4} md={2}><Metric label="Balance" value={money(summary?.balance)} /></Grid>
+      <Grid container spacing={1.5} mb={1.5}>
+        <Grid item xs={6} sm={4} md={2}>
+          <Metric label="Balance" value={money(summary?.currentBalance ?? summary?.balance)} />
+        </Grid>
+        <Grid item xs={6} sm={4} md={2}>
+          <Metric label="24h High" value={money(summary?.highestBalance24h ?? summary?.balance)} color="#4caf50" />
+        </Grid>
+        <Grid item xs={6} sm={4} md={2}>
+          <Metric label="24h Low" value={money(summary?.lowestBalance24h ?? summary?.balance)} color="#f44336" />
+        </Grid>
         <Grid item xs={6} sm={4} md={2}><Metric label="Equity" value={money(summary?.equity)} /></Grid>
+        <Grid item xs={6} sm={4} md={2}>
+          <Metric label="Net Realized" value={pnl(summary?.netRealizedPnl ?? summary?.totalRealizedPnl ?? '0')} color={col(summary?.netRealizedPnl ?? summary?.totalRealizedPnl ?? '0')} />
+        </Grid>
         <Grid item xs={6} sm={4} md={2}>
           <Metric label="Unrealized" value={pnl(summary?.totalUnrealizedPnl ?? '0')} color={col(summary?.totalUnrealizedPnl ?? '0')} />
         </Grid>
+      </Grid>
+
+      <BalanceRangeBar
+        low={summary?.lowestBalance24h}
+        high={summary?.highestBalance24h}
+        current={summary?.currentBalance ?? summary?.balance}
+      />
+
+      <BlockedSymbolsPanel blocks={summary?.blockedSymbols ?? []} />
+
+      <Grid container spacing={1.5} mb={2}>
         <Grid item xs={6} sm={4} md={2}>
-          <Metric label="Realized" value={pnl(summary?.totalRealizedPnl ?? '0')} color={col(summary?.totalRealizedPnl ?? '0')} />
+          <Metric label="Gross Realized" value={pnl(summary?.grossRealizedPnl ?? summary?.totalRealizedPnl ?? '0')} color={col(summary?.grossRealizedPnl ?? summary?.totalRealizedPnl ?? '0')} />
+        </Grid>
+        <Grid item xs={6} sm={4} md={2}>
+          <Metric label="Trading Fees" value={pnl(`-${summary?.totalFees ?? '0'}`)} color="#f44336" />
         </Grid>
         <Grid item xs={6} sm={4} md={2}>
           <Metric label="Today" value={pnl(summary?.dailyPnl ?? '0')} color={col(summary?.dailyPnl ?? '0')} />
@@ -407,7 +547,7 @@ export function DashboardPage(): React.ReactElement {
             <Grid container spacing={2}>
               {list.map((t) => (
                 <Grid item xs={12} lg={6} key={t.id}>
-                  <TraderCard trader={t} />
+                  <TraderCard trader={t} gainers={gainers} />
                 </Grid>
               ))}
             </Grid>

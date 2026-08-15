@@ -106,6 +106,10 @@ model Trader {
   longPositions     Int @default(0)
   shortPositions    Int @default(0)
   totalFees         String @default("0")
+  /// Consecutive SL streak (resets on TP)
+  consecutiveStopLosses Int @default(0)
+  /// Why trader completed: EXPIRED | FORCE | CONSECUTIVE_SL | ...
+  completionReason  String?
 
   /// JSON array of PositionTimelineEntry
   timelineJson      String @default("[]")
@@ -247,6 +251,29 @@ model AccountLedger {
   updatedAt       DateTime @updatedAt
 }
 
+// Rolling balance history for 24h high/low (wallet balance only).
+model BalanceSnapshot {
+  id         String   @id @default(uuid())
+  balance    String
+  recordedAt DateTime @default(now())
+
+  @@index([recordedAt])
+}
+
+// Temporary symbol block after consecutive stop losses.
+model SymbolBlock {
+  id                    String   @id @default(uuid())
+  symbol                String   @unique
+  blockedAt             DateTime @default(now())
+  blockedUntil          DateTime
+  reason                String
+  consecutiveStopLosses Int
+  traderId              String?
+  createdAt             DateTime @default(now())
+
+  @@index([blockedUntil])
+}
+
 model Configuration {
   id              String   @id @default("singleton")
   maxTraders      Int      @default(1)
@@ -259,9 +286,13 @@ model Configuration {
   stopLossPercent   String @default("0.10")
   startingSide      String @default("SHORT")
   capitalSteps      Int    @default(5)
+  consecutiveStopLossLimit Int @default(3)
+  symbolBlockDurationHours Float @default(3)
   refreshInterval Int      @default(60000)
   retryLimit      Int      @default(5)
-  feeRate         String   @default("0.0004")
+  feeRate         String   @default("0.0005")
+  makerFeeRate    String   @default("0.0002")
+  takerFeeRate    String   @default("0.0005")
   slippage        String   @default("0.0001")
   mode            TraderMode @default(SIMULATION)
   isPaused        Boolean  @default(false)

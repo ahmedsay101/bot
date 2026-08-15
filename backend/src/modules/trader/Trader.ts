@@ -22,7 +22,6 @@ import type {
 } from '../../types';
 import {
   adjustPrice,
-  calcFee,
   planPositionPrices,
   nextSideAfterClose,
   marketSideForPosition,
@@ -36,8 +35,15 @@ import {
   calcStepNotional,
   nextStepAfterClose,
 } from '../calc/capitalSteps';
+import {
+  buildPositionFeeBreakdown,
+  estimateOpenExitFee,
+  feeRatesFromConfig,
+  resolveExecutionFee,
+} from '../calc/fees';
 import type { AccountLedger } from '../calc/AccountLedger';
 import { RiskManager } from '../risk/RiskManager';
+import { calcBlockUntil } from '../trader-manager/poolSelection';
 import { createContextLogger } from '../logger';
 import { withRetry } from '../utils/retry';
 import type { PrismaClient } from '@prisma/client';
@@ -46,7 +52,14 @@ const log = createContextLogger('Trader');
 
 export type TraderEvent =
   | { type: 'STATUS_CHANGED'; traderId: string; status: TraderStatus }
-  | { type: 'COMPLETED'; traderId: string; symbol: string }
+  | {
+      type: 'COMPLETED';
+      traderId: string;
+      symbol: string;
+      reason?: CloseReason;
+      consecutiveStopLosses?: number;
+      blockedUntil?: string | null;
+    }
   | { type: 'FAILED'; traderId: string; symbol: string; error: string }
   | { type: 'PNL_UPDATE'; traderId: string; realizedPnl: string; unrealizedPnl: string; totalPnl: string }
   | { type: 'TRADER_SNAPSHOT'; trader: TraderSummaryView };
@@ -99,9 +112,16 @@ export class Trader extends EventEmitter {
   private losingPositions = 0;
   private takeProfits = 0;
   private stopLosses = 0;
+  private consecutiveStopLosses = 0;
+  private completionReason: CloseReason | null = null;
+  private blockedUntilIso: string | null = null;
   private longPositions = 0;
   private shortPositions = 0;
   private totalFees = new Decimal(0);
+  private grossRealizedPnl = new Decimal(0);
+  /** Entry fee booked for the currently open position (for round-trip net). */
+  private currentEntryFee = new Decimal(0);
+  private handledFeeTradeIds = new Set<string>();
 
   private timeline: PositionTimelineEntry[] = [];
   private realizedPnl = new Decimal(0);
@@ -232,6 +252,7 @@ export class Trader extends EventEmitter {
     losingPositions: number;
     takeProfits: number;
     stopLosses: number;
+    consecutiveStopLosses?: number;
     longPositions: number;
     shortPositions: number;
     totalFees: string;
@@ -283,6 +304,7 @@ export class Trader extends EventEmitter {
     this.losingPositions = state.losingPositions;
     this.takeProfits = state.takeProfits;
     this.stopLosses = state.stopLosses;
+    this.consecutiveStopLosses = state.consecutiveStopLosses ?? 0;
     this.longPositions = state.longPositions;
     this.shortPositions = state.shortPositions;
     this.totalFees = new Decimal(state.totalFees);
@@ -291,6 +313,18 @@ export class Trader extends EventEmitter {
     } catch {
       this.timeline = [];
     }
+    // Reconstruct entry fee + gross from timeline (auditable fields)
+    const openEntry = this.timeline.find((t) => t.closedAt == null);
+    this.currentEntryFee = openEntry?.entryFee != null
+      ? new Decimal(openEntry.entryFee)
+      : new Decimal(0);
+    let gross = new Decimal(0);
+    for (const t of this.timeline) {
+      if (t.grossPnl != null) gross = gross.plus(t.grossPnl);
+    }
+    this.grossRealizedPnl = gross.gt(0) || this.timeline.some((t) => t.grossPnl != null)
+      ? gross
+      : this.realizedPnl.plus(this.totalFees);
     this.pendingOrders = new Set(state.pendingClientOrderIds);
     this.entryClientOrderId = state.entryClientOrderId;
     this.tpClientOrderId = state.tpClientOrderId;
@@ -529,6 +563,10 @@ export class Trader extends EventEmitter {
     if (update.avgFillPrice == null || this.currentSide == null || this.symbolInfo == null) return;
     if (this.positionOpen && this.entryPrice != null) return;
 
+    const feeKey = `entry:${update.clientOrderId}:${update.exchangeOrderId}:${update.filledQuantity}`;
+    if (this.handledFeeTradeIds.has(feeKey)) return;
+    this.handledFeeTradeIds.add(feeKey);
+
     this.entryPrice = update.avgFillPrice;
     if (update.filledQuantity) this.quantity = update.filledQuantity;
     this.positionOpen = true;
@@ -536,7 +574,14 @@ export class Trader extends EventEmitter {
     if (this.currentSide === 'LONG') this.longPositions += 1;
     else this.shortPositions += 1;
 
-    const fee = calcFee(this.entryPrice, this.quantity ?? '0', this.traderConfig.feeRate);
+    const fee = resolveExecutionFee({
+      price: this.entryPrice,
+      quantity: this.quantity ?? '0',
+      actualFee: update.fee,
+      rates: feeRatesFromConfig(this.traderConfig),
+      liquidity: 'TAKER',
+    });
+    this.currentEntryFee = fee;
     this.realizedPnl = this.realizedPnl.minus(fee);
     this.totalFees = this.totalFees.plus(fee);
     await this.accountLedger.recordFee(fee);
@@ -560,6 +605,10 @@ export class Trader extends EventEmitter {
       takeProfit: this.tpPrice,
       stopLoss: this.slPrice,
       fees: fee.toFixed(8),
+      entryFee: fee.toFixed(8),
+      exitFee: null,
+      totalFees: fee.toFixed(8),
+      grossPnl: null,
       closeReason: null,
       realizedPnl: null,
       openedAt: new Date().toISOString(),
@@ -660,6 +709,10 @@ export class Trader extends EventEmitter {
     if (update.avgFillPrice == null || this.currentSide == null || this.entryPrice == null) return;
     if (this.handledCloseIds.has(update.clientOrderId) || this.closeHandled) return;
     if (!this.positionOpen) return;
+
+    const feeKey = `exit:${update.clientOrderId}:${update.exchangeOrderId}:${update.filledQuantity}`;
+    if (this.handledFeeTradeIds.has(feeKey)) return;
+    this.handledFeeTradeIds.add(feeKey);
     this.handledCloseIds.add(update.clientOrderId);
     this.closeHandled = true;
 
@@ -668,14 +721,21 @@ export class Trader extends EventEmitter {
     const entry = this.entryPrice;
     const fill = update.avgFillPrice;
 
-    const gross = side === 'SHORT'
-      ? new Decimal(entry).minus(fill).mul(qty)
-      : new Decimal(fill).minus(entry).mul(qty);
-    const fee = calcFee(fill, qty, this.traderConfig.feeRate);
-    const net = gross.minus(fee);
-    this.realizedPnl = this.realizedPnl.plus(net);
-    this.totalFees = this.totalFees.plus(fee);
-    await this.accountLedger.recordRealized(gross, fee);
+    const exitFee = resolveExecutionFee({
+      price: fill,
+      quantity: qty,
+      actualFee: update.fee,
+      rates: feeRatesFromConfig(this.traderConfig),
+      liquidity: 'TAKER',
+    });
+    const entryFee = this.currentEntryFee;
+    const breakdown = buildPositionFeeBreakdown(side, entry, fill, qty, entryFee, exitFee);
+
+    // Ledger: only book exit fee here (entry already booked). Net Δ = gross − exitFee.
+    this.grossRealizedPnl = this.grossRealizedPnl.plus(breakdown.grossPnl);
+    this.realizedPnl = this.realizedPnl.plus(breakdown.grossPnl.minus(exitFee));
+    this.totalFees = this.totalFees.plus(exitFee);
+    await this.accountLedger.recordRealized(breakdown.grossPnl, exitFee);
 
     this.positionsClosed += 1;
     if (reason === 'TP') {
@@ -684,7 +744,7 @@ export class Trader extends EventEmitter {
     } else if (reason === 'SL') {
       this.stopLosses += 1;
       this.losingPositions += 1;
-    } else if (net.gte(0)) {
+    } else if (breakdown.netPnl.gte(0)) {
       this.winningPositions += 1;
     } else {
       this.losingPositions += 1;
@@ -708,16 +768,21 @@ export class Trader extends EventEmitter {
     if (last != null && last.number === this.currentPositionNumber) {
       last.exitPrice = fill;
       last.closeReason = reason;
-      last.realizedPnl = net.toFixed(8);
-      last.fees = new Decimal(last.fees ?? '0').plus(fee).toFixed(8);
+      last.entryFee = entryFee.toFixed(8);
+      last.exitFee = exitFee.toFixed(8);
+      last.totalFees = breakdown.totalFees.toFixed(8);
+      last.fees = breakdown.totalFees.toFixed(8);
+      last.grossPnl = breakdown.grossPnl.toFixed(8);
+      last.realizedPnl = breakdown.netPnl.toFixed(8);
       last.closedAt = new Date().toISOString();
     }
 
-    await this.upsertPosition(side, entry, qty, false, net.toFixed(8));
-    await this.persistTrade(update, roleForSide(side), this.currentPositionNumber, net.toFixed(8));
+    await this.upsertPosition(side, entry, qty, false, breakdown.netPnl.toFixed(8));
+    await this.persistTrade(update, roleForSide(side), this.currentPositionNumber, breakdown.netPnl.toFixed(8));
 
     this.positionOpen = false;
     this.unrealizedPnl = new Decimal(0);
+    this.currentEntryFee = new Decimal(0);
     this.tpClientOrderId = null;
     this.slClientOrderId = null;
     this.entryClientOrderId = null;
@@ -731,7 +796,10 @@ export class Trader extends EventEmitter {
       number: this.currentPositionNumber,
       side,
       fill,
-      net: net.toFixed(8),
+      gross: breakdown.grossPnl.toFixed(8),
+      entryFee: entryFee.toFixed(8),
+      exitFee: exitFee.toFixed(8),
+      net: breakdown.netPnl.toFixed(8),
       nextStep: this.currentStep,
       nextStepAmount: this.currentStepAmount.toFixed(8),
     });
@@ -744,6 +812,26 @@ export class Trader extends EventEmitter {
     if (this.endsAt != null && Date.now() >= this.endsAt.getTime()) {
       await this.complete('EXPIRED');
       return;
+    }
+
+    // Consecutive SL protection: TP resets streak; SL increments; limit → destroy + block
+    if (reason === 'TP') {
+      this.consecutiveStopLosses = 0;
+      await this.persistTraderState();
+    } else if (reason === 'SL') {
+      this.consecutiveStopLosses += 1;
+      await this.persistTraderState();
+      this.emitSnapshot();
+      const limit = Math.max(1, this.traderConfig.consecutiveStopLossLimit ?? 3);
+      if (this.consecutiveStopLosses >= limit) {
+        this.lifecycle('CONSECUTIVE_SL_LIMIT', {
+          consecutiveStopLosses: this.consecutiveStopLosses,
+          limit,
+        });
+        // Position already closed — do not open next; controlled shutdown + symbol block
+        await this.complete('CONSECUTIVE_SL');
+        return;
+      }
     }
 
     // Continuous trading: open next immediately (direction + capital step already updated)
@@ -806,12 +894,18 @@ export class Trader extends EventEmitter {
 
   private async runComplete(reason: CloseReason): Promise<void> {
     this.completing = true;
+    this.completionReason = reason;
     this.clearLifetimeTimer();
     if (this.status !== 'COMPLETING') {
       await this.setStatus('COMPLETING');
     }
 
     this.lifecycle('TRADER_COMPLETING', { reason });
+
+    // Persist symbol block before teardown so pool refill skips this symbol
+    if (reason === 'CONSECUTIVE_SL') {
+      await this.persistSymbolBlock();
+    }
 
     try {
       await this.executionProvider.cancelAllOrders(this.symbol);
@@ -836,24 +930,41 @@ export class Trader extends EventEmitter {
         );
         if (this.positionOpen && closeResult.avgFillPrice != null && this.entryPrice != null && this.currentSide != null) {
           const fill = closeResult.avgFillPrice;
-          const gross = this.currentSide === 'SHORT'
-            ? new Decimal(this.entryPrice).minus(fill).mul(qty)
-            : new Decimal(fill).minus(this.entryPrice).mul(qty);
-          const fee = new Decimal(closeResult.fee || '0');
-          const net = gross.minus(fee);
-          this.realizedPnl = this.realizedPnl.plus(net);
-          this.totalFees = this.totalFees.plus(fee);
-          await this.accountLedger.recordRealized(gross, fee);
+          const exitFee = resolveExecutionFee({
+            price: fill,
+            quantity: qty,
+            actualFee: closeResult.fee,
+            rates: feeRatesFromConfig(this.traderConfig),
+            liquidity: 'TAKER',
+          });
+          const breakdown = buildPositionFeeBreakdown(
+            this.currentSide,
+            this.entryPrice,
+            fill,
+            qty,
+            this.currentEntryFee,
+            exitFee,
+          );
+          this.grossRealizedPnl = this.grossRealizedPnl.plus(breakdown.grossPnl);
+          this.realizedPnl = this.realizedPnl.plus(breakdown.grossPnl.minus(exitFee));
+          this.totalFees = this.totalFees.plus(exitFee);
+          await this.accountLedger.recordRealized(breakdown.grossPnl, exitFee);
           this.positionsClosed += 1;
-          if (net.gte(0)) this.winningPositions += 1;
+          if (breakdown.netPnl.gte(0)) this.winningPositions += 1;
           else this.losingPositions += 1;
           const last = this.timeline[this.timeline.length - 1];
           if (last != null && last.closedAt == null) {
             last.exitPrice = fill;
             last.closeReason = reason;
-            last.realizedPnl = net.toFixed(8);
+            last.entryFee = this.currentEntryFee.toFixed(8);
+            last.exitFee = exitFee.toFixed(8);
+            last.totalFees = breakdown.totalFees.toFixed(8);
+            last.fees = breakdown.totalFees.toFixed(8);
+            last.grossPnl = breakdown.grossPnl.toFixed(8);
+            last.realizedPnl = breakdown.netPnl.toFixed(8);
             last.closedAt = new Date().toISOString();
           }
+          this.currentEntryFee = new Decimal(0);
         }
       }
     } catch (err) {
@@ -870,6 +981,9 @@ export class Trader extends EventEmitter {
       type: 'COMPLETED',
       traderId: this.id,
       symbol: this.symbol,
+      reason,
+      consecutiveStopLosses: this.consecutiveStopLosses,
+      blockedUntil: this.blockedUntilIso,
     } satisfies TraderEvent);
 
     this.lifecycle('TRADER_COMPLETED', {
@@ -878,7 +992,48 @@ export class Trader extends EventEmitter {
       positionsOpened: this.positionsOpened,
       takeProfits: this.takeProfits,
       stopLosses: this.stopLosses,
+      consecutiveStopLosses: this.consecutiveStopLosses,
+      blockedUntil: this.blockedUntilIso,
     });
+  }
+
+  /** Idempotent: one active block row per symbol (upsert). */
+  private async persistSymbolBlock(): Promise<void> {
+    const limit = Math.max(1, this.traderConfig.consecutiveStopLossLimit ?? 3);
+    const hours = this.traderConfig.symbolBlockDurationHours ?? 3;
+    const blockedAt = new Date();
+    const blockedUntil = calcBlockUntil(blockedAt, hours);
+    this.blockedUntilIso = blockedUntil.toISOString();
+    const reason = `${this.consecutiveStopLosses} Consecutive Stop Losses`;
+
+    try {
+      await this.db.symbolBlock.upsert({
+        where: { symbol: this.symbol },
+        create: {
+          symbol: this.symbol,
+          blockedAt,
+          blockedUntil,
+          reason,
+          consecutiveStopLosses: this.consecutiveStopLosses,
+          traderId: this.id,
+        },
+        update: {
+          blockedAt,
+          blockedUntil,
+          reason,
+          consecutiveStopLosses: this.consecutiveStopLosses,
+          traderId: this.id,
+        },
+      });
+      log.warn(`[LIFECYCLE] SYMBOL_BLOCKED`, {
+        symbol: this.symbol,
+        consecutiveStopLosses: this.consecutiveStopLosses,
+        limit,
+        blockedUntil: this.blockedUntilIso,
+      });
+    } catch (err) {
+      log.error(`Failed to persist symbol block for ${this.symbol}`, { error: String(err) });
+    }
   }
 
   async pause(): Promise<void> {
@@ -989,6 +1144,8 @@ export class Trader extends EventEmitter {
         losingPositions: this.losingPositions,
         takeProfits: this.takeProfits,
         stopLosses: this.stopLosses,
+        consecutiveStopLosses: this.consecutiveStopLosses,
+        completionReason: this.completionReason,
         longPositions: this.longPositions,
         shortPositions: this.shortPositions,
         totalFees: this.totalFees.toFixed(8),
@@ -1171,7 +1328,12 @@ export class Trader extends EventEmitter {
     });
     await this.db.trader.update({
       where: { id: this.id },
-      data: { completedAt: new Date(), realizedPnl: this.realizedPnl.toFixed(8) },
+      data: {
+        completedAt: new Date(),
+        realizedPnl: this.realizedPnl.toFixed(8),
+        completionReason: this.completionReason,
+        consecutiveStopLosses: this.consecutiveStopLosses,
+      },
     });
   }
 
@@ -1221,25 +1383,33 @@ export class Trader extends EventEmitter {
     const positionNotionalStr = positionNotional.toFixed(8);
 
     const currentPosition = this.positionOpen && this.currentSide != null && this.entryPrice != null
-      ? {
-          number: this.currentPositionNumber,
-          side: this.currentSide,
-          capitalStep: this.currentStep,
-          stepAmount: stepAllocationStr,
-          positionNotional: positionNotionalStr,
-          entryPrice: this.entryPrice,
-          quantity: this.quantity ?? '0',
-          tpPrice: this.tpPrice ?? '0',
-          slPrice: this.slPrice ?? '0',
-          unrealizedPnl: this.unrealizedPnl.toFixed(8),
-          roiPercent: calcPositionRoi(
-            this.currentSide,
-            this.entryPrice,
-            this.markPrice,
-            this.quantity ?? '0',
-          ).toFixed(4),
-          status: 'OPEN' as const,
-        }
+      ? (() => {
+          const rates = feeRatesFromConfig(this.traderConfig);
+          const estimatedExit = estimateOpenExitFee(this.markPrice, this.quantity ?? '0', rates);
+          const netUnreal = this.unrealizedPnl.minus(this.currentEntryFee).minus(estimatedExit);
+          return {
+            number: this.currentPositionNumber,
+            side: this.currentSide,
+            capitalStep: this.currentStep,
+            stepAmount: stepAllocationStr,
+            positionNotional: positionNotionalStr,
+            entryPrice: this.entryPrice,
+            quantity: this.quantity ?? '0',
+            tpPrice: this.tpPrice ?? '0',
+            slPrice: this.slPrice ?? '0',
+            unrealizedPnl: this.unrealizedPnl.toFixed(8),
+            estimatedExitFee: estimatedExit.toFixed(8),
+            netUnrealizedPnl: netUnreal.toFixed(8),
+            entryFee: this.currentEntryFee.toFixed(8),
+            roiPercent: calcPositionRoi(
+              this.currentSide,
+              this.entryPrice,
+              this.markPrice,
+              this.quantity ?? '0',
+            ).toFixed(4),
+            status: 'OPEN' as const,
+          };
+        })()
       : null;
 
     const ladder = buildStepLadder(this.traderAllocatedAmount, this.capitalSteps).map((s) => ({
@@ -1255,6 +1425,8 @@ export class Trader extends EventEmitter {
       realizedPnl: this.realizedPnl.toFixed(8),
       unrealizedPnl: this.unrealizedPnl.toFixed(8),
       totalPnl: this.realizedPnl.plus(this.unrealizedPnl).toFixed(8),
+      grossRealizedPnl: this.grossRealizedPnl.toFixed(8),
+      totalFees: this.totalFees.toFixed(8),
       markPrice: this.markPrice,
       leverage: this.traderConfig.leverage,
       capital: {
@@ -1290,7 +1462,11 @@ export class Trader extends EventEmitter {
         longPositions: this.longPositions,
         shortPositions: this.shortPositions,
         winRate,
+        consecutiveStopLosses: this.consecutiveStopLosses,
+        consecutiveStopLossLimit: Math.max(1, this.traderConfig.consecutiveStopLossLimit ?? 3),
+        grossRealizedPnl: this.grossRealizedPnl.toFixed(8),
         totalFees: this.totalFees.toFixed(8),
+        netRealizedPnl: this.realizedPnl.toFixed(8),
         currentStep: this.currentStep,
         highestStepReached: this.highestStepReached,
         lowestStepReached: this.lowestStepReached,

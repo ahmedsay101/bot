@@ -19,7 +19,7 @@ export type PositionSide = 'LONG' | 'SHORT' | 'BOTH';
 export type HedgeRole = 'SHORT' | 'HEDGE' | 'LONG';
 export type MarginMode = 'ISOLATED' | 'CROSSED';
 export type TradeSide = 'LONG' | 'SHORT';
-export type CloseReason = 'TP' | 'SL' | 'FORCE' | 'EXPIRED';
+export type CloseReason = 'TP' | 'SL' | 'FORCE' | 'EXPIRED' | 'CONSECUTIVE_SL';
 
 export interface SymbolInfo {
   symbol: string;
@@ -112,9 +112,17 @@ export interface TraderConfig {
   startingSide: TradeSide;
   /** Number of capital steps from allocation (default 5). */
   capitalSteps: number;
+  /** Destroy trader after this many consecutive SLs (default 3). */
+  consecutiveStopLossLimit: number;
+  /** Hours to block symbol after consecutive-SL destroy (default 3). */
+  symbolBlockDurationHours: number;
   refreshInterval: number;
   retryLimit: number;
   feeRate: string;
+  /** Binance Futures maker fee (decimal). Default 0.0002 = 0.02%. */
+  makerFeeRate: string;
+  /** Binance Futures taker fee (decimal). Default 0.0005 = 0.05%. */
+  takerFeeRate: string;
   slippage: string;
   mode: TraderMode;
   /** @deprecated unused in V2 — kept for hot-apply compatibility */
@@ -136,9 +144,15 @@ export interface PositionTimelineEntry {
   leverage: number;
   takeProfit: string | null;
   stopLoss: string | null;
+  /** @deprecated prefer totalFees */
   fees: string | null;
-  closeReason: CloseReason | null;
+  entryFee: string | null;
+  exitFee: string | null;
+  totalFees: string | null;
+  grossPnl: string | null;
+  /** Net = gross − entryFee − exitFee */
   realizedPnl: string | null;
+  closeReason: CloseReason | null;
   openedAt: string;
   closedAt: string | null;
 }
@@ -156,7 +170,13 @@ export interface CurrentPositionView {
   quantity: string;
   tpPrice: string;
   slPrice: string;
+  /** Gross unrealized (price MTM only). */
   unrealizedPnl: string;
+  /** Estimated exit fee at mark (taker). */
+  estimatedExitFee: string;
+  /** Gross unrealized − entryFee − estimatedExitFee. */
+  netUnrealizedPnl: string;
+  entryFee: string;
   roiPercent: string;
   status: 'OPEN' | 'SUBMITTED';
 }
@@ -207,7 +227,15 @@ export interface TraderLifecycleStats {
   longPositions: number;
   shortPositions: number;
   winRate: string;
+  /** Consecutive SL streak (resets on TP). */
+  consecutiveStopLosses: number;
+  consecutiveStopLossLimit: number;
+  /** Gross price PnL before fees (= net + fees). */
+  grossRealizedPnl: string;
+  /** Cumulative trading fees (entry + exit). */
   totalFees: string;
+  /** Cumulative net = gross − fees (matches realizedPnl on trader). */
+  netRealizedPnl: string;
   currentStep: number;
   highestStepReached: number;
   lowestStepReached: number;
@@ -223,9 +251,13 @@ export interface TraderSummaryView {
   id: string;
   symbol: string;
   status: TraderStatus;
+  /** Net realized PnL after fees. */
   realizedPnl: string;
   unrealizedPnl: string;
   totalPnl: string;
+  /** Gross realized (price PnL only). */
+  grossRealizedPnl: string;
+  totalFees: string;
   markPrice: string;
   leverage: number;
   capital: CapitalProgressView;
@@ -276,6 +308,19 @@ export type DashboardEvent =
         topGainers: Ticker24h[];
         tradingMode: TraderMode;
         botStatus: string;
+        currentBalance?: string;
+        highestBalance24h?: string;
+        lowestBalance24h?: string;
+        blockedSymbols?: Array<{
+          symbol: string;
+          reason: string;
+          consecutiveStopLosses: number;
+          blockedAt: string;
+          blockedUntil: string;
+          remainingMs: number;
+          traderId: string | null;
+        }>;
+        consecutiveStopLossLimit?: number;
       };
     };
 

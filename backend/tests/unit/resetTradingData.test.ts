@@ -14,6 +14,13 @@ describe('resetTradingData', () => {
       traderStatistics: { deleteMany: jest.fn(async () => ({ count: 1 })) },
       trader: { deleteMany: jest.fn(async () => ({ count: 3 })) },
       appLog: { deleteMany: jest.fn(async () => ({ count: 10 })) },
+      balanceSnapshot: {
+        deleteMany: jest.fn(async () => ({ count: 4 })),
+        create: jest.fn(async () => ({})),
+      },
+      symbolBlock: {
+        deleteMany: jest.fn(async () => ({ count: 2 })),
+      },
       accountLedger: {
         upsert: jest.fn(async ({ update }: { update: { balance: string } }) => {
           calls.push(`ledger:${update.balance}`);
@@ -39,6 +46,9 @@ describe('resetTradingData', () => {
       logs: 10,
     });
     expect(db.accountLedger.upsert).toHaveBeenCalled();
+    expect(db.balanceSnapshot.deleteMany).toHaveBeenCalled();
+    expect(db.symbolBlock.deleteMany).toHaveBeenCalled();
+    expect(db.balanceSnapshot.create).toHaveBeenCalled();
     expect(db.globalStatistics.upsert).toHaveBeenCalled();
     expect(calls).toContain('transaction');
     expect(calls.some((c) => c.startsWith('ledger:'))).toBe(true);

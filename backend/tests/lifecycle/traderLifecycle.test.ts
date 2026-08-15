@@ -34,7 +34,11 @@ const traderConfig: TraderConfig = {
   capitalSteps: 5,
   refreshInterval: 60000,
   retryLimit: 3,
-  feeRate: '0.0004',
+  feeRate: '0.0005',
+  makerFeeRate: '0.0002',
+  takerFeeRate: '0.0005',
+  consecutiveStopLossLimit: 3,
+  symbolBlockDurationHours: 3,
   slippage: '0.0001',
   mode: 'SIMULATION',
 };

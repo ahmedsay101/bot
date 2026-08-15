@@ -42,9 +42,13 @@ interface AppConfig {
     stopLossPercent: string;
     startingSide: 'LONG' | 'SHORT';
     capitalSteps: number;
+    consecutiveStopLossLimit: number;
+    symbolBlockDurationHours: number;
     refreshInterval: number;
     retryLimit: number;
     feeRate: string;
+    makerFeeRate: string;
+    takerFeeRate: string;
     slippage: string;
     /** When true, wipe traders/orders/ledger on every boot (fresh start). */
     resetDbOnStart: boolean;
@@ -82,9 +86,15 @@ const schema = Joi.object({
   STOP_LOSS_PERCENT: Joi.string().default('0.10'),
   STARTING_SIDE: Joi.string().valid('SHORT', 'LONG').default('SHORT'),
   CAPITAL_STEPS: Joi.number().integer().min(1).max(100).default(5),
+  CONSECUTIVE_STOP_LOSS_LIMIT: Joi.number().integer().min(1).max(100).default(3),
+  SYMBOL_BLOCK_DURATION_HOURS: Joi.number().min(0.001).max(720).default(3),
   REFRESH_INTERVAL: Joi.number().integer().min(5000).default(60000),
   RETRY_LIMIT: Joi.number().integer().min(1).max(20).default(5),
-  FEE_RATE: Joi.string().default('0.0004'),
+  FEE_RATE: Joi.string().default('0.0005'),
+  /** Binance USDⓈ-M Futures regular maker (0.02%). */
+  MAKER_FEE_RATE: Joi.string().default('0.0002'),
+  /** Binance USDⓈ-M Futures regular taker (0.05%). */
+  TAKER_FEE_RATE: Joi.string().default('0.0005'),
   SLIPPAGE: Joi.string().default('0.0001'),
   // Wipe trading history on every boot (default on for clean debug runs)
   RESET_DB_ON_START: Joi.boolean().default(true),
@@ -139,9 +149,13 @@ function loadConfig(): AppConfig {
       stopLossPercent: env.STOP_LOSS_PERCENT as string,
       startingSide: env.STARTING_SIDE as 'LONG' | 'SHORT',
       capitalSteps: env.CAPITAL_STEPS as number,
+      consecutiveStopLossLimit: env.CONSECUTIVE_STOP_LOSS_LIMIT as number,
+      symbolBlockDurationHours: env.SYMBOL_BLOCK_DURATION_HOURS as number,
       refreshInterval: env.REFRESH_INTERVAL as number,
       retryLimit: env.RETRY_LIMIT as number,
-      feeRate: env.FEE_RATE as string,
+      feeRate: (env.TAKER_FEE_RATE as string) || (env.FEE_RATE as string),
+      makerFeeRate: env.MAKER_FEE_RATE as string,
+      takerFeeRate: (env.TAKER_FEE_RATE as string) || (env.FEE_RATE as string),
       slippage: env.SLIPPAGE as string,
       resetDbOnStart: env.RESET_DB_ON_START as boolean,
     },

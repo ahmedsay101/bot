@@ -140,10 +140,44 @@ export function ConfigurationPage(): React.ReactElement {
             </Grid>
             <Grid item xs={12} sm={6} md={4}>
               <TextField
-                label="Fee Rate"
-                value={current.feeRate}
-                helperText="e.g. 0.0004 = 0.04%"
-                onChange={(e) => handleChange('feeRate', e.target.value)}
+                label="Consecutive SL Limit"
+                type="number"
+                value={current.consecutiveStopLossLimit ?? 3}
+                onChange={(e) => handleChange('consecutiveStopLossLimit', parseInt(e.target.value, 10))}
+                fullWidth
+                inputProps={{ min: 1, max: 100 }}
+                helperText="Destroy trader after N consecutive stop losses"
+              />
+            </Grid>
+            <Grid item xs={12} sm={6} md={4}>
+              <TextField
+                label="Symbol Block Hours"
+                type="number"
+                value={current.symbolBlockDurationHours ?? 3}
+                onChange={(e) => handleChange('symbolBlockDurationHours', parseFloat(e.target.value))}
+                fullWidth
+                inputProps={{ min: 0.001, step: 0.5 }}
+                helperText="How long to block a symbol after consecutive-SL destroy"
+              />
+            </Grid>
+            <Grid item xs={12} sm={6} md={4}>
+              <TextField
+                label="Maker Fee Rate"
+                value={current.makerFeeRate ?? '0.0002'}
+                helperText="Binance Futures maker (e.g. 0.0002 = 0.02%)"
+                onChange={(e) => handleChange('makerFeeRate', e.target.value)}
+                fullWidth
+              />
+            </Grid>
+            <Grid item xs={12} sm={6} md={4}>
+              <TextField
+                label="Taker Fee Rate"
+                value={current.takerFeeRate ?? current.feeRate ?? '0.0005'}
+                helperText="Binance Futures taker / market (e.g. 0.0005 = 0.05%)"
+                onChange={(e) => {
+                  handleChange('takerFeeRate', e.target.value);
+                  handleChange('feeRate', e.target.value);
+                }}
                 fullWidth
               />
             </Grid>

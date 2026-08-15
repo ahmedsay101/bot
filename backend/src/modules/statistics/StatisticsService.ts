@@ -27,6 +27,14 @@ export interface GlobalStats {
   maxTraders: number;
   leverage: number;
   tradingMode: string;
+  /** Gross price PnL before fees (= net + fees). */
+  grossRealizedPnl: string;
+  /** Alias of totalRealizedPnl — net after fees. */
+  netRealizedPnl: string;
+  /** Wallet balance (same as balance). */
+  currentBalance: string;
+  highestBalance24h: string;
+  lowestBalance24h: string;
 }
 
 export interface TraderStats {
@@ -88,6 +96,9 @@ export class StatisticsService {
 
     const allocation = calcAllocation(snap.balance, maxTraders, leverage);
     const totalPnl = new Decimal(snap.realizedPnl).plus(snap.unrealizedPnl);
+    const netRealized = new Decimal(snap.realizedPnl);
+    const fees = new Decimal(snap.totalFees);
+    const grossRealized = netRealized.plus(fees);
 
     const stats: GlobalStats = {
       totalTraders: traders.length,
@@ -95,14 +106,14 @@ export class StatisticsService {
       completedTraders,
       balance: new Decimal(snap.balance).toFixed(2),
       equity: new Decimal(snap.equity).toFixed(2),
-      totalRealizedPnl: new Decimal(snap.realizedPnl).toFixed(4),
+      totalRealizedPnl: netRealized.toFixed(4),
       totalUnrealizedPnl: new Decimal(snap.unrealizedPnl).toFixed(4),
       totalPnl: totalPnl.toFixed(4),
       dailyPnl: new Decimal(snap.dailyPnl).toFixed(4),
       openPositionValue: new Decimal(snap.openPositionValue).toFixed(2),
       usedMargin: new Decimal(snap.usedMargin).toFixed(2),
       availableMargin: new Decimal(snap.availableMargin).toFixed(2),
-      totalFees: new Decimal(snap.totalFees).toFixed(4),
+      totalFees: fees.toFixed(4),
       winRate,
       equityPerTrader: allocation.traderEquity.toFixed(2),
       positionEquity: allocation.positionAllocation.toFixed(2),
@@ -110,6 +121,11 @@ export class StatisticsService {
       maxTraders,
       leverage,
       tradingMode: this.mode,
+      grossRealizedPnl: grossRealized.toFixed(4),
+      netRealizedPnl: netRealized.toFixed(4),
+      currentBalance: new Decimal(snap.currentBalance ?? snap.balance).toFixed(2),
+      highestBalance24h: new Decimal(snap.highestBalance24h ?? snap.balance).toFixed(2),
+      lowestBalance24h: new Decimal(snap.lowestBalance24h ?? snap.balance).toFixed(2),
     };
 
     await this.db.globalStatistics.upsert({

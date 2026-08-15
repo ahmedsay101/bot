@@ -149,7 +149,8 @@ All trading parameters are configurable via environment variables or the `/api/c
 | `STARTING_SIDE` | SHORT | First position side (`SHORT` or `LONG`) |
 | `CAPITAL_STEPS` | 5 | Allocation divided into N capital steps (TP +1 / SL −1) |
 | `REFRESH_INTERVAL` | 60000 | Symbol refresh interval (ms) |
-| `FEE_RATE` | 0.0004 | Binance taker fee rate |
+| `FEE_RATE` / `TAKER_FEE_RATE` | 0.0005 | Binance Futures taker fee (market / VIP0 default 0.05%) |
+| `MAKER_FEE_RATE` | 0.0002 | Binance Futures maker fee (VIP0 default 0.02%) |
 | `SLIPPAGE` | 0.0001 | Simulated market slippage |
 
 ## Running Tests
