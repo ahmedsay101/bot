@@ -15,7 +15,11 @@ export default defineConfig(({ command }) => {
     server: {
       host: '0.0.0.0',
       port: 3000,
-      allowedHosts: ['moneymakingmachine.live', 'www.moneymakingmachine.live', 'localhost'],
+      allowedHosts: [
+        'mockworlds.com',
+        'www.mockworlds.com',
+        'localhost',
+      ],
       // Proxy is only active in dev; Nginx handles routing in production
       ...(isDev && {
         proxy: {
