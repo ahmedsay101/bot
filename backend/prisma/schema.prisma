@@ -286,6 +286,7 @@ model Configuration {
   stopLossPercent   String @default("0.10")
   startingSide      String @default("SHORT")
   capitalSteps      Int    @default(5)
+  switchPositionOnTakeProfit Boolean @default(false)
   consecutiveStopLossLimit Int @default(3)
   symbolBlockDurationHours Float @default(3)
   refreshInterval Int      @default(60000)

@@ -19,7 +19,7 @@ export type PositionSide = 'LONG' | 'SHORT' | 'BOTH';
 export type HedgeRole = 'SHORT' | 'HEDGE' | 'LONG';
 export type MarginMode = 'ISOLATED' | 'CROSSED';
 export type TradeSide = 'LONG' | 'SHORT';
-export type CloseReason = 'TP' | 'SL' | 'FORCE' | 'EXPIRED' | 'CONSECUTIVE_SL';
+export type CloseReason = 'TP' | 'SL' | 'FORCE' | 'EXPIRED';
 
 export interface SymbolInfo {
   symbol: string;
@@ -112,10 +112,11 @@ export interface TraderConfig {
   startingSide: TradeSide;
   /** Number of capital steps from allocation (default 5). */
   capitalSteps: number;
-  /** Destroy trader after this many consecutive SLs (default 3). */
-  consecutiveStopLossLimit: number;
-  /** Hours to block symbol after consecutive-SL destroy (default 3). */
-  symbolBlockDurationHours: number;
+  /**
+   * When true: TP → opposite side, SL → same side.
+   * When false (default): TP → same side, SL → opposite (legacy).
+   */
+  switchPositionOnTakeProfit: boolean;
   refreshInterval: number;
   retryLimit: number;
   feeRate: string;
@@ -227,9 +228,6 @@ export interface TraderLifecycleStats {
   longPositions: number;
   shortPositions: number;
   winRate: string;
-  /** Consecutive SL streak (resets on TP). */
-  consecutiveStopLosses: number;
-  consecutiveStopLossLimit: number;
   /** Gross price PnL before fees (= net + fees). */
   grossRealizedPnl: string;
   /** Cumulative trading fees (entry + exit). */
@@ -311,16 +309,6 @@ export type DashboardEvent =
         currentBalance?: string;
         highestBalance24h?: string;
         lowestBalance24h?: string;
-        blockedSymbols?: Array<{
-          symbol: string;
-          reason: string;
-          consecutiveStopLosses: number;
-          blockedAt: string;
-          blockedUntil: string;
-          remainingMs: number;
-          traderId: string | null;
-        }>;
-        consecutiveStopLossLimit?: number;
       };
     };
 

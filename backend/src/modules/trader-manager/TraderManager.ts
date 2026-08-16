@@ -27,16 +27,6 @@ const log = createContextLogger('TraderManager');
 
 const LEVERAGED_TOKEN_SUFFIXES = ['UP', 'DOWN', 'BEAR', 'BULL', '2L', '2S', '3L', '3S'];
 
-export interface SymbolBlockView {
-  symbol: string;
-  reason: string;
-  consecutiveStopLosses: number;
-  blockedAt: string;
-  blockedUntil: string;
-  remainingMs: number;
-  traderId: string | null;
-}
-
 function isLeveragedToken(symbol: string): boolean {
   return LEVERAGED_TOKEN_SUFFIXES.some((suffix) => symbol.endsWith(suffix));
 }
@@ -212,7 +202,7 @@ export class TraderManager extends EventEmitter {
     const keys = [
       'maxTraders', 'initialCapital', 'positionSize', 'leverage', 'marginMode',
       'traderLifetimeHours', 'takeProfitPercent', 'stopLossPercent', 'startingSide',
-      'capitalSteps', 'consecutiveStopLossLimit', 'symbolBlockDurationHours',
+      'capitalSteps', 'switchPositionOnTakeProfit',
       'refreshInterval', 'retryLimit', 'feeRate', 'makerFeeRate', 'takerFeeRate', 'slippage',
     ] as const;
     for (const k of keys) {
@@ -357,7 +347,6 @@ export class TraderManager extends EventEmitter {
           losingPositions: dbTrader.losingPositions,
           takeProfits: dbTrader.takeProfits,
           stopLosses: dbTrader.stopLosses,
-          consecutiveStopLosses: dbTrader.consecutiveStopLosses,
           longPositions: dbTrader.longPositions,
           shortPositions: dbTrader.shortPositions,
           totalFees: dbTrader.totalFees,
@@ -509,7 +498,7 @@ export class TraderManager extends EventEmitter {
   /**
    * SSOT for trader-pool management.
    * maxTraders = desired active slots (NOT a ranking cutoff).
-   * Scans ranked top-gainers top→bottom, skipping blocked/active/invalid.
+   * Scans ranked top-gainers top→bottom, skipping occupied/invalid.
    * On Binance ticker failure: keep current pool (no destroy / no create).
    */
   async reconcileTraderPool(): Promise<void> {
@@ -517,8 +506,6 @@ export class TraderManager extends EventEmitter {
     this.refreshInFlight = true;
 
     try {
-      await this.expireSymbolBlocks();
-
       let tickers: Ticker24h[];
       try {
         tickers = await withRetry(
@@ -538,14 +525,13 @@ export class TraderManager extends EventEmitter {
       this.topGainers = tickers;
       await this.broadcastSummary(true);
 
-      const blocked = await this.getActiveBlockedSymbols();
       const occupied = new Set(this.symbolToTrader.keys());
       const ranked = this.topGainers.map((t) => t.symbol);
       const toCreate = selectReplacementSymbols({
         rankedSymbols: ranked,
         maxTraders: this.traderConfig.maxTraders,
         occupiedSymbols: occupied,
-        blockedSymbols: blocked,
+        blockedSymbols: new Set(),
         isValidSymbol: (s) => this.isStructurallyValidSymbol(s),
       });
 
@@ -556,7 +542,6 @@ export class TraderManager extends EventEmitter {
             maxTraders: this.traderConfig.maxTraders,
             occupied: this.getOccupiedSlots(),
             slotsNeeded: slots,
-            blocked: blocked.size,
             ranked: ranked.length,
           });
         }
@@ -567,13 +552,11 @@ export class TraderManager extends EventEmitter {
         symbols: toCreate,
         occupied: occupied.size,
         maxTraders: this.traderConfig.maxTraders,
-        blocked: [...blocked],
       });
 
       for (const symbol of toCreate) {
         if (this.getOccupiedSlots() >= this.traderConfig.maxTraders) break;
         if (this.symbolToTrader.has(symbol)) continue;
-        if (blocked.has(symbol)) continue;
         try {
           await this.createTrader(symbol);
         } catch (err) {
@@ -592,43 +575,7 @@ export class TraderManager extends EventEmitter {
     await this.reconcileTraderPool();
   }
 
-  private async expireSymbolBlocks(now: Date = new Date()): Promise<number> {
-    const result = await this.db.symbolBlock.deleteMany({
-      where: { blockedUntil: { lte: now } },
-    });
-    if (result.count > 0) {
-      log.info(`Expired ${result.count} symbol block(s)`);
-    }
-    return result.count;
-  }
-
-  private async getActiveBlockedSymbols(now: Date = new Date()): Promise<Set<string>> {
-    await this.expireSymbolBlocks(now);
-    const rows = await this.db.symbolBlock.findMany({
-      where: { blockedUntil: { gt: now } },
-      select: { symbol: true },
-    });
-    return new Set(rows.map((r) => r.symbol));
-  }
-
-  async getActiveSymbolBlocks(now: Date = new Date()): Promise<SymbolBlockView[]> {
-    await this.expireSymbolBlocks(now);
-    const rows = await this.db.symbolBlock.findMany({
-      where: { blockedUntil: { gt: now } },
-      orderBy: { blockedUntil: 'asc' },
-    });
-    return rows.map((r) => ({
-      symbol: r.symbol,
-      reason: r.reason,
-      consecutiveStopLosses: r.consecutiveStopLosses,
-      blockedAt: r.blockedAt.toISOString(),
-      blockedUntil: r.blockedUntil.toISOString(),
-      remainingMs: Math.max(0, r.blockedUntil.getTime() - now.getTime()),
-      traderId: r.traderId,
-    }));
-  }
-
-  /** Structural filters only (USDT, non-leveraged) — does not check occupied/blocked. */
+  /** Structural filters only (USDT, non-leveraged) — does not check occupied. */
   private isStructurallyValidSymbol(symbol: string): boolean {
     if (isLeveragedToken(symbol)) return false;
     if (!symbol.endsWith('USDT')) return false;
@@ -647,11 +594,6 @@ export class TraderManager extends EventEmitter {
     }
     if (this.getOccupiedSlots() >= this.traderConfig.maxTraders) {
       log.warn(`At max traders (${this.traderConfig.maxTraders}) — refusing ${symbol}`);
-      return;
-    }
-    const blocked = await this.getActiveBlockedSymbols();
-    if (blocked.has(symbol)) {
-      log.warn(`Refusing blocked symbol ${symbol}`);
       return;
     }
 
@@ -732,7 +674,6 @@ export class TraderManager extends EventEmitter {
           symbol: event.symbol,
           traderId: event.traderId,
           reason: event.reason,
-          blockedUntil: event.blockedUntil,
         });
         this.emit('traderEvent', event as DashboardEvent);
         void this.broadcastSummary(true);
@@ -813,7 +754,6 @@ export class TraderManager extends EventEmitter {
       });
       const totalPnl = calcTotalPnl(snap.realizedPnl, snap.unrealizedPnl);
 
-      const blockedSymbols = await this.getActiveSymbolBlocks();
       const event: DashboardEvent = {
         type: 'SUMMARY',
         data: {
@@ -835,8 +775,6 @@ export class TraderManager extends EventEmitter {
           currentBalance: snap.currentBalance ?? snap.balance,
           highestBalance24h: snap.highestBalance24h ?? snap.balance,
           lowestBalance24h: snap.lowestBalance24h ?? snap.balance,
-          blockedSymbols,
-          consecutiveStopLossLimit: this.traderConfig.consecutiveStopLossLimit,
         },
       };
       this.emit('traderEvent', event);

@@ -46,6 +46,21 @@ describe('strategy V2 — position reversal', () => {
     expect(nextSideAfterClose('LONG', 'SL')).toBe('SHORT');
   });
 
+  it('flag false / omitted matches legacy next-side rules', () => {
+    expect(nextSideAfterClose('LONG', 'TP', { switchPositionOnTakeProfit: false })).toBe('LONG');
+    expect(nextSideAfterClose('LONG', 'SL', { switchPositionOnTakeProfit: false })).toBe('SHORT');
+    expect(nextSideAfterClose('SHORT', 'TP', { switchPositionOnTakeProfit: false })).toBe('SHORT');
+    expect(nextSideAfterClose('SHORT', 'SL', { switchPositionOnTakeProfit: false })).toBe('LONG');
+  });
+
+  it('switchPositionOnTakeProfit: TP flips; SL keeps same side', () => {
+    const opts = { switchPositionOnTakeProfit: true };
+    expect(nextSideAfterClose('LONG', 'TP', opts)).toBe('SHORT');
+    expect(nextSideAfterClose('SHORT', 'TP', opts)).toBe('LONG');
+    expect(nextSideAfterClose('LONG', 'SL', opts)).toBe('LONG');
+    expect(nextSideAfterClose('SHORT', 'SL', opts)).toBe('SHORT');
+  });
+
   it('oppositeSide flips LONG/SHORT', () => {
     expect(oppositeSide('SHORT')).toBe('LONG');
     expect(oppositeSide('LONG')).toBe('SHORT');

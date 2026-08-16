@@ -43,7 +43,6 @@ import {
 } from '../calc/fees';
 import type { AccountLedger } from '../calc/AccountLedger';
 import { RiskManager } from '../risk/RiskManager';
-import { calcBlockUntil } from '../trader-manager/poolSelection';
 import { createContextLogger } from '../logger';
 import { withRetry } from '../utils/retry';
 import type { PrismaClient } from '@prisma/client';
@@ -57,8 +56,6 @@ export type TraderEvent =
       traderId: string;
       symbol: string;
       reason?: CloseReason;
-      consecutiveStopLosses?: number;
-      blockedUntil?: string | null;
     }
   | { type: 'FAILED'; traderId: string; symbol: string; error: string }
   | { type: 'PNL_UPDATE'; traderId: string; realizedPnl: string; unrealizedPnl: string; totalPnl: string }
@@ -112,9 +109,7 @@ export class Trader extends EventEmitter {
   private losingPositions = 0;
   private takeProfits = 0;
   private stopLosses = 0;
-  private consecutiveStopLosses = 0;
   private completionReason: CloseReason | null = null;
-  private blockedUntilIso: string | null = null;
   private longPositions = 0;
   private shortPositions = 0;
   private totalFees = new Decimal(0);
@@ -252,7 +247,6 @@ export class Trader extends EventEmitter {
     losingPositions: number;
     takeProfits: number;
     stopLosses: number;
-    consecutiveStopLosses?: number;
     longPositions: number;
     shortPositions: number;
     totalFees: string;
@@ -304,7 +298,6 @@ export class Trader extends EventEmitter {
     this.losingPositions = state.losingPositions;
     this.takeProfits = state.takeProfits;
     this.stopLosses = state.stopLosses;
-    this.consecutiveStopLosses = state.consecutiveStopLosses ?? 0;
     this.longPositions = state.longPositions;
     this.shortPositions = state.shortPositions;
     this.totalFees = new Decimal(state.totalFees);
@@ -365,7 +358,9 @@ export class Trader extends EventEmitter {
     const last = this.timeline[this.timeline.length - 1];
     let side: TradeSide = this.traderConfig.startingSide;
     if (last != null && (last.closeReason === 'TP' || last.closeReason === 'SL')) {
-      side = nextSideAfterClose(last.side, last.closeReason);
+      side = nextSideAfterClose(last.side, last.closeReason, {
+        switchPositionOnTakeProfit: this.traderConfig.switchPositionOnTakeProfit,
+      });
     } else if (this.currentSide != null) {
       side = this.currentSide;
     }
@@ -814,28 +809,21 @@ export class Trader extends EventEmitter {
       return;
     }
 
-    // Consecutive SL protection: TP resets streak; SL increments; limit → destroy + block
-    if (reason === 'TP') {
-      this.consecutiveStopLosses = 0;
-      await this.persistTraderState();
-    } else if (reason === 'SL') {
-      this.consecutiveStopLosses += 1;
-      await this.persistTraderState();
-      this.emitSnapshot();
-      const limit = Math.max(1, this.traderConfig.consecutiveStopLossLimit ?? 3);
-      if (this.consecutiveStopLosses >= limit) {
-        this.lifecycle('CONSECUTIVE_SL_LIMIT', {
-          consecutiveStopLosses: this.consecutiveStopLosses,
-          limit,
-        });
-        // Position already closed — do not open next; controlled shutdown + symbol block
-        await this.complete('CONSECUTIVE_SL');
-        return;
-      }
-    }
-
     // Continuous trading: open next immediately (direction + capital step already updated)
-    const next = nextSideAfterClose(side, reason === 'TP' ? 'TP' : 'SL');
+    const closeKind = reason === 'TP' ? 'TP' : 'SL';
+    const switchOnTp = this.traderConfig.switchPositionOnTakeProfit === true;
+    const next = nextSideAfterClose(side, closeKind, {
+      switchPositionOnTakeProfit: switchOnTp,
+    });
+    const rule = switchOnTp
+      ? (closeKind === 'TP' ? 'TP → opposite position' : 'SL → same position')
+      : (closeKind === 'TP' ? 'TP → same position' : 'SL → opposite position');
+    this.lifecycle('NEXT_POSITION', {
+      rule,
+      from: side,
+      to: next,
+      switchPositionOnTakeProfit: switchOnTp,
+    });
     await this.openPosition(next);
   }
 
@@ -901,11 +889,6 @@ export class Trader extends EventEmitter {
     }
 
     this.lifecycle('TRADER_COMPLETING', { reason });
-
-    // Persist symbol block before teardown so pool refill skips this symbol
-    if (reason === 'CONSECUTIVE_SL') {
-      await this.persistSymbolBlock();
-    }
 
     try {
       await this.executionProvider.cancelAllOrders(this.symbol);
@@ -982,8 +965,6 @@ export class Trader extends EventEmitter {
       traderId: this.id,
       symbol: this.symbol,
       reason,
-      consecutiveStopLosses: this.consecutiveStopLosses,
-      blockedUntil: this.blockedUntilIso,
     } satisfies TraderEvent);
 
     this.lifecycle('TRADER_COMPLETED', {
@@ -992,48 +973,7 @@ export class Trader extends EventEmitter {
       positionsOpened: this.positionsOpened,
       takeProfits: this.takeProfits,
       stopLosses: this.stopLosses,
-      consecutiveStopLosses: this.consecutiveStopLosses,
-      blockedUntil: this.blockedUntilIso,
     });
-  }
-
-  /** Idempotent: one active block row per symbol (upsert). */
-  private async persistSymbolBlock(): Promise<void> {
-    const limit = Math.max(1, this.traderConfig.consecutiveStopLossLimit ?? 3);
-    const hours = this.traderConfig.symbolBlockDurationHours ?? 3;
-    const blockedAt = new Date();
-    const blockedUntil = calcBlockUntil(blockedAt, hours);
-    this.blockedUntilIso = blockedUntil.toISOString();
-    const reason = `${this.consecutiveStopLosses} Consecutive Stop Losses`;
-
-    try {
-      await this.db.symbolBlock.upsert({
-        where: { symbol: this.symbol },
-        create: {
-          symbol: this.symbol,
-          blockedAt,
-          blockedUntil,
-          reason,
-          consecutiveStopLosses: this.consecutiveStopLosses,
-          traderId: this.id,
-        },
-        update: {
-          blockedAt,
-          blockedUntil,
-          reason,
-          consecutiveStopLosses: this.consecutiveStopLosses,
-          traderId: this.id,
-        },
-      });
-      log.warn(`[LIFECYCLE] SYMBOL_BLOCKED`, {
-        symbol: this.symbol,
-        consecutiveStopLosses: this.consecutiveStopLosses,
-        limit,
-        blockedUntil: this.blockedUntilIso,
-      });
-    } catch (err) {
-      log.error(`Failed to persist symbol block for ${this.symbol}`, { error: String(err) });
-    }
   }
 
   async pause(): Promise<void> {
@@ -1144,8 +1084,6 @@ export class Trader extends EventEmitter {
         losingPositions: this.losingPositions,
         takeProfits: this.takeProfits,
         stopLosses: this.stopLosses,
-        consecutiveStopLosses: this.consecutiveStopLosses,
-        completionReason: this.completionReason,
         longPositions: this.longPositions,
         shortPositions: this.shortPositions,
         totalFees: this.totalFees.toFixed(8),
@@ -1332,7 +1270,6 @@ export class Trader extends EventEmitter {
         completedAt: new Date(),
         realizedPnl: this.realizedPnl.toFixed(8),
         completionReason: this.completionReason,
-        consecutiveStopLosses: this.consecutiveStopLosses,
       },
     });
   }
@@ -1462,8 +1399,6 @@ export class Trader extends EventEmitter {
         longPositions: this.longPositions,
         shortPositions: this.shortPositions,
         winRate,
-        consecutiveStopLosses: this.consecutiveStopLosses,
-        consecutiveStopLossLimit: Math.max(1, this.traderConfig.consecutiveStopLossLimit ?? 3),
         grossRealizedPnl: this.grossRealizedPnl.toFixed(8),
         totalFees: this.totalFees.toFixed(8),
         netRealizedPnl: this.realizedPnl.toFixed(8),

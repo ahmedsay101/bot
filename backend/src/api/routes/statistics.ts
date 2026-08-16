@@ -48,8 +48,6 @@ export function createStatisticsRouter(
         currentBalance: stats.currentBalance,
         highestBalance24h: stats.highestBalance24h,
         lowestBalance24h: stats.lowestBalance24h,
-        blockedSymbols: await traderManager.getActiveSymbolBlocks(),
-        consecutiveStopLossLimit: runtime.consecutiveStopLossLimit,
         totalUnrealizedPnl: traderManager.getTotalUnrealizedPnl(),
         totalPnl: stats.totalPnl,
         openPositionValue: stats.openPositionValue,

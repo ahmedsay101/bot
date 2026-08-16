@@ -154,8 +154,6 @@ export interface TraderLifecycleStats {
   longPositions: number;
   shortPositions: number;
   winRate: string;
-  consecutiveStopLosses?: number;
-  consecutiveStopLossLimit?: number;
   grossRealizedPnl?: string;
   totalFees: string;
   netRealizedPnl?: string;
@@ -290,16 +288,6 @@ export interface GlobalStats {
   tradingMode: string;
 }
 
-export interface SymbolBlockView {
-  symbol: string;
-  reason: string;
-  consecutiveStopLosses: number;
-  blockedAt: string;
-  blockedUntil: string;
-  remainingMs: number;
-  traderId: string | null;
-}
-
 export interface StatsSummary {
   balance?: string;
   equity?: string;
@@ -321,8 +309,6 @@ export interface StatsSummary {
   currentBalance?: string;
   highestBalance24h?: string;
   lowestBalance24h?: string;
-  blockedSymbols?: SymbolBlockView[];
-  consecutiveStopLossLimit?: number;
   tradingMode?: string;
   botStatus?: string;
   equityPerTrader?: string;
@@ -382,6 +368,7 @@ export interface Configuration {
   stopLossPercent: string;
   startingSide: 'LONG' | 'SHORT';
   capitalSteps: number;
+  switchPositionOnTakeProfit?: boolean;
   refreshInterval: number;
   retryLimit: number;
   feeRate: string;

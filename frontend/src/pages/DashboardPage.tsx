@@ -11,7 +11,7 @@ import {
   useEmergencyStop,
 } from '../hooks/useQueries';
 import { useSystemStore } from '../stores/systemStore';
-import type { TraderSummary, PositionTimelineEntry, CapitalProgressView, SymbolBlockView } from '../services/api';
+import type { TraderSummary, PositionTimelineEntry, CapitalProgressView } from '../services/api';
 
 function money(v: string | number | null | undefined, dp = 2): string {
   const n = parseFloat(String(v ?? '0'));
@@ -74,46 +74,6 @@ function Metric({ label, value, color }: { label: string; value: string; color?:
         <Typography variant="h6" fontWeight={800} sx={{ color: color ?? 'inherit', fontSize: { xs: '1.1rem', sm: '1.25rem' } }}>
           {value}
         </Typography>
-      </CardContent>
-    </Card>
-  );
-}
-
-function formatRemaining(ms: number): string {
-  if (ms <= 0) return 'expired';
-  const totalMin = Math.floor(ms / 60000);
-  const h = Math.floor(totalMin / 60);
-  const m = totalMin % 60;
-  if (h <= 0) return `${m}m`;
-  return `${h}h ${m}m`;
-}
-
-function BlockedSymbolsPanel({ blocks }: { blocks: SymbolBlockView[] }): React.ReactElement | null {
-  if (blocks.length === 0) return null;
-  return (
-    <Card sx={{ mb: 2 }}>
-      <CardContent sx={{ py: 1.5, '&:last-child': { pb: 1.5 } }}>
-        <Typography variant="subtitle2" fontWeight={700} sx={{ mb: 1, opacity: 0.8 }}>
-          Blocked Symbols
-        </Typography>
-        <Stack spacing={1}>
-          {blocks.map((b) => (
-            <Box key={b.symbol} sx={{ display: 'flex', justifyContent: 'space-between', gap: 1, flexWrap: 'wrap' }}>
-              <Box>
-                <Typography fontWeight={800} fontFamily="monospace">{b.symbol.replace('USDT', '')}</Typography>
-                <Typography variant="caption" color="text.secondary" display="block">
-                  {b.reason} · SL streak {b.consecutiveStopLosses}
-                </Typography>
-              </Box>
-              <Box sx={{ textAlign: 'right' }}>
-                <Chip label={`Remaining ${formatRemaining(b.remainingMs)}`} size="small" color="warning" variant="outlined" />
-                <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.25 }}>
-                  Until {new Date(b.blockedUntil).toLocaleString()}
-                </Typography>
-              </Box>
-            </Box>
-          ))}
-        </Stack>
       </CardContent>
     </Card>
   );
@@ -432,11 +392,6 @@ function TraderCard({ trader, gainers }: { trader: TraderSummary; gainers?: Arra
           <Stat label="Stop Losses" value={String(stats.stopLosses)} />
           <Stat label="Step ↑ / Resets" value={`${stats.stepIncreases ?? 0} / ${stats.stepResets ?? 0}`} />
           <Stat label="Win Rate" value={`${stats.winRate}%`} />
-          <Stat
-            label="Consecutive SL"
-            value={`${stats.consecutiveStopLosses ?? 0} / ${stats.consecutiveStopLossLimit ?? 3}`}
-            color={(stats.consecutiveStopLosses ?? 0) >= (stats.consecutiveStopLossLimit ?? 3) ? '#f44336' : undefined}
-          />
           <Stat label="Gross PnL" value={pnl(trader.grossRealizedPnl ?? stats.grossRealizedPnl ?? '0')} color={col(trader.grossRealizedPnl ?? stats.grossRealizedPnl ?? '0')} />
           <Stat label="Trading Fees" value={pnl(`-${trader.totalFees ?? stats.totalFees ?? '0'}`)} color="#f44336" />
           <Stat label="Net PnL" value={pnl(trader.realizedPnl)} color={col(trader.realizedPnl)} />
@@ -519,8 +474,6 @@ export function DashboardPage(): React.ReactElement {
         high={summary?.highestBalance24h}
         current={summary?.currentBalance ?? summary?.balance}
       />
-
-      <BlockedSymbolsPanel blocks={summary?.blockedSymbols ?? []} />
 
       <Grid container spacing={1.5} mb={2}>
         <Grid item xs={6} sm={4} md={2}>

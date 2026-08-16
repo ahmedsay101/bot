@@ -36,8 +36,6 @@ interface DashboardMessage {
     currentBalance?: string;
     highestBalance24h?: string;
     lowestBalance24h?: string;
-    blockedSymbols?: import('./api').SymbolBlockView[];
-    consecutiveStopLossLimit?: number;
   };
 }
 
@@ -98,11 +96,9 @@ export function useWebSocket(): void {
               totalUnrealizedPnl: d.totalUnrealizedPnl ?? prev?.totalUnrealizedPnl ?? '0',
               tradingMode: d.tradingMode ?? prev?.tradingMode,
               botStatus: d.botStatus ?? prev?.botStatus,
-            currentBalance: d.currentBalance ?? d.balance ?? prev?.currentBalance,
+              currentBalance: d.currentBalance ?? d.balance ?? prev?.currentBalance,
               highestBalance24h: d.highestBalance24h ?? prev?.highestBalance24h,
               lowestBalance24h: d.lowestBalance24h ?? prev?.lowestBalance24h,
-              blockedSymbols: d.blockedSymbols ?? prev?.blockedSymbols,
-              consecutiveStopLossLimit: d.consecutiveStopLossLimit ?? prev?.consecutiveStopLossLimit,
               equityPerTrader: prev?.equityPerTrader,
               positionNotional: prev?.positionNotional,
               leverage: prev?.leverage,

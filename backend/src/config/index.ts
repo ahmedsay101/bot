@@ -42,8 +42,8 @@ interface AppConfig {
     stopLossPercent: string;
     startingSide: 'LONG' | 'SHORT';
     capitalSteps: number;
-    consecutiveStopLossLimit: number;
-    symbolBlockDurationHours: number;
+    /** TP→opposite / SL→same when true; default false = legacy. */
+    switchPositionOnTakeProfit: boolean;
     refreshInterval: number;
     retryLimit: number;
     feeRate: string;
@@ -86,8 +86,7 @@ const schema = Joi.object({
   STOP_LOSS_PERCENT: Joi.string().default('0.10'),
   STARTING_SIDE: Joi.string().valid('SHORT', 'LONG').default('SHORT'),
   CAPITAL_STEPS: Joi.number().integer().min(1).max(100).default(5),
-  CONSECUTIVE_STOP_LOSS_LIMIT: Joi.number().integer().min(1).max(100).default(3),
-  SYMBOL_BLOCK_DURATION_HOURS: Joi.number().min(0.001).max(720).default(3),
+  SWITCH_POSITION_ON_TAKE_PROFIT: Joi.boolean().default(false),
   REFRESH_INTERVAL: Joi.number().integer().min(5000).default(60000),
   RETRY_LIMIT: Joi.number().integer().min(1).max(20).default(5),
   FEE_RATE: Joi.string().default('0.0005'),
@@ -149,8 +148,7 @@ function loadConfig(): AppConfig {
       stopLossPercent: env.STOP_LOSS_PERCENT as string,
       startingSide: env.STARTING_SIDE as 'LONG' | 'SHORT',
       capitalSteps: env.CAPITAL_STEPS as number,
-      consecutiveStopLossLimit: env.CONSECUTIVE_STOP_LOSS_LIMIT as number,
-      symbolBlockDurationHours: env.SYMBOL_BLOCK_DURATION_HOURS as number,
+      switchPositionOnTakeProfit: env.SWITCH_POSITION_ON_TAKE_PROFIT as boolean,
       refreshInterval: env.REFRESH_INTERVAL as number,
       retryLimit: env.RETRY_LIMIT as number,
       feeRate: (env.TAKER_FEE_RATE as string) || (env.FEE_RATE as string),

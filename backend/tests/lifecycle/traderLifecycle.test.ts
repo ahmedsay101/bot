@@ -32,13 +32,12 @@ const traderConfig: TraderConfig = {
   stopLossPercent: '0.10',
   startingSide: 'SHORT',
   capitalSteps: 5,
+  switchPositionOnTakeProfit: false,
   refreshInterval: 60000,
   retryLimit: 3,
   feeRate: '0.0005',
   makerFeeRate: '0.0002',
   takerFeeRate: '0.0005',
-  consecutiveStopLossLimit: 3,
-  symbolBlockDurationHours: 3,
   slippage: '0.0001',
   mode: 'SIMULATION',
 };
@@ -220,6 +219,98 @@ describe('Trader V2 reversal lifecycle', () => {
     expect(parseFloat(s.capital.currentStepAllocation || s.capital.currentStepAmount)).toBeCloseTo(40, 0);
 
     trader.destroy();
+  });
+
+  describe('switchPositionOnTakeProfit=true', () => {
+    const switchCfg: TraderConfig = { ...traderConfig, switchPositionOnTakeProfit: true };
+
+    it('SHORT TP opens LONG and steps up', async () => {
+      const trader = await bootTrader('t-sw-short-tp', provider, db, ledger, switchCfg);
+      const tp = trader.toSummary().currentPosition!.tpPrice;
+
+      provider.onPriceUpdate('BTCUSDT', tp);
+      trader.onPriceUpdate(tp);
+      await wait(500);
+
+      const s = trader.toSummary();
+      expect(s.stats.takeProfits).toBe(1);
+      expect(s.currentPosition!.side).toBe('LONG');
+      expect(s.currentPosition!.number).toBe(2);
+      expect(s.capital.currentStep).toBe(2);
+      expect(s.stats.stepIncreases).toBe(1);
+      trader.destroy();
+    });
+
+    it('SHORT SL opens SHORT again and resets to Step 1', async () => {
+      const trader = await bootTrader('t-sw-short-sl', provider, db, ledger, switchCfg);
+      const sl = trader.toSummary().currentPosition!.slPrice;
+
+      provider.onPriceUpdate('BTCUSDT', sl);
+      trader.onPriceUpdate(sl);
+      await wait(500);
+
+      const s = trader.toSummary();
+      expect(s.stats.stopLosses).toBe(1);
+      expect(s.currentPosition!.side).toBe('SHORT');
+      expect(s.currentPosition!.number).toBe(2);
+      expect(s.capital.currentStep).toBe(1);
+      expect(s.stats.stepResets).toBe(1);
+      trader.destroy();
+    });
+
+    it('LONG TP opens SHORT', async () => {
+      const cfg: TraderConfig = { ...switchCfg, startingSide: 'LONG' };
+      const trader = await bootTrader('t-sw-long-tp', provider, db, ledger, cfg);
+      expect(trader.toSummary().currentPosition!.side).toBe('LONG');
+      const tp = trader.toSummary().currentPosition!.tpPrice;
+
+      provider.onPriceUpdate('BTCUSDT', tp);
+      trader.onPriceUpdate(tp);
+      await wait(500);
+
+      const s = trader.toSummary();
+      expect(s.stats.takeProfits).toBe(1);
+      expect(s.currentPosition!.side).toBe('SHORT');
+      expect(s.capital.currentStep).toBe(2);
+      trader.destroy();
+    });
+
+    it('LONG SL opens LONG again', async () => {
+      const cfg: TraderConfig = { ...switchCfg, startingSide: 'LONG' };
+      const trader = await bootTrader('t-sw-long-sl', provider, db, ledger, cfg);
+      const sl = trader.toSummary().currentPosition!.slPrice;
+
+      provider.onPriceUpdate('BTCUSDT', sl);
+      trader.onPriceUpdate(sl);
+      await wait(500);
+
+      const s = trader.toSummary();
+      expect(s.stats.stopLosses).toBe(1);
+      expect(s.currentPosition!.side).toBe('LONG');
+      expect(s.capital.currentStep).toBe(1);
+      trader.destroy();
+    });
+
+    it('duplicate SL price ticks do not open a second concurrent position', async () => {
+      const trader = await bootTrader('t-sw-dup', provider, db, ledger, switchCfg);
+      const sl = trader.toSummary().currentPosition!.slPrice;
+
+      provider.onPriceUpdate('BTCUSDT', sl);
+      trader.onPriceUpdate(sl);
+      provider.onPriceUpdate('BTCUSDT', sl);
+      trader.onPriceUpdate(sl);
+      await wait(700);
+
+      const s = trader.toSummary();
+      expect(s.stats.stopLosses).toBe(1);
+      expect(s.stats.positionsClosed).toBe(1);
+      expect(s.currentPosition).not.toBeNull();
+      expect(s.currentPosition!.number).toBe(2);
+      const positions = await provider.getPositions('BTCUSDT');
+      const openSides = positions.filter((p) => new Decimal(p.quantity).abs().gt(0));
+      expect(openSides.length).toBe(1);
+      trader.destroy();
+    });
   });
 
   it('never holds two simultaneous open positions', async () => {

@@ -105,7 +105,15 @@ export function calcPositionRoi(
   return calcPositionUnrealizedPnl(side, entryPrice, markPrice, quantity).div(notional).mul(100);
 }
 
-/** Next side after a close. */
-export function nextSideAfterClose(current: TradeSide, reason: 'TP' | 'SL'): TradeSide {
+/** Next side after a close. Default: TP→same, SL→opposite. */
+export function nextSideAfterClose(
+  current: TradeSide,
+  reason: 'TP' | 'SL',
+  opts?: { switchPositionOnTakeProfit?: boolean },
+): TradeSide {
+  const switchOnTp = opts?.switchPositionOnTakeProfit === true;
+  if (switchOnTp) {
+    return reason === 'TP' ? oppositeSide(current) : sameSide(current);
+  }
   return reason === 'TP' ? sameSide(current) : oppositeSide(current);
 }

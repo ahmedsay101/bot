@@ -120,11 +120,22 @@ export function ConfigurationPage(): React.ReactElement {
                 helperText="Allocation divided into N steps (TP +1, SL −1)"
               />
             </Grid>
+            <Grid item xs={12}>
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={Boolean(current.switchPositionOnTakeProfit)}
+                    onChange={(e) => handleChange('switchPositionOnTakeProfit', e.target.checked)}
+                  />
+                }
+                label="Switch position on Take Profit (on: TP→opposite, SL→same; off: TP→same, SL→opposite)"
+              />
+            </Grid>
             <Grid item xs={12} sm={6} md={4}>
               <TextField
                 label="Take Profit %"
                 value={current.takeProfitPercent ?? '0.10'}
-                helperText="e.g. 0.10 = 10% — TP opens same-side position"
+                helperText="e.g. 0.10 = 10% — next side depends on Switch on TP setting"
                 onChange={(e) => handleChange('takeProfitPercent', e.target.value)}
                 fullWidth
               />
@@ -133,31 +144,9 @@ export function ConfigurationPage(): React.ReactElement {
               <TextField
                 label="Stop Loss %"
                 value={current.stopLossPercent ?? '0.10'}
-                helperText="e.g. 0.10 = 10% — SL opens opposite-side position"
+                helperText="e.g. 0.10 = 10% — next side depends on Switch on TP setting"
                 onChange={(e) => handleChange('stopLossPercent', e.target.value)}
                 fullWidth
-              />
-            </Grid>
-            <Grid item xs={12} sm={6} md={4}>
-              <TextField
-                label="Consecutive SL Limit"
-                type="number"
-                value={current.consecutiveStopLossLimit ?? 3}
-                onChange={(e) => handleChange('consecutiveStopLossLimit', parseInt(e.target.value, 10))}
-                fullWidth
-                inputProps={{ min: 1, max: 100 }}
-                helperText="Destroy trader after N consecutive stop losses"
-              />
-            </Grid>
-            <Grid item xs={12} sm={6} md={4}>
-              <TextField
-                label="Symbol Block Hours"
-                type="number"
-                value={current.symbolBlockDurationHours ?? 3}
-                onChange={(e) => handleChange('symbolBlockDurationHours', parseFloat(e.target.value))}
-                fullWidth
-                inputProps={{ min: 0.001, step: 0.5 }}
-                helperText="How long to block a symbol after consecutive-SL destroy"
               />
             </Grid>
             <Grid item xs={12} sm={6} md={4}>
