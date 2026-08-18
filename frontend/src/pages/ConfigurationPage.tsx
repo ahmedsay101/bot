@@ -110,6 +110,63 @@ export function ConfigurationPage(): React.ReactElement {
               </FormControl>
             </Grid>
             <Grid item xs={12} sm={6} md={4}>
+              <FormControl fullWidth>
+                <InputLabel>Trader Behavior</InputLabel>
+                <Select
+                  value={current.traderBehavior ?? 'reversal'}
+                  label="Trader Behavior"
+                  onChange={(e) => handleChange('traderBehavior', e.target.value)}
+                >
+                  <MenuItem value="reversal">Reversal</MenuItem>
+                  <MenuItem value="grid_directional">Grid Directional</MenuItem>
+                </Select>
+              </FormControl>
+            </Grid>
+            {(current.traderBehavior ?? 'reversal') === 'grid_directional' && (
+              <>
+                <Grid item xs={12} sm={6} md={4}>
+                  <TextField
+                    label="Grid Levels Per Side"
+                    type="number"
+                    value={current.gridLevelsPerSide ?? 10}
+                    onChange={(e) => handleChange('gridLevelsPerSide', parseInt(e.target.value, 10))}
+                    fullWidth
+                    inputProps={{ min: 1, max: 100 }}
+                    helperText="Levels above and below start price"
+                  />
+                </Grid>
+                <Grid item xs={12} sm={6} md={4}>
+                  <TextField
+                    label="Grid Distance %"
+                    value={current.gridDistancePercent ?? '5'}
+                    onChange={(e) => handleChange('gridDistancePercent', e.target.value)}
+                    fullWidth
+                    helperText="Percent points between levels (5 = 5%)"
+                  />
+                </Grid>
+                <Grid item xs={12} sm={6} md={4}>
+                  <TextField
+                    label="Trader Take Profit %"
+                    value={current.traderTakeProfitPercent ?? '10'}
+                    onChange={(e) => handleChange('traderTakeProfitPercent', e.target.value)}
+                    fullWidth
+                    helperText="Percent points (10 = 10%)"
+                  />
+                </Grid>
+                <Grid item xs={12} sm={6} md={4}>
+                  <TextField
+                    label="Trader Max Lifetime (hours)"
+                    type="number"
+                    value={current.traderMaxLifetimeHours ?? 12}
+                    onChange={(e) => handleChange('traderMaxLifetimeHours', parseFloat(e.target.value))}
+                    fullWidth
+                    inputProps={{ min: 0.001, step: 1 }}
+                    helperText="Max lifetime for grid directional traders"
+                  />
+                </Grid>
+              </>
+            )}
+            <Grid item xs={12} sm={6} md={4}>
               <TextField
                 label="Capital Steps"
                 type="number"

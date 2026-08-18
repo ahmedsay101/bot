@@ -111,6 +111,14 @@ model Trader {
   /// Why trader completed: EXPIRED | FORCE | CONSECUTIVE_SL | ...
   completionReason  String?
 
+  /// Strategy behavior: reversal | grid_directional
+  behavior                  String  @default("reversal")
+  startPrice                String?
+  exitReason                String?
+  gridLevelsPerSide         Int?
+  gridDistancePercent       String?
+  traderTakeProfitPercent   String?
+
   /// JSON array of PositionTimelineEntry
   timelineJson      String @default("[]")
 
@@ -124,8 +132,38 @@ model Trader {
   positions  Position[]
   trades     Trade[]
   statistics TraderStatistics?
+  gridLevels GridLevel[]
 
   @@index([symbol])
+  @@index([status])
+}
+
+model GridLevel {
+  id               String    @id @default(uuid())
+  traderId         String
+  level            Int
+  direction        String
+  triggerPrice     String
+  limitPrice       String
+  weight           Int
+  allocatedMargin  String
+  notional         String
+  quantity         String
+  status           String
+  clientOrderId    String?
+  exchangeOrderId  String?
+  triggeredAt      DateTime?
+  filledAt         DateTime?
+  entryPrice       String?
+  filledQuantity   String?
+  fees             String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  trader Trader @relation(fields: [traderId], references: [id])
+
+  @@unique([traderId, direction, level])
+  @@index([traderId])
   @@index([status])
 }
 
@@ -287,6 +325,11 @@ model Configuration {
   startingSide      String @default("SHORT")
   capitalSteps      Int    @default(5)
   switchPositionOnTakeProfit Boolean @default(false)
+  traderBehavior            String  @default("reversal")
+  gridLevelsPerSide         Int     @default(10)
+  gridDistancePercent       String  @default("5")
+  traderTakeProfitPercent   String  @default("10")
+  traderMaxLifetimeHours     Float   @default(12)
   consecutiveStopLossLimit Int @default(3)
   symbolBlockDurationHours Float @default(3)
   refreshInterval Int      @default(60000)

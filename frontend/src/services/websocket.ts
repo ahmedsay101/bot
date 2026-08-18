@@ -33,6 +33,7 @@ interface DashboardMessage {
     topGainers?: Ticker[];
     tradingMode?: string;
     botStatus?: string;
+    traderBehavior?: string;
     currentBalance?: string;
     highestBalance24h?: string;
     lowestBalance24h?: string;
@@ -96,6 +97,7 @@ export function useWebSocket(): void {
               totalUnrealizedPnl: d.totalUnrealizedPnl ?? prev?.totalUnrealizedPnl ?? '0',
               tradingMode: d.tradingMode ?? prev?.tradingMode,
               botStatus: d.botStatus ?? prev?.botStatus,
+              traderBehavior: d.traderBehavior ?? prev?.traderBehavior,
               currentBalance: d.currentBalance ?? d.balance ?? prev?.currentBalance,
               highestBalance24h: d.highestBalance24h ?? prev?.highestBalance24h,
               lowestBalance24h: d.lowestBalance24h ?? prev?.lowestBalance24h,

@@ -44,6 +44,13 @@ interface AppConfig {
     capitalSteps: number;
     /** TP→opposite / SL→same when true; default false = legacy. */
     switchPositionOnTakeProfit: boolean;
+    traderBehavior: 'reversal' | 'grid_directional';
+    gridLevelsPerSide: number;
+    /** Percent points, e.g. '5' = 5%. */
+    gridDistancePercent: string;
+    /** Percent points, e.g. '10' = 10%. */
+    traderTakeProfitPercent: string;
+    traderMaxLifetimeHours: number;
     refreshInterval: number;
     retryLimit: number;
     feeRate: string;
@@ -87,6 +94,11 @@ const schema = Joi.object({
   STARTING_SIDE: Joi.string().valid('SHORT', 'LONG').default('SHORT'),
   CAPITAL_STEPS: Joi.number().integer().min(1).max(100).default(5),
   SWITCH_POSITION_ON_TAKE_PROFIT: Joi.boolean().default(false),
+  TRADER_BEHAVIOR: Joi.string().valid('reversal', 'grid_directional').default('reversal'),
+  GRID_LEVELS_PER_SIDE: Joi.number().integer().min(1).max(100).default(10),
+  GRID_DISTANCE_PERCENT: Joi.string().default('5'),
+  TRADER_TAKE_PROFIT_PERCENT: Joi.string().default('10'),
+  TRADER_MAX_LIFETIME_HOURS: Joi.number().min(0.001).max(720).default(12),
   REFRESH_INTERVAL: Joi.number().integer().min(5000).default(60000),
   RETRY_LIMIT: Joi.number().integer().min(1).max(20).default(5),
   FEE_RATE: Joi.string().default('0.0005'),
@@ -149,6 +161,11 @@ function loadConfig(): AppConfig {
       startingSide: env.STARTING_SIDE as 'LONG' | 'SHORT',
       capitalSteps: env.CAPITAL_STEPS as number,
       switchPositionOnTakeProfit: env.SWITCH_POSITION_ON_TAKE_PROFIT as boolean,
+      traderBehavior: env.TRADER_BEHAVIOR as 'reversal' | 'grid_directional',
+      gridLevelsPerSide: env.GRID_LEVELS_PER_SIDE as number,
+      gridDistancePercent: env.GRID_DISTANCE_PERCENT as string,
+      traderTakeProfitPercent: env.TRADER_TAKE_PROFIT_PERCENT as string,
+      traderMaxLifetimeHours: env.TRADER_MAX_LIFETIME_HOURS as number,
       refreshInterval: env.REFRESH_INTERVAL as number,
       retryLimit: env.RETRY_LIMIT as number,
       feeRate: (env.TAKER_FEE_RATE as string) || (env.FEE_RATE as string),

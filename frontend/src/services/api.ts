@@ -212,6 +212,33 @@ export interface TraderSummary {
   pendingOrders?: number;
   closedOrders?: number;
   orders?: TraderOrderView[];
+  behavior?: string;
+  grid?: GridTraderView;
+}
+
+export interface GridLevelView {
+  level: number;
+  direction: 'LONG' | 'SHORT';
+  triggerPrice: string;
+  limitPrice: string;
+  allocatedMargin: string;
+  notional: string;
+  quantity: string;
+  status: string;
+  entryPrice: string | null;
+  unrealizedPnl: string | null;
+}
+
+export interface GridTraderView {
+  startPrice: string;
+  levelsPerSide: number;
+  distancePercent: string;
+  takeProfitPercent: string;
+  longFilled: number;
+  shortFilled: number;
+  levels: GridLevelView[];
+  profitPercent: string;
+  exitReason: string | null;
 }
 
 export interface TraderDetail extends Trader {
@@ -311,6 +338,7 @@ export interface StatsSummary {
   lowestBalance24h?: string;
   tradingMode?: string;
   botStatus?: string;
+  traderBehavior?: string;
   equityPerTrader?: string;
   positionNotional?: string;
   leverage?: number;
@@ -369,9 +397,16 @@ export interface Configuration {
   startingSide: 'LONG' | 'SHORT';
   capitalSteps: number;
   switchPositionOnTakeProfit?: boolean;
+  traderBehavior?: 'reversal' | 'grid_directional';
+  gridLevelsPerSide?: number;
+  gridDistancePercent?: string;
+  traderTakeProfitPercent?: string;
+  traderMaxLifetimeHours?: number;
   refreshInterval: number;
   retryLimit: number;
   feeRate: string;
+  makerFeeRate?: string;
+  takerFeeRate?: string;
   slippage: string;
   mode: string;
   isPaused: boolean;

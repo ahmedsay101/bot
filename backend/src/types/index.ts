@@ -2,6 +2,7 @@
 
 export type TraderStatus = 'INITIALIZING' | 'ACTIVE' | 'PAUSED' | 'COMPLETING' | 'COMPLETED' | 'FAILED';
 export type TraderMode = 'LIVE' | 'SIMULATION';
+export type TraderBehavior = 'reversal' | 'grid_directional';
 export type OrderSide = 'BUY' | 'SELL';
 export type OrderType = 'MARKET' | 'LIMIT' | 'STOP_LIMIT' | 'TAKE_PROFIT' | 'STOP_MARKET' | 'TAKE_PROFIT_MARKET';
 export type OrderStatus =
@@ -117,6 +118,16 @@ export interface TraderConfig {
    * When false (default): TP → same side, SL → opposite (legacy).
    */
   switchPositionOnTakeProfit: boolean;
+  /** Strategy behavior: classic reversal or grid directional. */
+  traderBehavior: TraderBehavior;
+  /** Grid levels above and below start price (default 10). */
+  gridLevelsPerSide: number;
+  /** Distance between grid levels in percent points (e.g. '5' = 5%). */
+  gridDistancePercent: string;
+  /** Grid directional take-profit in percent points (e.g. '10' = 10%). */
+  traderTakeProfitPercent: string;
+  /** Max lifetime for grid directional traders in hours (default 12). */
+  traderMaxLifetimeHours: number;
   refreshInterval: number;
   retryLimit: number;
   feeRate: string;
@@ -244,6 +255,31 @@ export interface TraderLifecycleStats {
   maxStepTrades: number;
 }
 
+export interface GridLevelView {
+  level: number;
+  direction: 'LONG' | 'SHORT';
+  triggerPrice: string;
+  limitPrice: string;
+  allocatedMargin: string;
+  notional: string;
+  quantity: string;
+  status: string;
+  entryPrice: string | null;
+  unrealizedPnl: string | null;
+}
+
+export interface GridTraderView {
+  startPrice: string;
+  levelsPerSide: number;
+  distancePercent: string;
+  takeProfitPercent: string;
+  longFilled: number;
+  shortFilled: number;
+  levels: GridLevelView[];
+  profitPercent: string;
+  exitReason: string | null;
+}
+
 /** Compact trader view for REST + dashboard WebSocket snapshots. */
 export interface TraderSummaryView {
   id: string;
@@ -280,6 +316,10 @@ export interface TraderSummaryView {
     hedgeLevel: number;
     quantity: string;
   }>;
+  /** Strategy label — e.g. grid_directional */
+  behavior?: string;
+  /** Present when behavior is grid_directional */
+  grid?: GridTraderView;
 }
 
 export type DashboardEvent =
@@ -306,6 +346,8 @@ export type DashboardEvent =
         topGainers: Ticker24h[];
         tradingMode: TraderMode;
         botStatus: string;
+        /** Active strategy: reversal | grid_directional */
+        traderBehavior?: string;
         currentBalance?: string;
         highestBalance24h?: string;
         lowestBalance24h?: string;

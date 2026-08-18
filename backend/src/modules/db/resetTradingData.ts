@@ -20,11 +20,12 @@ export interface ResetTradingDataResult {
  */
 export async function resetTradingData(db: PrismaClient): Promise<ResetTradingDataResult> {
   // Children first (FK → Trader)
-  const [trades, orders, positions, statistics, traders, logs, balanceSnapshots, symbolBlocks] = await db.$transaction([
+  const [trades, orders, positions, statistics, gridLevels, traders, logs, balanceSnapshots, symbolBlocks] = await db.$transaction([
     db.trade.deleteMany({}),
     db.order.deleteMany({}),
     db.position.deleteMany({}),
     db.traderStatistics.deleteMany({}),
+    db.gridLevel.deleteMany({}),
     db.trader.deleteMany({}),
     db.appLog.deleteMany({}),
     db.balanceSnapshot.deleteMany({}),
@@ -93,6 +94,7 @@ export async function resetTradingData(db: PrismaClient): Promise<ResetTradingDa
 
   log.warn('[LIFECYCLE] DB_RESET — trading history cleared; starting fresh', {
     ...result,
+    gridLevels: gridLevels.count,
     balanceSnapshots: balanceSnapshots.count,
     symbolBlocks: symbolBlocks.count,
   });

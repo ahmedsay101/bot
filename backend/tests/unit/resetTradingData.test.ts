@@ -12,6 +12,7 @@ describe('resetTradingData', () => {
       order: { deleteMany: jest.fn(async () => ({ count: 5 })) },
       position: { deleteMany: jest.fn(async () => ({ count: 1 })) },
       traderStatistics: { deleteMany: jest.fn(async () => ({ count: 1 })) },
+      gridLevel: { deleteMany: jest.fn(async () => ({ count: 0 })) },
       trader: { deleteMany: jest.fn(async () => ({ count: 3 })) },
       appLog: { deleteMany: jest.fn(async () => ({ count: 10 })) },
       balanceSnapshot: {

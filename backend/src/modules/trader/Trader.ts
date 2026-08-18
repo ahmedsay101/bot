@@ -46,26 +46,18 @@ import { RiskManager } from '../risk/RiskManager';
 import { createContextLogger } from '../logger';
 import { withRetry } from '../utils/retry';
 import type { PrismaClient } from '@prisma/client';
+import type { IManagedTrader, ManagedTraderEvent } from './IManagedTrader';
 
 const log = createContextLogger('Trader');
 
-export type TraderEvent =
-  | { type: 'STATUS_CHANGED'; traderId: string; status: TraderStatus }
-  | {
-      type: 'COMPLETED';
-      traderId: string;
-      symbol: string;
-      reason?: CloseReason;
-    }
-  | { type: 'FAILED'; traderId: string; symbol: string; error: string }
-  | { type: 'PNL_UPDATE'; traderId: string; realizedPnl: string; unrealizedPnl: string; totalPnl: string }
-  | { type: 'TRADER_SNAPSHOT'; trader: TraderSummaryView };
+/** @deprecated prefer ManagedTraderEvent — kept for existing imports */
+export type TraderEvent = ManagedTraderEvent;
 
 function roleForSide(side: TradeSide): HedgeRole {
   return side === 'SHORT' ? 'SHORT' : 'LONG';
 }
 
-export class Trader extends EventEmitter {
+export class Trader extends EventEmitter implements IManagedTrader {
   readonly id: string;
   readonly symbol: string;
   readonly mode: TraderMode;

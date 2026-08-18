@@ -62,6 +62,7 @@ export function createStatisticsRouter(
         topGainers: traderManager.getTopGainers().slice(0, 20),
         tradingMode: stats.tradingMode,
         botStatus: 'RUNNING',
+        traderBehavior: runtime.traderBehavior ?? 'reversal',
         equityPerTrader: stats.equityPerTrader,
         positionNotional: stats.positionNotional,
         leverage: stats.leverage,
