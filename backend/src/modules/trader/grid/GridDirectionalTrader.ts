@@ -32,6 +32,10 @@ import {
   feeRatesFromConfig,
   resolveExecutionFee,
 } from '../../calc/fees';
+import {
+  calcActualNotional,
+  reconcilePositionNotional,
+} from '../../calc/leverage';
 import { RiskManager } from '../../risk/RiskManager';
 import { createContextLogger } from '../../logger';
 import { withRetry } from '../../utils/retry';
@@ -54,7 +58,10 @@ interface OpenLeg {
   entryPrice: string;
   quantity: string;
   entryFee: Decimal;
+  /** Margin capital for this level (not exposure). */
   allocatedMargin: string;
+  /** Actual exposure = entry × qty (leverage already sized into qty). */
+  actualNotional: string;
   clientOrderId: string;
 }
 
@@ -141,7 +148,7 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
     if (this.openLegs.size === 0) return null;
     let n = new Decimal(0);
     for (const leg of this.openLegs.values()) {
-      n = n.plus(new Decimal(leg.entryPrice).mul(leg.quantity));
+      n = n.plus(leg.actualNotional ?? new Decimal(leg.entryPrice).mul(leg.quantity));
     }
     return n.toFixed(8);
   }
@@ -310,14 +317,29 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
         dbId: row.id != null ? String(row.id) : undefined,
       });
       if (String(row.status) === 'FILLED' && row.entryPrice != null && row.filledQuantity != null) {
+        const entry = String(row.entryPrice);
+        const qty = String(row.filledQuantity);
+        const actualNotional = calcActualNotional(entry, qty);
+        const allocatedMargin = String(row.allocatedMargin);
+        reconcilePositionNotional({
+          traderId: this.id,
+          symbol: this.symbol,
+          positionId: key,
+          allocatedMargin,
+          leverage: Math.max(1, this.traderConfig.leverage),
+          actualNotional,
+          quantity: qty,
+          entryPrice: entry,
+        });
         this.openLegs.set(key, {
           key,
           direction,
           level,
-          entryPrice: String(row.entryPrice),
-          quantity: String(row.filledQuantity),
+          entryPrice: entry,
+          quantity: qty,
           entryFee: new Decimal(String(row.fees ?? '0')),
-          allocatedMargin: String(row.allocatedMargin),
+          allocatedMargin,
+          actualNotional: actualNotional.toFixed(8),
           clientOrderId: String(row.clientOrderId ?? ''),
         });
       }
@@ -429,17 +451,22 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
       .map((l) => {
         const leg = this.openLegs.get(levelKey(l.plan.direction, l.plan.level));
         let uPnl: string | null = null;
+        let displayNotional = l.plan.notional;
+        let displayMargin = l.plan.allocatedMargin;
         if (leg != null) {
           uPnl = calcPositionUnrealizedPnl(leg.direction, leg.entryPrice, this.markPrice, leg.quantity).toFixed(8);
+          displayNotional = leg.actualNotional;
+          displayMargin = leg.allocatedMargin;
         }
         return {
           level: l.plan.level,
           direction: l.plan.direction,
           triggerPrice: l.plan.triggerPrice,
           limitPrice: l.plan.limitPrice,
-          allocatedMargin: l.plan.allocatedMargin,
-          notional: l.plan.notional,
-          quantity: l.plan.quantity,
+          allocatedMargin: displayMargin,
+          notional: displayNotional,
+          leverage: this.traderConfig.leverage,
+          quantity: leg?.quantity ?? l.plan.quantity,
           status: l.status,
           entryPrice: l.entryPrice,
           unrealizedPnl: uPnl,
@@ -603,6 +630,21 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
     await this.persistLevel(level);
 
     const key = levelKey(level.plan.direction, level.plan.level);
+    const actualNotional = calcActualNotional(update.avgFillPrice, qty);
+    const lev = Math.max(1, this.traderConfig.leverage);
+    // Prefer plan margin (pre-trade capital); fall back to actualNotional/lev after fill slip
+    const allocatedMargin = level.plan.allocatedMargin;
+    reconcilePositionNotional({
+      traderId: this.id,
+      symbol: this.symbol,
+      positionId: key,
+      allocatedMargin,
+      leverage: lev,
+      actualNotional,
+      quantity: qty,
+      entryPrice: update.avgFillPrice,
+    });
+
     this.openLegs.set(key, {
       key,
       direction: level.plan.direction,
@@ -610,7 +652,8 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
       entryPrice: update.avgFillPrice,
       quantity: qty,
       entryFee,
-      allocatedMargin: level.plan.allocatedMargin,
+      allocatedMargin,
+      actualNotional: actualNotional.toFixed(8),
       clientOrderId: update.clientOrderId,
     });
 
@@ -635,6 +678,9 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
       level: level.plan.level,
       entry: update.avgFillPrice,
       qty,
+      margin: allocatedMargin,
+      notional: actualNotional.toFixed(8),
+      leverage: lev,
     });
 
     this.recomputeUnrealized();

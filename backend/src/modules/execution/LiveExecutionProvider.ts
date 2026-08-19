@@ -54,6 +54,20 @@ export class LiveExecutionProvider implements IExecutionProvider {
 
   async setLeverage(symbol: string, leverage: number): Promise<void> {
     await this.client.setLeverage(symbol, leverage);
+    try {
+      const confirmed = await this.client.getSymbolLeverage(symbol);
+      if (confirmed != null && confirmed !== leverage) {
+        log.warn('Live leverage mismatch after setLeverage', {
+          symbol,
+          requested: leverage,
+          confirmed,
+        });
+      } else {
+        log.info('Live leverage confirmed', { symbol, leverage: confirmed ?? leverage });
+      }
+    } catch (err) {
+      log.warn('Could not confirm live leverage', { symbol, error: String(err) });
+    }
   }
 
   async setMarginMode(symbol: string, marginMode: string): Promise<void> {

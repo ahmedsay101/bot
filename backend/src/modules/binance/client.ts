@@ -286,6 +286,19 @@ export class BinanceClient {
     log.info(`Set leverage ${leverage}x for ${symbol}`);
   }
 
+  /** Read configured leverage for a symbol from positionRisk (works even with zero size). */
+  async getSymbolLeverage(symbol: string): Promise<number | null> {
+    const rows = await this.signedRequest<Array<{ symbol: string; leverage: string }>>(
+      'GET',
+      '/positionRisk',
+      { symbol },
+    );
+    const row = rows.find((r) => r.symbol === symbol) ?? rows[0];
+    if (row?.leverage == null) return null;
+    const lev = parseInt(row.leverage, 10);
+    return Number.isFinite(lev) ? lev : null;
+  }
+
   async setMarginType(symbol: string, marginType: string): Promise<void> {
     try {
       await this.signedRequest<unknown>('POST', '/marginType', { symbol, marginType });

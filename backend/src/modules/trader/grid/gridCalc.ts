@@ -5,6 +5,7 @@ import Decimal from 'decimal.js';
 import type { SymbolInfo, TradeSide } from '../../../types';
 import { adjustPrice } from '../../utils/precision';
 import { calcQuantityFromNotional } from '../../calc/allocation';
+import { calcPositionNotional } from '../../calc/leverage';
 
 export type GridDirection = TradeSide;
 
@@ -128,7 +129,7 @@ export function buildGridPlan(params: {
   const levels: GridLevelPlan[] = [];
   for (const row of priceRows) {
     const theoreticalMargin = baseUnit.mul(row.weight);
-    const theoreticalNotional = theoreticalMargin.mul(lev);
+    const theoreticalNotional = calcPositionNotional(theoreticalMargin, lev);
     let quantity: string;
     try {
       quantity = calcQuantityFromNotional(theoreticalNotional, row.triggerPrice, params.symbolInfo);

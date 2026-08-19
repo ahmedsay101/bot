@@ -223,6 +223,7 @@ export interface GridLevelView {
   limitPrice: string;
   allocatedMargin: string;
   notional: string;
+  leverage?: number;
   quantity: string;
   status: string;
   entryPrice: string | null;

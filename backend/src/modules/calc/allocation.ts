@@ -1,6 +1,7 @@
 import Decimal from 'decimal.js';
 import type { SymbolInfo } from '../../types';
 import { adjustQuantity, validateNotional } from '../utils/precision';
+import { calcPositionNotional } from './leverage';
 
 /** Fixed testing-mode base equity (USDT). Realized PnL is added on top. */
 export const TESTING_BASE_EQUITY = '2000';
@@ -8,18 +9,18 @@ export const TESTING_BASE_EQUITY = '2000';
 export interface AllocationBreakdown {
   totalEquity: Decimal;
   traderEquity: Decimal;
-  /** Capital allocated to the single active position. */
+  /** Margin allocated to the position (capital, not exposure). */
   positionAllocation: Decimal;
-  /** Notional = allocation × leverage. */
+  /** Exposure = positionAllocation × leverage. */
   positionNotional: Decimal;
   maxTraders: number;
   leverage: number;
 }
 
 /**
- * Equity → per-trader → full allocation → notional (Strategy V2: one position).
+ * Equity → per-trader margin → notional (leverage applied once).
  * traderEquity = totalEquity / maxTraders
- * positionAllocation = traderEquity
+ * positionAllocation = traderEquity  (margin)
  * positionNotional = positionAllocation × leverage
  */
 export function calcAllocation(
@@ -32,7 +33,7 @@ export function calcAllocation(
   const lev = Math.max(1, leverage);
   const traderEquity = equity.div(traders);
   const positionAllocation = traderEquity;
-  const positionNotional = positionAllocation.mul(lev);
+  const positionNotional = calcPositionNotional(positionAllocation, lev);
 
   return {
     totalEquity: equity,

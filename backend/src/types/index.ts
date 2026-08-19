@@ -261,8 +261,11 @@ export interface GridLevelView {
   direction: 'LONG' | 'SHORT';
   triggerPrice: string;
   limitPrice: string;
+  /** Capital margin for this level (not exposure). */
   allocatedMargin: string;
+  /** Market exposure = margin × leverage (or entry × qty when filled). */
   notional: string;
+  leverage: number;
   quantity: string;
   status: string;
   entryPrice: string | null;

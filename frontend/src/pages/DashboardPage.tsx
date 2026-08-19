@@ -276,9 +276,15 @@ function GridLadder({ grid, markPrice }: { grid: GridTraderView; markPrice: stri
                   {l.direction} #{l.level}
                 </Typography>
                 <Typography variant="caption" color="text.secondary" display="block" sx={{ fontSize: 10 }}>
-                  {money(l.allocatedMargin)} · {statusLabel(l.status)}
+                  Margin {money(l.allocatedMargin)}
+                  {' · '}
+                  {l.leverage ?? '—'}x
+                  {' · '}
+                  Notional {money(l.notional)}
+                  {' · '}
+                  {statusLabel(l.status)}
                   {l.entryPrice != null ? ` · entry $${px(l.entryPrice)}` : ''}
-                  {l.unrealizedPnl != null ? ` · ${pnl(l.unrealizedPnl)}` : ''}
+                  {l.unrealizedPnl != null ? ` · PnL ${pnl(l.unrealizedPnl)}` : ''}
                 </Typography>
               </Box>
               <Typography fontFamily="monospace" fontWeight={700} sx={{ fontSize: 12, color: accent }}>
@@ -385,7 +391,7 @@ function GridTraderCard({
               )}
             </Box>
             <Typography variant="caption" color="text.secondary">
-              Directional grid · {grid.levelsPerSide}×{grid.levelsPerSide} · {grid.distancePercent}% spacing
+              Directional grid · {grid.levelsPerSide}×{grid.levelsPerSide} · {grid.distancePercent}% spacing · {trader.leverage}x leverage
             </Typography>
           </Box>
           <Box sx={{ textAlign: 'right' }}>
@@ -415,6 +421,11 @@ function GridTraderCard({
                 <Stat label="Start" value={`$${px(grid.startPrice)}`} color={START} />
                 <Stat label="Mark" value={`$${px(trader.markPrice)}`} color={MARK} />
                 <Stat label="Allocation" value={money(trader.capital?.traderAllocatedAmount)} />
+                <Stat label="Leverage" value={`${trader.leverage}x`} />
+                <Stat
+                  label="Open Notional"
+                  value={money(trader.capital?.positionNotional)}
+                />
                 <Stat
                   label="vs Start"
                   value={vsStart == null ? '—' : `${vsStart >= 0 ? '+' : ''}${vsStart.toFixed(2)}%`}
