@@ -270,6 +270,10 @@ export interface GridLevelView {
   status: string;
   entryPrice: string | null;
   unrealizedPnl: string | null;
+  tpPrice?: string | null;
+  slPrice?: string | null;
+  weight?: number;
+  completionReason?: string | null;
 }
 
 export interface GridTraderView {
@@ -282,6 +286,10 @@ export interface GridTraderView {
   levels: GridLevelView[];
   profitPercent: string;
   exitReason: string | null;
+  currentCapital?: string;
+  initialCapital?: string;
+  gridDistanceAbs?: string;
+  capitalHistory?: Array<{ at: string; capital: string; event: string; netPnl?: string }>;
 }
 
 /** Compact trader view for REST + dashboard WebSocket snapshots. */

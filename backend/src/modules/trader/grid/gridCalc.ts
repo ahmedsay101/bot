@@ -1,5 +1,6 @@
 /**
- * Pure directional-grid math (Decimal.js). Non-compounded levels; 1..N weights per side.
+ * Pure directional-grid math (Decimal.js).
+ * Single-position model: reversed weights (L1 largest), absolute TP spacing, SL = start.
  */
 import Decimal from 'decimal.js';
 import type { SymbolInfo, TradeSide } from '../../../types';
@@ -9,15 +10,27 @@ import { calcPositionNotional } from '../../calc/leverage';
 
 export type GridDirection = TradeSide;
 
+export type GridLevelStatus =
+  | 'PENDING'
+  | 'ACTIVE'
+  | 'TP_HIT'
+  | 'SL_HIT'
+  | 'CANCELLED'
+  | 'SKIPPED';
+
 export interface GridLevelPlan {
   level: number;
   direction: GridDirection;
+  /** Reversed weight: L1 = N, L10 = 1 */
   weight: number;
   triggerPrice: string;
   limitPrice: string;
-  /** Theoretical margin before exchange qty rounding. */
+  /** Take-profit price (entry ± gridDistance); set at plan from trigger as estimate. */
+  tpPrice: string;
+  /** Always startPrice. */
+  slPrice: string;
+  /** Display-only estimate at init (uses initial capital); real size at activation. */
   theoreticalMargin: string;
-  /** Actual margin after qty normalization (notional / trigger). */
   allocatedMargin: string;
   notional: string;
   quantity: string;
@@ -27,19 +40,47 @@ export interface GridPlanResult {
   startPrice: string;
   levelsPerSide: number;
   distancePercent: string;
+  gridDistanceAbs: string;
   totalWeight: number;
-  baseUnit: string;
   traderAllocation: string;
   leverage: number;
   levels: GridLevelPlan[];
-  /** Sum of actual allocated margins (≤ traderAllocation). */
-  totalAllocatedMargin: string;
 }
 
 /** Sum 1+2+...+n */
 export function triangularWeight(n: number): number {
   const levels = Math.max(1, Math.floor(n));
   return (levels * (levels + 1)) / 2;
+}
+
+/** Formula B: Level L weight = N − L + 1 (L1 largest). */
+export function levelWeight(level: number, levelsPerSide: number): number {
+  const n = Math.max(1, Math.floor(levelsPerSide));
+  const L = Math.min(Math.max(1, Math.floor(level)), n);
+  return n - L + 1;
+}
+
+/**
+ * Margin for the active level from current trader capital.
+ * margin = currentCapital × weight(L) / N
+ */
+export function calculatePositionAllocation(
+  currentCapital: string | Decimal,
+  level: number,
+  levelsPerSide: number,
+): Decimal {
+  const n = Math.max(1, Math.floor(levelsPerSide));
+  const w = levelWeight(level, n);
+  const capital = Decimal.max(new Decimal(0), new Decimal(currentCapital));
+  return capital.mul(w).div(n);
+}
+
+/** Absolute grid step in price units: start × pct/100 (non-compounded). */
+export function calcGridDistanceAbs(
+  startPrice: string | Decimal,
+  distancePercent: string | number,
+): Decimal {
+  return new Decimal(startPrice).mul(new Decimal(distancePercent).div(100)).abs();
 }
 
 /** Non-compounded trigger from immutable start price. */
@@ -63,7 +104,7 @@ export function calcGridTriggerPrice(
 }
 
 /**
- * Limit = trigger, tick-adjusted; ensure BUY limit ≥ stop and SELL limit ≤ stop by ±1 tick if needed.
+ * Limit = trigger, tick-adjusted; BUY limit ≥ stop, SELL limit ≤ stop.
  */
 export function calcGridLimitPrice(
   triggerPrice: string,
@@ -82,28 +123,78 @@ export function calcGridLimitPrice(
   return limit;
 }
 
+/** TP = entry ± one absolute grid distance (not compounded %). */
+export function calcLevelTpPrice(
+  entryPrice: string | Decimal,
+  direction: GridDirection,
+  gridDistanceAbs: string | Decimal,
+  symbolInfo: SymbolInfo,
+): string {
+  const entry = new Decimal(entryPrice);
+  const step = new Decimal(gridDistanceAbs).abs();
+  const raw = direction === 'LONG' ? entry.plus(step) : entry.minus(step);
+  if (raw.lte(0)) {
+    throw new Error(`TP non-positive for ${direction} entry=${entry.toFixed()}`);
+  }
+  return adjustPrice(raw, symbolInfo);
+}
+
+/** SL is always the immutable start price. */
+export function calcLevelSlPrice(startPrice: string | Decimal, symbolInfo: SymbolInfo): string {
+  return adjustPrice(startPrice, symbolInfo);
+}
+
 export function buildGridLevelPrices(
   startPrice: string,
   levelsPerSide: number,
   distancePercent: string | number,
   symbolInfo: SymbolInfo,
-): Array<{ level: number; direction: GridDirection; triggerPrice: string; limitPrice: string; weight: number }> {
+): Array<{
+  level: number;
+  direction: GridDirection;
+  triggerPrice: string;
+  limitPrice: string;
+  tpPrice: string;
+  slPrice: string;
+  weight: number;
+}> {
   const n = Math.max(1, Math.floor(levelsPerSide));
-  const out: Array<{ level: number; direction: GridDirection; triggerPrice: string; limitPrice: string; weight: number }> = [];
+  const startAdj = adjustPrice(startPrice, symbolInfo);
+  const distAbs = calcGridDistanceAbs(startAdj, distancePercent);
+  const slPrice = calcLevelSlPrice(startAdj, symbolInfo);
+  const out: Array<{
+    level: number;
+    direction: GridDirection;
+    triggerPrice: string;
+    limitPrice: string;
+    tpPrice: string;
+    slPrice: string;
+    weight: number;
+  }> = [];
   for (const direction of ['LONG', 'SHORT'] as GridDirection[]) {
     for (let level = 1; level <= n; level++) {
-      const raw = calcGridTriggerPrice(startPrice, level, direction, distancePercent);
+      const raw = calcGridTriggerPrice(startAdj, level, direction, distancePercent);
       const triggerPrice = adjustPrice(raw, symbolInfo);
       const limitPrice = calcGridLimitPrice(triggerPrice, direction, symbolInfo);
-      out.push({ level, direction, triggerPrice, limitPrice, weight: level });
+      // Estimate TP from trigger (actual TP uses fill price at activation)
+      const tpPrice = calcLevelTpPrice(triggerPrice, direction, distAbs, symbolInfo);
+      out.push({
+        level,
+        direction,
+        triggerPrice,
+        limitPrice,
+        tpPrice,
+        slPrice,
+        weight: levelWeight(level, n),
+      });
     }
   }
   return out;
 }
 
 /**
- * Allocate margins with weights 1..N per side (total weight = 2 * triangular(N)).
- * After qty rounding, scale down if sum exceeds allocation (deterministic).
+ * Build price skeleton + display size estimates from initial capital.
+ * Real margin/qty computed at activation via calculatePositionAllocation(currentCapital, …).
  */
 export function buildGridPlan(params: {
   startPrice: string;
@@ -116,11 +207,10 @@ export function buildGridPlan(params: {
   const n = Math.max(1, Math.floor(params.levelsPerSide));
   const allocation = new Decimal(params.traderAllocation);
   const lev = Math.max(1, params.leverage);
-  const sideWeight = triangularWeight(n);
-  const totalWeight = sideWeight * 2;
-  const baseUnit = allocation.div(totalWeight);
+  const startAdj = adjustPrice(params.startPrice, params.symbolInfo);
+  const distAbs = calcGridDistanceAbs(startAdj, params.distancePercent);
   const priceRows = buildGridLevelPrices(
-    params.startPrice,
+    startAdj,
     n,
     params.distancePercent,
     params.symbolInfo,
@@ -128,7 +218,7 @@ export function buildGridPlan(params: {
 
   const levels: GridLevelPlan[] = [];
   for (const row of priceRows) {
-    const theoreticalMargin = baseUnit.mul(row.weight);
+    const theoreticalMargin = calculatePositionAllocation(allocation, row.level, n);
     const theoreticalNotional = calcPositionNotional(theoreticalMargin, lev);
     let quantity: string;
     try {
@@ -145,6 +235,8 @@ export function buildGridPlan(params: {
       weight: row.weight,
       triggerPrice: row.triggerPrice,
       limitPrice: row.limitPrice,
+      tpPrice: row.tpPrice,
+      slPrice: row.slPrice,
       theoreticalMargin: theoreticalMargin.toFixed(8),
       allocatedMargin: allocatedMargin.toFixed(8),
       notional: notional.toFixed(8),
@@ -152,34 +244,48 @@ export function buildGridPlan(params: {
     });
   }
 
-  // Cap: if total actual margin > allocation, scale quantities down proportionally then re-adjust
-  let totalAllocated = levels.reduce((s, l) => s.plus(l.allocatedMargin), new Decimal(0));
-  if (totalAllocated.gt(allocation) && totalAllocated.gt(0)) {
-    const scale = allocation.div(totalAllocated);
-    for (const level of levels) {
-      const scaledNotional = new Decimal(level.notional).mul(scale);
-      try {
-        level.quantity = calcQuantityFromNotional(scaledNotional, level.triggerPrice, params.symbolInfo);
-      } catch {
-        level.quantity = '0';
-      }
-      const notional = new Decimal(level.quantity).mul(level.triggerPrice);
-      level.notional = notional.toFixed(8);
-      level.allocatedMargin = notional.div(lev).toFixed(8);
-    }
-    totalAllocated = levels.reduce((s, l) => s.plus(l.allocatedMargin), new Decimal(0));
-  }
-
   return {
-    startPrice: adjustPrice(params.startPrice, params.symbolInfo),
+    startPrice: startAdj,
     levelsPerSide: n,
     distancePercent: String(params.distancePercent),
-    totalWeight,
-    baseUnit: baseUnit.toFixed(8),
+    gridDistanceAbs: distAbs.toFixed(8),
+    totalWeight: triangularWeight(n),
     traderAllocation: allocation.toFixed(8),
     leverage: lev,
     levels,
-    totalAllocatedMargin: totalAllocated.toFixed(8),
+  };
+}
+
+/** Size a single activation from current capital. */
+export function sizeLevelPosition(params: {
+  currentCapital: string | Decimal;
+  level: number;
+  levelsPerSide: number;
+  leverage: number;
+  entryPrice: string;
+  symbolInfo: SymbolInfo;
+}): { allocatedMargin: string; notional: string; quantity: string; weight: number } {
+  const lev = Math.max(1, params.leverage);
+  const weight = levelWeight(params.level, params.levelsPerSide);
+  const margin = calculatePositionAllocation(
+    params.currentCapital,
+    params.level,
+    params.levelsPerSide,
+  );
+  const theoreticalNotional = calcPositionNotional(margin, lev);
+  let quantity: string;
+  try {
+    quantity = calcQuantityFromNotional(theoreticalNotional, params.entryPrice, params.symbolInfo);
+  } catch {
+    quantity = '0';
+  }
+  const notional = new Decimal(quantity).mul(params.entryPrice);
+  const allocatedMargin = lev > 0 ? notional.div(lev) : notional;
+  return {
+    allocatedMargin: allocatedMargin.toFixed(8),
+    notional: notional.toFixed(8),
+    quantity,
+    weight,
   };
 }
 
@@ -190,4 +296,8 @@ export function traderProfitPercent(
   const alloc = new Decimal(traderAllocation);
   if (alloc.isZero()) return new Decimal(0);
   return new Decimal(netProfit).div(alloc).mul(100);
+}
+
+export function isLevelTerminal(status: string): boolean {
+  return status === 'TP_HIT' || status === 'SL_HIT' || status === 'CANCELLED' || status === 'SKIPPED';
 }

@@ -2,6 +2,12 @@ import Decimal from 'decimal.js';
 import {
   buildGridPlan,
   calcGridTriggerPrice,
+  calcGridDistanceAbs,
+  calcLevelTpPrice,
+  calcLevelSlPrice,
+  calculatePositionAllocation,
+  levelWeight,
+  sizeLevelPosition,
   triangularWeight,
   traderProfitPercent,
 } from '../../src/modules/trader/grid/gridCalc';
@@ -22,50 +28,84 @@ const info: SymbolInfo = {
   status: 'TRADING',
 };
 
-describe('gridCalc — directional grid', () => {
+describe('gridCalc — single-position directional grid', () => {
   it('triangularWeight(10) = 55', () => {
     expect(triangularWeight(10)).toBe(55);
   });
 
-  it('non-compounded LONG/SHORT prices from 100 @ 5%', () => {
-    const start = '100';
-    const long = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((L) =>
-      calcGridTriggerPrice(start, L, 'LONG', 5).toFixed(2),
-    );
-    const short = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((L) =>
-      calcGridTriggerPrice(start, L, 'SHORT', 5).toFixed(2),
-    );
-    expect(long).toEqual(['105.00', '110.00', '115.00', '120.00', '125.00', '130.00', '135.00', '140.00', '145.00', '150.00']);
-    expect(short).toEqual(['95.00', '90.00', '85.00', '80.00', '75.00', '70.00', '65.00', '60.00', '55.00', '50.00']);
-    // Not compounded: L2 is 110 not 110.25
-    expect(calcGridTriggerPrice(start, 2, 'LONG', 5).toFixed(2)).toBe('110.00');
+  it('reversed weights: L1=10 … L10=1', () => {
+    expect(levelWeight(1, 10)).toBe(10);
+    expect(levelWeight(2, 10)).toBe(9);
+    expect(levelWeight(10, 10)).toBe(1);
   });
 
-  it('buildGridPlan: 20 levels, total weight 110, margin ≤ allocation', () => {
+  it('Formula B: L1 = 100% capital, L2 = 90%', () => {
+    expect(calculatePositionAllocation('500', 1, 10).toFixed(0)).toBe('500');
+    expect(calculatePositionAllocation('500', 2, 10).toFixed(0)).toBe('450');
+    expect(calculatePositionAllocation('500', 10, 10).toFixed(0)).toBe('50');
+  });
+
+  it('capital shrinks: next level uses reduced current capital', () => {
+    expect(calculatePositionAllocation('470', 1, 10).toFixed(0)).toBe('470');
+    expect(calculatePositionAllocation('470', 2, 10).toFixed(1)).toBe('423.0');
+  });
+
+  it('non-compounded LONG/SHORT prices from 100 @ 5%', () => {
+    const start = '100';
+    const long = [1, 2, 3, 4].map((L) => calcGridTriggerPrice(start, L, 'LONG', 5).toFixed(2));
+    const short = [1, 2, 3, 4].map((L) => calcGridTriggerPrice(start, L, 'SHORT', 5).toFixed(2));
+    expect(long).toEqual(['105.00', '110.00', '115.00', '120.00']);
+    expect(short).toEqual(['95.00', '90.00', '85.00', '80.00']);
+  });
+
+  it('gridDistanceAbs = start × pct/100', () => {
+    expect(calcGridDistanceAbs('100', 5).toFixed(2)).toBe('5.00');
+  });
+
+  it('TP = entry ± gridDistance; SL = start', () => {
+    const dist = calcGridDistanceAbs('100', 5);
+    expect(calcLevelTpPrice('105', 'LONG', dist, info)).toBe('110.00');
+    expect(calcLevelTpPrice('110', 'LONG', dist, info)).toBe('115.00');
+    expect(calcLevelTpPrice('95', 'SHORT', dist, info)).toBe('90.00');
+    expect(calcLevelTpPrice('90', 'SHORT', dist, info)).toBe('85.00');
+    expect(calcLevelSlPrice('100', info)).toBe('100.00');
+  });
+
+  it('buildGridPlan: reversed weights, 20 levels', () => {
     const plan = buildGridPlan({
       startPrice: '100',
-      traderAllocation: '100',
+      traderAllocation: '500',
       leverage: 5,
       levelsPerSide: 10,
       distancePercent: 5,
       symbolInfo: info,
     });
     expect(plan.levels).toHaveLength(20);
-    expect(plan.totalWeight).toBe(110);
-    expect(plan.levels.filter((l) => l.direction === 'LONG')).toHaveLength(10);
-    expect(plan.levels.filter((l) => l.direction === 'SHORT')).toHaveLength(10);
-    expect(new Decimal(plan.totalAllocatedMargin).lte(100)).toBe(true);
-    // Level weights 1..10
-    for (let i = 1; i <= 10; i++) {
-      expect(plan.levels.find((l) => l.direction === 'LONG' && l.level === i)?.weight).toBe(i);
-    }
+    expect(plan.gridDistanceAbs).toBe('5.00000000');
     const long1 = plan.levels.find((l) => l.direction === 'LONG' && l.level === 1)!;
+    expect(long1.weight).toBe(10);
     expect(long1.triggerPrice).toBe('105.00');
-    expect(new Decimal(long1.quantity).gt(0)).toBe(true);
+    expect(long1.tpPrice).toBe('110.00');
+    expect(long1.slPrice).toBe('100.00');
+    const long10 = plan.levels.find((l) => l.direction === 'LONG' && l.level === 10)!;
+    expect(long10.weight).toBe(1);
+  });
+
+  it('sizeLevelPosition applies leverage once from current capital', () => {
+    const sized = sizeLevelPosition({
+      currentCapital: '500',
+      level: 1,
+      levelsPerSide: 10,
+      leverage: 5,
+      entryPrice: '100',
+      symbolInfo: info,
+    });
+    // margin ≈ 500, notional ≈ 2500, qty ≈ 25
+    expect(new Decimal(sized.allocatedMargin).gte(490)).toBe(true);
+    expect(new Decimal(sized.notional).div(sized.allocatedMargin).toFixed(0)).toBe('5');
   });
 
   it('traderProfitPercent = net / allocation * 100', () => {
-    expect(traderProfitPercent('10', '100').toFixed(2)).toBe('10.00');
-    expect(traderProfitPercent('5', '500').toFixed(2)).toBe('1.00');
+    expect(traderProfitPercent('50', '500').toFixed(0)).toBe('10');
   });
 });

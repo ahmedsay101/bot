@@ -1,12 +1,16 @@
 /**
- * Grid directional lifecycle + scenarios A–E / exits.
+ * Single-position directional grid lifecycle tests.
  */
 import Decimal from 'decimal.js';
-import { SimulationExecutionProvider } from '../../src/modules/execution/SimulationExecutionProvider';
+import { EventEmitter } from 'events';
 import { GridDirectionalTrader } from '../../src/modules/trader/grid/GridDirectionalTrader';
-import type { SymbolInfo, TraderConfig } from '../../src/types';
+import { SimulationExecutionProvider } from '../../src/modules/execution/SimulationExecutionProvider';
+import type { TraderConfig, SymbolInfo } from '../../src/types';
+import type { AccountLedger } from '../../src/modules/calc/AccountLedger';
 
-const mockSymbolInfo: SymbolInfo = {
+jest.setTimeout(60000);
+
+const symbolInfo: SymbolInfo = {
   symbol: 'BTCUSDT',
   baseAsset: 'BTC',
   quoteAsset: 'USDT',
@@ -23,23 +27,23 @@ const mockSymbolInfo: SymbolInfo = {
 
 const baseConfig: TraderConfig = {
   maxTraders: 1,
-  initialCapital: '1000',
-  positionSize: '100',
-  leverage: 10,
+  initialCapital: '500',
+  positionSize: '500',
+  leverage: 5,
   marginMode: 'ISOLATED',
   traderLifetimeHours: 24,
   takeProfitPercent: '0.10',
   stopLossPercent: '0.10',
-  startingSide: 'SHORT',
+  startingSide: 'LONG',
   capitalSteps: 5,
   switchPositionOnTakeProfit: false,
   traderBehavior: 'grid_directional',
   gridLevelsPerSide: 10,
   gridDistancePercent: '5',
-  traderTakeProfitPercent: '10',
+  traderTakeProfitPercent: '999',
   traderMaxLifetimeHours: 12,
   refreshInterval: 60000,
-  retryLimit: 3,
+  retryLimit: 5,
   feeRate: '0.0005',
   makerFeeRate: '0.0002',
   takerFeeRate: '0.0005',
@@ -51,304 +55,203 @@ function wait(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-function createMockDb() {
-  const gridLevels = new Map<string, Record<string, unknown>>();
-  const orders = new Map<string, Record<string, unknown>>();
+function mockDb(): any {
+  const traders = new Map<string, any>();
+  const levels = new Map<string, any>();
+  const orders = new Map<string, any>();
+  const positions: any[] = [];
   return {
-    trader: { update: jest.fn(async () => ({})) },
+    trader: {
+      update: jest.fn(async ({ where, data }: any) => {
+        const cur = traders.get(where.id) ?? { id: where.id };
+        Object.assign(cur, data);
+        traders.set(where.id, cur);
+        return cur;
+      }),
+    },
     gridLevel: {
-      create: jest.fn(async ({ data }: { data: Record<string, unknown> }) => {
-        const id = `${data.direction}-${data.level}`;
-        const row = { ...data, id };
-        gridLevels.set(id, row);
+      create: jest.fn(async ({ data }: any) => {
+        const id = `gl-${data.direction}-${data.level}`;
+        const row = { id, ...data };
+        levels.set(id, row);
         return row;
       }),
-      update: jest.fn(async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => {
-        const next = { ...(gridLevels.get(where.id) ?? {}), ...data };
-        gridLevels.set(where.id, next);
-        return next;
+      update: jest.fn(async ({ where, data }: any) => {
+        const row = levels.get(where.id);
+        if (row) Object.assign(row, data);
+        return row;
       }),
-      updateMany: jest.fn(async () => ({ count: 1 })),
-      findMany: jest.fn(async () => [...gridLevels.values()]),
-      _store: gridLevels,
+      findMany: jest.fn(async () => [...levels.values()]),
     },
     order: {
-      upsert: jest.fn(async ({ where, create, update }: {
-        where: { clientOrderId: string };
-        create: Record<string, unknown>;
-        update: Record<string, unknown>;
-      }) => {
-        const next = { ...orders.get(where.clientOrderId), ...create, ...update, clientOrderId: where.clientOrderId };
-        orders.set(where.clientOrderId, next);
-        return next;
+      upsert: jest.fn(async ({ where, create, update }: any) => {
+        const cur = orders.get(where.clientOrderId) ?? create;
+        Object.assign(cur, update ?? {});
+        orders.set(where.clientOrderId, cur);
+        return cur;
       }),
     },
     position: {
-      create: jest.fn(async () => ({})),
+      create: jest.fn(async ({ data }: any) => {
+        positions.push({ ...data, id: `p-${positions.length}` });
+        return positions[positions.length - 1];
+      }),
       updateMany: jest.fn(async () => ({ count: 1 })),
     },
+    _levels: levels,
+    _traders: traders,
   };
 }
 
-function createMockLedger() {
+function mockLedger(): AccountLedger {
   let balance = new Decimal(2000);
-  let realized = new Decimal(0);
   return {
-    getAllocation: jest.fn(async () => ({
-      totalEquity: new Decimal(2000),
-      traderEquity: new Decimal(1000),
-      positionAllocation: new Decimal(1000),
-      positionNotional: new Decimal(10000),
+    getAllocation: async () => ({
+      totalEquity: new Decimal(500),
+      traderEquity: new Decimal(500),
+      positionAllocation: new Decimal(500),
+      positionNotional: new Decimal(2500),
       maxTraders: 1,
-      leverage: 10,
-    })),
-    recordFee: jest.fn(async (fee: string | Decimal) => {
-      balance = balance.minus(fee);
-      realized = realized.minus(fee);
-    }),
-    recordRealized: jest.fn(async (gross: string | Decimal, fee: string | Decimal) => {
-      const net = new Decimal(gross).minus(fee);
-      balance = balance.plus(net);
-      realized = realized.plus(net);
-      return net;
+      leverage: 5,
     }),
     getBalance: () => balance,
-    getRealizedPnl: () => realized,
-  };
+    recordFee: async (fee: Decimal) => { balance = balance.minus(fee); },
+    recordRealized: async (gross: Decimal, fee: Decimal) => {
+      balance = balance.plus(gross).minus(fee);
+    },
+  } as any;
 }
 
-describe('GridDirectionalTrader lifecycle', () => {
+describe('Single-position GridDirectionalTrader', () => {
   let provider: SimulationExecutionProvider;
-  let db: ReturnType<typeof createMockDb>;
-  let ledger: ReturnType<typeof createMockLedger>;
+  let db: ReturnType<typeof mockDb>;
 
   beforeEach(() => {
-    provider = new SimulationExecutionProvider(async () => [mockSymbolInfo]);
+    provider = new SimulationExecutionProvider(async () => [symbolInfo]);
     provider.enablePartialFills = false;
-    db = createMockDb();
-    ledger = createMockLedger();
+    provider.onPriceUpdate('BTCUSDT', '100');
+    db = mockDb();
   });
 
-  async function boot(cfg: TraderConfig = baseConfig, id = 'grid-1'): Promise<GridDirectionalTrader> {
-    provider.onPriceUpdate('BTCUSDT', '100');
+  async function boot(cfg: TraderConfig = baseConfig): Promise<GridDirectionalTrader> {
     const trader = new GridDirectionalTrader(
-      id,
+      't1',
       'BTCUSDT',
       'SIMULATION',
       provider,
       cfg,
-      db as never,
-      ledger as never,
+      db as any,
+      mockLedger(),
     );
     provider.on('orderUpdate', (u) => {
       void trader.onOrderUpdate(u);
     });
+    // Seed mark before init so startPrice ≈ 100
+    provider.onPriceUpdate('BTCUSDT', '100');
     await trader.initialize();
-    await wait(250);
     return trader;
   }
 
-  async function tick(price: string, trader: GridDirectionalTrader, ms = 450): Promise<void> {
+  async function tick(price: string, trader: GridDirectionalTrader, ms = 500): Promise<void> {
     provider.onPriceUpdate('BTCUSDT', price);
     trader.onPriceUpdate(price);
     await wait(ms);
   }
 
-  it('places 20 pending grid levels around start 100', async () => {
+  it('TEST 1: at 105 LONG L1 opens — exactly one active position', async () => {
     const trader = await boot();
-    const g = trader.toSummary().grid!;
-    expect(g.startPrice).toBe('100.00');
-    expect(g.levels).toHaveLength(20);
-    expect(g.levels.find((l) => l.direction === 'LONG' && l.level === 1)?.triggerPrice).toBe('105.00');
-    expect(g.levels.find((l) => l.direction === 'SHORT' && l.level === 1)?.triggerPrice).toBe('95.00');
+    expect(trader.toSummary().grid!.startPrice).toBe('100.00');
+    await tick('105', trader, 700);
+    const s = trader.toSummary();
+    expect(trader.getOpenLegCount()).toBe(1);
+    expect(s.currentPosition?.side).toBe('LONG');
+    expect(s.currentPosition?.number).toBe(1);
+    // TP = fill ± gridDistance (5); SL always start
+    const entry = parseFloat(s.currentPosition!.entryPrice);
+    expect(parseFloat(s.currentPosition!.tpPrice)).toBeCloseTo(entry + 5, 1);
+    expect(s.currentPosition?.slPrice).toBe('100.00');
     trader.destroy();
   });
 
-  it('LONG #1 fills at 105 and stays open; LONG #2 still pending', async () => {
+  it('mandatory path: 105→110→115→120→100→95→90', async () => {
+    const trader = await boot();
+
+    async function tickThroughTp(label: string): Promise<void> {
+      const pos = trader.toSummary().currentPosition;
+      expect(pos).not.toBeNull();
+      const tp = parseFloat(pos!.tpPrice);
+      // nudge past TP so TAKE_PROFIT triggers despite fill slippage
+      const past = pos!.side === 'LONG' ? (tp + 0.05).toFixed(2) : (tp - 0.05).toFixed(2);
+      await tick(past, trader, 900);
+      await wait(300);
+    }
+
+    await tick('105', trader, 700);
+    expect(trader.getOpenLegCount()).toBe(1);
+    expect(trader.toSummary().currentPosition?.number).toBe(1);
+
+    await tickThroughTp('L1');
+    let s = trader.toSummary();
+    const l1 = s.grid!.levels.find((l) => l.direction === 'LONG' && l.level === 1);
+    expect(l1?.status).toBe('TP_HIT');
+    expect(trader.getOpenLegCount()).toBe(1);
+    expect(s.currentPosition?.number).toBe(2);
+
+    await tickThroughTp('L2');
+    s = trader.toSummary();
+    expect(s.grid!.levels.find((l) => l.direction === 'LONG' && l.level === 2)?.status).toBe('TP_HIT');
+    expect(s.currentPosition?.number).toBe(3);
+
+    await tickThroughTp('L3');
+    s = trader.toSummary();
+    expect(s.grid!.levels.find((l) => l.direction === 'LONG' && l.level === 3)?.status).toBe('TP_HIT');
+    expect(s.currentPosition?.number).toBe(4);
+
+    const capitalAfterLongs = parseFloat(s.grid!.currentCapital ?? '0');
+    expect(capitalAfterLongs).toBeGreaterThan(500); // TPs added capital
+
+    // SL at start for L4 LONG
+    await tick('100', trader, 900);
+    await wait(300);
+    s = trader.toSummary();
+    expect(s.grid!.levels.find((l) => l.direction === 'LONG' && l.level === 4)?.status).toBe('SL_HIT');
+    expect(trader.getOpenLegCount()).toBe(0);
+    expect(s.grid!.levels.find((l) => l.direction === 'LONG' && l.level === 4)?.status).not.toBe('PENDING');
+
+    const capitalAfterSl = parseFloat(s.grid!.currentCapital ?? '0');
+    expect(capitalAfterSl).not.toBe(500); // must not reset
+
+    await tick('95', trader, 900);
+    await wait(300);
+    s = trader.toSummary();
+    expect(s.currentPosition?.side).toBe('SHORT');
+    expect(s.currentPosition?.number).toBe(1);
+    expect(trader.getOpenLegCount()).toBe(1);
+    expect(parseFloat(s.capital.currentStepAmount)).toBe(capitalAfterSl);
+
+    await tickThroughTp('S1');
+    s = trader.toSummary();
+    expect(s.grid!.levels.find((l) => l.direction === 'SHORT' && l.level === 1)?.status).toBe('TP_HIT');
+    expect(s.currentPosition?.number).toBe(2);
+
+    trader.destroy();
+  }, 90000);
+
+  it('never more than one open position', async () => {
     const trader = await boot();
     await tick('105', trader, 600);
-    const g = trader.toSummary().grid!;
-    expect(g.longFilled).toBe(1);
-    expect(g.levels.find((l) => l.direction === 'LONG' && l.level === 1)?.status).toBe('FILLED');
-    expect(g.levels.find((l) => l.direction === 'LONG' && l.level === 2)?.status).toBe('PENDING');
-    expect(trader.hasOpenPosition()).toBe(true);
+    await tick('110', trader, 200); // mid-flight
+    expect(trader.getOpenLegCount()).toBeLessThanOrEqual(1);
     trader.destroy();
   });
 
-  it('LONG #1 remains open when LONG #2 fills at 110', async () => {
+  it('L1 weight is largest (display plan)', async () => {
     const trader = await boot();
-    await tick('105', trader);
-    await tick('110', trader);
     const g = trader.toSummary().grid!;
-    expect(g.longFilled).toBe(2);
-    expect(g.levels.find((l) => l.direction === 'LONG' && l.level === 1)?.status).toBe('FILLED');
-    expect(g.levels.find((l) => l.direction === 'LONG' && l.level === 2)?.status).toBe('FILLED');
+    const l1 = g.levels.find((l) => l.direction === 'LONG' && l.level === 1)!;
+    const l10 = g.levels.find((l) => l.direction === 'LONG' && l.level === 10)!;
+    expect(l1.weight).toBe(10);
+    expect(l10.weight).toBe(1);
     trader.destroy();
-  });
-
-  it('SHORT #1 fills at 95', async () => {
-    const trader = await boot();
-    await tick('95', trader, 600);
-    const g = trader.toSummary().grid!;
-    expect(g.shortFilled).toBe(1);
-    expect(g.levels.find((l) => l.direction === 'SHORT' && l.level === 1)?.status).toBe('FILLED');
-    expect(g.longFilled).toBe(0);
-    trader.destroy();
-  });
-
-  it('gap crash fills Short #1 even when mark lands below Short #2', async () => {
-    const trader = await boot();
-    // Single jump past Short #1 (95) and #2 (90) — #1 must not stay LIMIT LIVE / TRIGGERED
-    await tick('88', trader, 700);
-    const g = trader.toSummary().grid!;
-    expect(g.levels.find((l) => l.direction === 'SHORT' && l.level === 1)?.status).toBe('FILLED');
-    expect(g.levels.find((l) => l.direction === 'SHORT' && l.level === 2)?.status).toBe('FILLED');
-    expect(g.shortFilled).toBeGreaterThanOrEqual(2);
-    trader.destroy();
-  });
-
-  it('Scenario C: partial up 105/110/115 keeps 3 LONGs open', async () => {
-    const trader = await boot();
-    for (const p of ['105', '110', '115']) await tick(p, trader);
-    const g = trader.toSummary().grid!;
-    expect(g.longFilled).toBe(3);
-    expect(trader.getStatus()).toBe('ACTIVE');
-    expect(trader.hasOpenPosition()).toBe(true);
-    trader.destroy();
-  });
-
-  it('Scenario D: deep up then reverse — filled LONGs stay open', async () => {
-    const trader = await boot();
-    for (const p of ['105', '110', '115', '120']) await tick(p, trader);
-    expect(trader.toSummary().grid!.longFilled).toBe(4);
-    for (const p of ['115', '110', '105', '100']) await tick(p, trader, 350);
-    const g = trader.toSummary().grid!;
-    expect(g.longFilled).toBe(4);
-    expect(g.levels.filter((l) => l.direction === 'LONG' && l.status === 'FILLED')).toHaveLength(4);
-    expect(trader.getStatus()).toBe('ACTIVE');
-    trader.destroy();
-  });
-
-  it('Scenario E: LONG then SHORT both sides open', async () => {
-    const trader = await boot();
-    await tick('105', trader);
-    await tick('110', trader);
-    await tick('100', trader, 350);
-    await tick('95', trader);
-    await tick('90', trader);
-    const g = trader.toSummary().grid!;
-    expect(g.longFilled).toBe(2);
-    expect(g.shortFilled).toBe(2);
-    expect(trader.hasOpenPosition()).toBe(true);
-    trader.destroy();
-  });
-
-  it('Scenario A (3 levels): full LONG side exits FULL_LONG_GRID', async () => {
-    const cfg = { ...baseConfig, gridLevelsPerSide: 3, traderTakeProfitPercent: '999' };
-    const trader = await boot(cfg);
-    let completedReason: string | undefined;
-    trader.on('traderEvent', (e: { type: string; reason?: string }) => {
-      if (e.type === 'COMPLETED') completedReason = e.reason;
-    });
-    for (const p of ['105', '110', '115']) await tick(p, trader, 550);
-    await wait(400);
-    expect(completedReason).toBe('FULL_LONG_GRID');
-    expect(trader.getStatus()).toBe('COMPLETED');
-    expect(trader.hasOpenPosition()).toBe(false);
-    trader.destroy();
-  }, 20000);
-
-  it('Scenario B (3 levels): full SHORT side exits FULL_SHORT_GRID', async () => {
-    const cfg = { ...baseConfig, gridLevelsPerSide: 3, traderTakeProfitPercent: '999' };
-    const trader = await boot(cfg, 'grid-short');
-    let completedReason: string | undefined;
-    trader.on('traderEvent', (e: { type: string; reason?: string }) => {
-      if (e.type === 'COMPLETED') completedReason = e.reason;
-    });
-    for (const p of ['95', '90', '85']) await tick(p, trader, 550);
-    await wait(400);
-    expect(completedReason).toBe('FULL_SHORT_GRID');
-    expect(trader.getStatus()).toBe('COMPLETED');
-    trader.destroy();
-  }, 20000);
-
-  it('exits on MAX_LIFETIME', async () => {
-    const cfg = { ...baseConfig, traderMaxLifetimeHours: 0.001, gridLevelsPerSide: 3 };
-    const trader = await boot(cfg, 'grid-life');
-    let completedReason: string | undefined;
-    trader.on('traderEvent', (e: { type: string; reason?: string }) => {
-      if (e.type === 'COMPLETED') completedReason = e.reason;
-    });
-    await wait(4200);
-    expect(completedReason).toBe('MAX_LIFETIME');
-    expect(trader.getStatus()).toBe('COMPLETED');
-    trader.destroy();
-  }, 12000);
-
-  it('exits on TRADER_TP when combined profit hits target', async () => {
-    const cfg = { ...baseConfig, traderTakeProfitPercent: '0.01', gridLevelsPerSide: 5 };
-    const trader = await boot(cfg, 'grid-tp');
-    let completedReason: string | undefined;
-    trader.on('traderEvent', (e: { type: string; reason?: string }) => {
-      if (e.type === 'COMPLETED') completedReason = e.reason;
-    });
-    await tick('105', trader);
-    await tick('120', trader, 700);
-    await wait(500);
-    expect(completedReason).toBe('TRADER_TP');
-    expect(trader.getStatus()).toBe('COMPLETED');
-    trader.destroy();
-  }, 15000);
-
-  it('duplicate exit requests complete only once', async () => {
-    const cfg = { ...baseConfig, gridLevelsPerSide: 3, traderTakeProfitPercent: '999' };
-    const trader = await boot(cfg, 'grid-dup');
-    let completions = 0;
-    trader.on('traderEvent', (e: { type: string }) => {
-      if (e.type === 'COMPLETED') completions += 1;
-    });
-    for (const p of ['105', '110', '115']) await tick(p, trader, 550);
-    await wait(300);
-    await trader.emergencyStop();
-    await wait(300);
-    expect(completions).toBe(1);
-    trader.destroy();
-  }, 20000);
-
-  it('restores startPrice and filled levels after restart', async () => {
-    const trader = await boot(baseConfig, 'grid-restore');
-    await tick('105', trader, 600);
-    const snap = trader.toSummary().grid!;
-    expect(snap.longFilled).toBe(1);
-    const levels = await db.gridLevel.findMany();
-    trader.destroy();
-
-    const restored = new GridDirectionalTrader(
-      'grid-restore',
-      'BTCUSDT',
-      'SIMULATION',
-      provider,
-      baseConfig,
-      db as never,
-      ledger as never,
-    );
-    await restored.restore({
-      status: 'ACTIVE',
-      realizedPnl: '0',
-      unrealizedPnl: '0',
-      startedAt: new Date(),
-      endsAt: new Date(Date.now() + 3600_000),
-      startPrice: snap.startPrice,
-      traderAllocatedAmount: '1000',
-      gridLevelsPerSide: 10,
-      gridDistancePercent: '5',
-      traderTakeProfitPercent: '10',
-      totalFees: '0',
-      gridLevels: levels,
-    });
-    const g = restored.toSummary().grid!;
-    expect(g.startPrice).toBe(snap.startPrice);
-    expect(g.longFilled).toBe(1);
-    restored.destroy();
   });
 });

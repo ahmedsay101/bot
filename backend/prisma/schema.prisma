@@ -118,6 +118,8 @@ model Trader {
   gridLevelsPerSide         Int?
   gridDistancePercent       String?
   traderTakeProfitPercent   String?
+  /// Live trader capital (starts = allocation; updated after each TP/SL)
+  currentCapital            String?
 
   /// JSON array of PositionTimelineEntry
   timelineJson      String @default("[]")
@@ -149,6 +151,7 @@ model GridLevel {
   allocatedMargin  String
   notional         String
   quantity         String
+  /// PENDING | ACTIVE | TP_HIT | SL_HIT | CANCELLED | SKIPPED
   status           String
   clientOrderId    String?
   exchangeOrderId  String?
@@ -157,10 +160,15 @@ model GridLevel {
   entryPrice       String?
   filledQuantity   String?
   fees             String?
+  tpPrice          String?
+  slPrice          String?
+  /// TP | SL | FORCE | …
+  completionReason String?
+  completedAt      DateTime?
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
-  trader Trader @relation(fields: [traderId], references: [id])
+  trader Trader @relation(fields: [traderId], references: [id], onDelete: Cascade)
 
   @@unique([traderId, direction, level])
   @@index([traderId])

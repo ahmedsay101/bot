@@ -348,11 +348,19 @@ export class TraderManager extends EventEmitter {
           takeProfitPercent:
             dbAny.traderTakeProfitPercent ?? this.traderConfig.traderTakeProfitPercent ?? '10',
           traderAllocatedAmount: dbTrader.traderAllocatedAmount,
+          currentCapital: (dbTrader as any).currentCapital ?? dbTrader.traderAllocatedAmount,
+          currentSide: dbTrader.currentSide,
+          entryPrice: dbTrader.entryPrice,
+          tpPrice: dbTrader.tpPrice,
+          slPrice: dbTrader.slPrice,
+          quantity: dbTrader.quantity,
+          takeProfits: dbTrader.takeProfits,
+          stopLosses: dbTrader.stopLosses,
           longFilled: (gridLevels as Array<{ status: string; direction: string }>).filter(
-            (l) => l.status === 'FILLED' && l.direction === 'LONG',
+            (l) => (l.status === 'TP_HIT' || l.status === 'SL_HIT' || l.status === 'FILLED') && l.direction === 'LONG',
           ).length,
           shortFilled: (gridLevels as Array<{ status: string; direction: string }>).filter(
-            (l) => l.status === 'FILLED' && l.direction === 'SHORT',
+            (l) => (l.status === 'TP_HIT' || l.status === 'SL_HIT' || l.status === 'FILLED') && l.direction === 'SHORT',
           ).length,
           exitReason: dbAny.exitReason ?? dbTrader.completionReason,
           positionsOpened: dbTrader.positionsOpened,
