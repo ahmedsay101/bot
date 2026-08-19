@@ -196,6 +196,17 @@ describe('GridDirectionalTrader lifecycle', () => {
     trader.destroy();
   });
 
+  it('gap crash fills Short #1 even when mark lands below Short #2', async () => {
+    const trader = await boot();
+    // Single jump past Short #1 (95) and #2 (90) — #1 must not stay LIMIT LIVE / TRIGGERED
+    await tick('88', trader, 700);
+    const g = trader.toSummary().grid!;
+    expect(g.levels.find((l) => l.direction === 'SHORT' && l.level === 1)?.status).toBe('FILLED');
+    expect(g.levels.find((l) => l.direction === 'SHORT' && l.level === 2)?.status).toBe('FILLED');
+    expect(g.shortFilled).toBeGreaterThanOrEqual(2);
+    trader.destroy();
+  });
+
   it('Scenario C: partial up 105/110/115 keeps 3 LONGs open', async () => {
     const trader = await boot();
     for (const p of ['105', '110', '115']) await tick(p, trader);

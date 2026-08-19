@@ -51,7 +51,7 @@ describe('SimulationExecutionProvider — Binance-aligned', () => {
     expect(parseFloat(result.avgFillPrice!)).toBeLessThan(50000);
   });
 
-  it('STOP_LIMIT stays PENDING until stop, then TRIGGERED — does NOT fill if limit not executable', async () => {
+  it('STOP_LIMIT gap-fills at market when mark blows through the limit', async () => {
     provider.onPriceUpdate('BTCUSDT', '100');
     const updates: OrderUpdate[] = [];
     provider.on('orderUpdate', (u: OrderUpdate) => updates.push(u));
@@ -71,18 +71,38 @@ describe('SimulationExecutionProvider — Binance-aligned', () => {
     });
     expect(placed.status).toBe('PENDING');
 
-    // Gap through stop to 120 — triggers but BUY limit@110 is NOT executable (mark > limit)
+    // Gap through stop to 120 — trigger + gap-fill (must not stay stranded TRIGGERED)
     provider.onPriceUpdate('BTCUSDT', '120');
     await wait();
 
-    const triggered = updates.find((u) => u.status === 'TRIGGERED');
-    expect(triggered).toBeDefined();
-    expect(updates.find((u) => u.status === 'FILLED')).toBeUndefined();
-
-    // Price comes back to limit → fill
-    provider.onPriceUpdate('BTCUSDT', '109');
-    await wait();
     expect(updates.some((u) => u.status === 'FILLED')).toBe(true);
+    const fill = updates.find((u) => u.status === 'FILLED');
+    expect(parseFloat(fill!.avgFillPrice!)).toBeGreaterThan(110);
+  });
+
+  it('STOP_LIMIT SELL gap-fills when mark falls through limit (grid short case)', async () => {
+    provider.onPriceUpdate('BTCUSDT', '100');
+    const updates: OrderUpdate[] = [];
+    provider.on('orderUpdate', (u: OrderUpdate) => updates.push(u));
+
+    await provider.placeOrder({
+      traderId: 't',
+      clientOrderId: 'sl-short',
+      symbol: 'BTCUSDT',
+      side: 'SELL',
+      type: 'STOP_LIMIT',
+      role: 'SHORT',
+      hedgeLevel: 1,
+      quantity: '0.01',
+      price: '90',
+      stopPrice: '90',
+      positionSide: 'SHORT',
+    });
+
+    // Crash through 90 to 80 — Short #1 must fill, not sit as LIMIT LIVE
+    provider.onPriceUpdate('BTCUSDT', '80');
+    await wait();
+    expect(updates.some((u) => u.clientOrderId === 'sl-short' && u.status === 'FILLED')).toBe(true);
   });
 
   it('STOP_LIMIT fills when stop and limit are both satisfied on same tick', async () => {

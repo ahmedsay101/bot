@@ -307,7 +307,7 @@ export class TraderManager extends EventEmitter {
               o.hedgeLevel === p.hedgeLevel
               && (o.role === p.side || (o.role === 'HEDGE' && p.side === 'LONG'))
               && o.status === 'FILLED'
-              && o.type === 'STOP_LIMIT',
+              && (o.type === 'STOP_LIMIT' || o.type === 'STOP_MARKET'),
           );
           return { ...p, clientOrderId: match?.clientOrderId ?? null, entryFee: null as string | null };
         });

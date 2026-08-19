@@ -47,7 +47,9 @@ interface SimPosition {
  * Binance Futures execution simulator.
  * Consumes REAL mark prices; only fills are simulated.
  *
- * STOP (STOP_LIMIT): stop → then LIMIT waits for executable price (NOT instant fill).
+ * STOP / STOP_LIMIT: stop → then LIMIT; if mark has already gapped through the
+ * limit, fill at market (grid entries must not stay stranded as TRIGGERED).
+ * STOP_MARKET / TAKE_PROFIT_MARKET: stop → immediate market fill.
  * STOP_MARKET / TAKE_PROFIT_MARKET: stop → immediate MARKET with slippage.
  * TAKE_PROFIT: stop → then LIMIT at price.
  * MARKET: immediate fill with slippage + fee.
@@ -405,18 +407,41 @@ export class SimulationExecutionProvider extends EventEmitter implements IExecut
         }
       }
 
-      // Phase 2: TRIGGERED limit — wait until limit is executable
+      // Phase 2: TRIGGERED limit — fill when executable, or gap-fill STOP_LIMIT
+      // when mark has already blown through the limit (classic stop-limit gap).
       if (order.phase === 'TRIGGERED') {
         const limitPrice = price ?? stopPrice;
-        if (limitPrice == null) continue;
-        if (this.isLimitExecutable(side, mark, new Decimal(limitPrice))) {
-          const symbolInfo = this.symbolInfoCache.get(symbol);
-          if (symbolInfo == null) continue;
+        if (limitPrice == null) {
+          // STOP_MARKET / TAKE_PROFIT_MARKET should have filled in phase 1; safety net
+          if (type === 'STOP_MARKET' || type === 'TAKE_PROFIT_MARKET') {
+            const symbolInfo = this.symbolInfoCache.get(symbol);
+            if (symbolInfo == null) continue;
+            const fillPrice = this.applySlippage(markPrice, side, symbolInfo);
+            this.finalizeFill(clientId, order, fillPrice, symbolInfo);
+          }
+          continue;
+        }
+        const limit = new Decimal(limitPrice);
+        const symbolInfo = this.symbolInfoCache.get(symbol);
+        if (symbolInfo == null) continue;
+
+        if (this.isLimitExecutable(side, mark, limit)) {
           // Fill at limit (price improvement: BUY min(mark,limit), SELL max)
           const fillAt = side === 'BUY'
-            ? Decimal.min(mark, new Decimal(limitPrice)).toFixed()
-            : Decimal.max(mark, new Decimal(limitPrice)).toFixed();
+            ? Decimal.min(mark, limit).toFixed()
+            : Decimal.max(mark, limit).toFixed();
           this.finalizeFill(clientId, order, fillAt, symbolInfo);
+        } else if (type === 'STOP_LIMIT' && this.isStopLimitGapped(side, mark, limit)) {
+          // Price gapped through stop+limit — fill at market so grid levels are not stranded
+          const fillPrice = this.applySlippage(markPrice, side, symbolInfo);
+          log.info('Sim STOP_LIMIT gap-fill (mark through limit)', {
+            clientId,
+            side,
+            limit: limitPrice,
+            mark: markPrice,
+            fill: fillPrice,
+          });
+          this.finalizeFill(clientId, order, fillPrice, symbolInfo);
         }
       }
     }
@@ -435,6 +460,14 @@ export class SimulationExecutionProvider extends EventEmitter implements IExecut
 
   private isLimitExecutable(side: OrderRequest['side'], mark: Decimal, limit: Decimal): boolean {
     return side === 'BUY' ? mark.lte(limit) : mark.gte(limit);
+  }
+
+  /**
+   * After a STOP_LIMIT triggers, mark moved past the limit away from a resting fill
+   * (BUY: mark > limit, SELL: mark < limit). Without gap-fill the order never fills.
+   */
+  private isStopLimitGapped(side: OrderRequest['side'], mark: Decimal, limit: Decimal): boolean {
+    return side === 'BUY' ? mark.gt(limit) : mark.lt(limit);
   }
 
   private finalizeFill(clientId: string, order: SimOrder, fillPrice: string, symbolInfo: SymbolInfo): void {
