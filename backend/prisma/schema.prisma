@@ -315,9 +315,9 @@ model SymbolBlock {
 model Configuration {
   id              String   @id @default("singleton")
   maxTraders      Int      @default(1)
-  initialCapital  String   @default("1000")
+  initialCapital  String   @default("2000")
   positionSize    String   @default("100")
-  leverage        Int      @default(10)
+  leverage        Int      @default(2)
   marginMode      String   @default("ISOLATED")
   traderLifetimeHours Int  @default(24)
   takeProfitPercent String @default("0.10")
