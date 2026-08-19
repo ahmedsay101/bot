@@ -44,7 +44,8 @@ interface AppConfig {
     capitalSteps: number;
     /** TP→opposite / SL→same when true; default false = legacy. */
     switchPositionOnTakeProfit: boolean;
-    traderBehavior: 'reversal' | 'grid_directional';
+    /** Always grid directional on this branch. */
+    traderBehavior: 'grid_directional';
     gridLevelsPerSide: number;
     /** Percent points, e.g. '5' = 5%. */
     gridDistancePercent: string;
@@ -94,7 +95,6 @@ const schema = Joi.object({
   STARTING_SIDE: Joi.string().valid('SHORT', 'LONG').default('SHORT'),
   CAPITAL_STEPS: Joi.number().integer().min(1).max(100).default(5),
   SWITCH_POSITION_ON_TAKE_PROFIT: Joi.boolean().default(false),
-  TRADER_BEHAVIOR: Joi.string().valid('reversal', 'grid_directional').default('reversal'),
   GRID_LEVELS_PER_SIDE: Joi.number().integer().min(1).max(100).default(10),
   GRID_DISTANCE_PERCENT: Joi.string().default('5'),
   TRADER_TAKE_PROFIT_PERCENT: Joi.string().default('10'),
@@ -161,7 +161,7 @@ function loadConfig(): AppConfig {
       startingSide: env.STARTING_SIDE as 'LONG' | 'SHORT',
       capitalSteps: env.CAPITAL_STEPS as number,
       switchPositionOnTakeProfit: env.SWITCH_POSITION_ON_TAKE_PROFIT as boolean,
-      traderBehavior: env.TRADER_BEHAVIOR as 'reversal' | 'grid_directional',
+      traderBehavior: 'grid_directional',
       gridLevelsPerSide: env.GRID_LEVELS_PER_SIDE as number,
       gridDistancePercent: env.GRID_DISTANCE_PERCENT as string,
       traderTakeProfitPercent: env.TRADER_TAKE_PROFIT_PERCENT as string,

@@ -111,8 +111,8 @@ model Trader {
   /// Why trader completed: EXPIRED | FORCE | CONSECUTIVE_SL | ...
   completionReason  String?
 
-  /// Strategy behavior: reversal | grid_directional
-  behavior                  String  @default("reversal")
+  /// Strategy behavior — grid_directional only on this branch
+  behavior                  String  @default("grid_directional")
   startPrice                String?
   exitReason                String?
   gridLevelsPerSide         Int?
@@ -325,7 +325,7 @@ model Configuration {
   startingSide      String @default("SHORT")
   capitalSteps      Int    @default(5)
   switchPositionOnTakeProfit Boolean @default(false)
-  traderBehavior            String  @default("reversal")
+  traderBehavior            String  @default("grid_directional")
   gridLevelsPerSide         Int     @default(10)
   gridDistancePercent       String  @default("5")
   traderTakeProfitPercent   String  @default("10")

@@ -2,7 +2,8 @@
 
 export type TraderStatus = 'INITIALIZING' | 'ACTIVE' | 'PAUSED' | 'COMPLETING' | 'COMPLETED' | 'FAILED';
 export type TraderMode = 'LIVE' | 'SIMULATION';
-export type TraderBehavior = 'reversal' | 'grid_directional';
+/** Strategy behavior — this branch is grid-only. */
+export type TraderBehavior = 'grid_directional';
 export type OrderSide = 'BUY' | 'SELL';
 export type OrderType = 'MARKET' | 'LIMIT' | 'STOP_LIMIT' | 'TAKE_PROFIT' | 'STOP_MARKET' | 'TAKE_PROFIT_MARKET';
 export type OrderStatus =
@@ -118,7 +119,7 @@ export interface TraderConfig {
    * When false (default): TP → same side, SL → opposite (legacy).
    */
   switchPositionOnTakeProfit: boolean;
-  /** Strategy behavior: classic reversal or grid directional. */
+  /** Strategy behavior — always grid directional on this branch. */
   traderBehavior: TraderBehavior;
   /** Grid levels above and below start price (default 10). */
   gridLevelsPerSide: number;

@@ -1,7 +1,6 @@
 import { EventEmitter } from 'events';
 import { v4 as uuidv4 } from 'uuid';
 import Decimal from 'decimal.js';
-import { Trader } from '../trader/Trader';
 import { GridDirectionalTrader } from '../trader/grid/GridDirectionalTrader';
 import type { IManagedTrader } from '../trader/IManagedTrader';
 import type { IExecutionProvider } from '../execution/IExecutionProvider';
@@ -17,7 +16,6 @@ import type {
   TraderSummaryView,
   DashboardEvent,
   OrderStatus,
-  TradeSide,
 } from '../../types';
 import { calcTotalPnl } from '../calc/allocation';
 import { createContextLogger } from '../logger';
@@ -26,11 +24,6 @@ import { selectReplacementSymbols } from './poolSelection';
 import type { PrismaClient } from '@prisma/client';
 
 const log = createContextLogger('TraderManager');
-
-function isGridBehavior(cfg: TraderConfig, dbBehavior?: string | null): boolean {
-  const b = dbBehavior ?? cfg.traderBehavior ?? 'reversal';
-  return b === 'grid_directional';
-}
 
 const LEVERAGED_TOKEN_SUFFIXES = ['UP', 'DOWN', 'BEAR', 'BULL', '2L', '2S', '3L', '3S'];
 
@@ -208,9 +201,8 @@ export class TraderManager extends EventEmitter {
     const cfg = this.traderConfig as unknown as Record<string, unknown>;
     const keys = [
       'maxTraders', 'initialCapital', 'positionSize', 'leverage', 'marginMode',
-      'traderLifetimeHours', 'takeProfitPercent', 'stopLossPercent', 'startingSide',
-      'capitalSteps', 'switchPositionOnTakeProfit',
-      'traderBehavior', 'gridLevelsPerSide', 'gridDistancePercent',
+      'traderLifetimeHours',
+      'gridLevelsPerSide', 'gridDistancePercent',
       'traderTakeProfitPercent', 'traderMaxLifetimeHours',
       'refreshInterval', 'retryLimit', 'feeRate', 'makerFeeRate', 'takerFeeRate', 'slippage',
     ] as const;
@@ -276,154 +268,53 @@ export class TraderManager extends EventEmitter {
       }
 
       try {
-        const useGrid = isGridBehavior(this.traderConfig, (dbTrader as any).behavior);
-        const orders = dbTrader.orders;
-        const trader: IManagedTrader = useGrid
-          ? new GridDirectionalTrader(
-            dbTrader.id,
-            dbTrader.symbol,
-            dbTrader.mode as TraderMode,
-            this.executionProvider,
-            this.traderConfig,
-            this.db,
-            this.accountLedger,
-          )
-          : new Trader(
-            dbTrader.id,
-            dbTrader.symbol,
-            dbTrader.mode as TraderMode,
-            this.executionProvider,
-            this.traderConfig,
-            this.db,
-            this.accountLedger,
-          );
-
-        if (useGrid) {
-          let gridLevels: unknown[] = [];
-          try {
-            const gridApi = (this.db as any).gridLevel;
-            if (gridApi?.findMany != null) {
-              gridLevels = await gridApi.findMany({
-                where: { traderId: dbTrader.id },
-                orderBy: [{ direction: 'asc' }, { level: 'asc' }],
-              });
-            }
-          } catch (err) {
-            log.warn(`Failed loading grid levels for ${dbTrader.id}`, { error: String(err) });
-          }
-
-          const openPositions = await this.db.position.findMany({
-            where: { traderId: dbTrader.id, isOpen: true },
-          });
-          const openWithOrderIds = openPositions.map((p) => {
-            const match = orders.find(
-              (o) =>
-                o.hedgeLevel === p.hedgeLevel
-                && (o.role === p.side || (o.role === 'HEDGE' && p.side === 'LONG'))
-                && o.status === 'FILLED'
-                && o.type === 'STOP_LIMIT',
-            );
-            return { ...p, clientOrderId: match?.clientOrderId ?? null, entryFee: null as string | null };
-          });
-
-          const pendingClientOrderIds = orders
-            .filter((o) => OPEN_ORDER_STATUSES.includes(o.status as OrderStatus))
-            .map((o) => o.clientOrderId);
-          const orderViews = orders.map((o) => ({
-            clientOrderId: o.clientOrderId,
-            role: o.role as import('../../types').HedgeRole,
-            type: o.type as import('../../types').OrderType,
-            status: o.status as OrderStatus,
-            side: inferOrderSide(o),
-            price: o.price,
-            stopPrice: o.stopPrice,
-            hedgeLevel: o.hedgeLevel,
-            quantity: o.quantity,
-          }));
-
-          const dbAny = dbTrader as typeof dbTrader & {
-            behavior?: string | null;
-            startPrice?: string | null;
-            gridLevelsPerSide?: number | null;
-            gridDistancePercent?: string | null;
-            traderTakeProfitPercent?: string | null;
-            exitReason?: string | null;
-          };
-
-          await trader.restore({
-            status: dbTrader.status as import('../../types').TraderStatus,
-            realizedPnl: dbTrader.realizedPnl,
-            unrealizedPnl: dbTrader.unrealizedPnl,
-            startedAt: dbTrader.startedAt,
-            endsAt: dbTrader.endsAt,
-            startPrice: dbAny.startPrice ?? '0',
-            levelsPerSide: dbAny.gridLevelsPerSide ?? this.traderConfig.gridLevelsPerSide ?? 10,
-            distancePercent: dbAny.gridDistancePercent ?? this.traderConfig.gridDistancePercent ?? '5',
-            takeProfitPercent:
-              dbAny.traderTakeProfitPercent ?? this.traderConfig.traderTakeProfitPercent ?? '10',
-            traderAllocatedAmount: dbTrader.traderAllocatedAmount,
-            longFilled: (gridLevels as Array<{ status: string; direction: string }>).filter(
-              (l) => l.status === 'FILLED' && l.direction === 'LONG',
-            ).length,
-            shortFilled: (gridLevels as Array<{ status: string; direction: string }>).filter(
-              (l) => l.status === 'FILLED' && l.direction === 'SHORT',
-            ).length,
-            exitReason: dbAny.exitReason ?? dbTrader.completionReason,
-            positionsOpened: dbTrader.positionsOpened,
-            positionsClosed: dbTrader.positionsClosed,
-            winningPositions: dbTrader.winningPositions,
-            losingPositions: dbTrader.losingPositions,
-            longPositions: dbTrader.longPositions,
-            shortPositions: dbTrader.shortPositions,
-            totalFees: dbTrader.totalFees,
-            timelineJson: dbTrader.timelineJson,
-            pendingClientOrderIds,
-            orderViews,
-            gridLevels,
-            openPositions: openWithOrderIds,
-            currentPositionNumber: dbTrader.currentPositionNumber,
-          });
-
-          this.wireTraderEvents(trader);
-          this.traders.set(trader.getId(), trader);
-          this.symbolToTrader.set(dbTrader.symbol, trader.getId());
-
-          if (dbTrader.status === 'COMPLETING') {
-            await trader.resumeCompleting();
-          }
-
-          log.info(`Restored grid trader ${trader.getId()} for ${dbTrader.symbol}`);
+        const behavior = (dbTrader as { behavior?: string | null }).behavior ?? 'grid_directional';
+        if (behavior !== 'grid_directional') {
+          await this.retireNonGridTrader(dbTrader);
           continue;
         }
+
+        const orders = dbTrader.orders;
+        const trader: IManagedTrader = new GridDirectionalTrader(
+          dbTrader.id,
+          dbTrader.symbol,
+          dbTrader.mode as TraderMode,
+          this.executionProvider,
+          this.traderConfig,
+          this.db,
+          this.accountLedger,
+        );
+
+        let gridLevels: unknown[] = [];
+        try {
+          const gridApi = (this.db as any).gridLevel;
+          if (gridApi?.findMany != null) {
+            gridLevels = await gridApi.findMany({
+              where: { traderId: dbTrader.id },
+              orderBy: [{ direction: 'asc' }, { level: 'asc' }],
+            });
+          }
+        } catch (err) {
+          log.warn(`Failed loading grid levels for ${dbTrader.id}`, { error: String(err) });
+        }
+
+        const openPositions = await this.db.position.findMany({
+          where: { traderId: dbTrader.id, isOpen: true },
+        });
+        const openWithOrderIds = openPositions.map((p) => {
+          const match = orders.find(
+            (o) =>
+              o.hedgeLevel === p.hedgeLevel
+              && (o.role === p.side || (o.role === 'HEDGE' && p.side === 'LONG'))
+              && o.status === 'FILLED'
+              && o.type === 'STOP_LIMIT',
+          );
+          return { ...p, clientOrderId: match?.clientOrderId ?? null, entryFee: null as string | null };
+        });
 
         const pendingClientOrderIds = orders
           .filter((o) => OPEN_ORDER_STATUSES.includes(o.status as OrderStatus))
           .map((o) => o.clientOrderId);
-
-        const posNum = dbTrader.currentPositionNumber;
-        const entryOrder = [...orders].reverse().find(
-          (o) => o.type === 'MARKET' && o.hedgeLevel === posNum,
-        );
-        const tpOrder = [...orders].reverse().find(
-          (o) =>
-            (o.type === 'TAKE_PROFIT' || o.type === 'TAKE_PROFIT_MARKET')
-            && o.hedgeLevel === posNum
-            && OPEN_ORDER_STATUSES.includes(o.status as OrderStatus),
-        );
-        const slOrder = [...orders].reverse().find(
-          (o) =>
-            o.type === 'STOP_MARKET'
-            && o.hedgeLevel === posNum
-            && OPEN_ORDER_STATUSES.includes(o.status as OrderStatus),
-        );
-
-        const side = (dbTrader.currentSide as TradeSide | null) ?? null;
-        const positionOpen =
-          side != null
-          && dbTrader.entryPrice != null
-          && dbTrader.entryPrice !== '0'
-          && (tpOrder != null || slOrder != null);
-
         const orderViews = orders.map((o) => ({
           clientOrderId: o.clientOrderId,
           role: o.role as import('../../types').HedgeRole,
@@ -436,55 +327,48 @@ export class TraderManager extends EventEmitter {
           quantity: o.quantity,
         }));
 
+        const dbAny = dbTrader as typeof dbTrader & {
+          behavior?: string | null;
+          startPrice?: string | null;
+          gridLevelsPerSide?: number | null;
+          gridDistancePercent?: string | null;
+          traderTakeProfitPercent?: string | null;
+          exitReason?: string | null;
+        };
+
         await trader.restore({
           status: dbTrader.status as import('../../types').TraderStatus,
           realizedPnl: dbTrader.realizedPnl,
           unrealizedPnl: dbTrader.unrealizedPnl,
           startedAt: dbTrader.startedAt,
           endsAt: dbTrader.endsAt,
-          currentSide: side,
-          currentPositionNumber: posNum,
-          entryPrice: dbTrader.entryPrice,
-          tpPrice: dbTrader.tpPrice,
-          slPrice: dbTrader.slPrice,
-          quantity: dbTrader.quantity,
+          startPrice: dbAny.startPrice ?? '0',
+          levelsPerSide: dbAny.gridLevelsPerSide ?? this.traderConfig.gridLevelsPerSide ?? 10,
+          distancePercent: dbAny.gridDistancePercent ?? this.traderConfig.gridDistancePercent ?? '5',
+          takeProfitPercent:
+            dbAny.traderTakeProfitPercent ?? this.traderConfig.traderTakeProfitPercent ?? '10',
           traderAllocatedAmount: dbTrader.traderAllocatedAmount,
-          capitalSteps: dbTrader.capitalSteps,
-          currentStep: dbTrader.currentStep,
-          currentStepAmount: dbTrader.currentStepAmount,
-          highestStepReached: dbTrader.highestStepReached,
-          lowestStepReached: dbTrader.lowestStepReached,
-          stepIncreases: dbTrader.stepIncreases,
-          stepDecreases: dbTrader.stepDecreases,
-          stepResets: dbTrader.stepResets,
-          step1Trades: dbTrader.step1Trades,
-          maxStepTrades: dbTrader.maxStepTrades,
+          longFilled: (gridLevels as Array<{ status: string; direction: string }>).filter(
+            (l) => l.status === 'FILLED' && l.direction === 'LONG',
+          ).length,
+          shortFilled: (gridLevels as Array<{ status: string; direction: string }>).filter(
+            (l) => l.status === 'FILLED' && l.direction === 'SHORT',
+          ).length,
+          exitReason: dbAny.exitReason ?? dbTrader.completionReason,
           positionsOpened: dbTrader.positionsOpened,
           positionsClosed: dbTrader.positionsClosed,
           winningPositions: dbTrader.winningPositions,
           losingPositions: dbTrader.losingPositions,
-          takeProfits: dbTrader.takeProfits,
-          stopLosses: dbTrader.stopLosses,
           longPositions: dbTrader.longPositions,
           shortPositions: dbTrader.shortPositions,
           totalFees: dbTrader.totalFees,
           timelineJson: dbTrader.timelineJson,
           pendingClientOrderIds,
-          entryClientOrderId: entryOrder?.clientOrderId ?? null,
-          tpClientOrderId: tpOrder?.clientOrderId ?? null,
-          slClientOrderId: slOrder?.clientOrderId ?? null,
-          positionOpen,
           orderViews,
+          gridLevels,
+          openPositions: openWithOrderIds,
+          currentPositionNumber: dbTrader.currentPositionNumber,
         });
-
-        if (this.mode === 'SIMULATION') {
-          this.rehydrateSimulation(dbTrader, {
-            positionOpen,
-            side,
-            entryPrice: dbTrader.entryPrice,
-            quantity: dbTrader.quantity,
-          });
-        }
 
         this.wireTraderEvents(trader);
         this.traders.set(trader.getId(), trader);
@@ -494,7 +378,7 @@ export class TraderManager extends EventEmitter {
           await trader.resumeCompleting();
         }
 
-        log.info(`Restored trader ${trader.getId()} for ${dbTrader.symbol}`);
+        log.info(`Restored grid trader ${trader.getId()} for ${dbTrader.symbol}`);
       } catch (err) {
         log.warn(`Failed to restore trader for ${dbTrader.symbol}, marking FAILED`, { error: String(err) });
         await this.db.trader.update({
@@ -522,95 +406,67 @@ export class TraderManager extends EventEmitter {
     log.info(`Restored ${this.traders.size}/${this.traderConfig.maxTraders} active traders from database`);
   }
 
-  /** Rebuild sim book for open V2 position + TP/SL. */
-  private rehydrateSimulation(
-    dbTrader: {
-      id: string;
-      symbol: string;
-      leverage: number;
-      orders: Array<{
-        clientOrderId: string;
-        type: string;
-        status: string;
-        role: string;
-        side?: string;
-        hedgeLevel: number;
-        quantity: string;
-        filledQuantity: string;
-        price: string | null;
-        stopPrice: string | null;
-      }>;
-    },
-    state: {
-      positionOpen: boolean;
-      side: TradeSide | null;
-      entryPrice: string | null;
-      quantity: string | null;
-    },
-  ): void {
-    const sim = this.executionProvider as {
-      rehydrate?: (p: {
-        positions: Array<{ symbol: string; side: 'LONG' | 'SHORT'; entryPrice: string; quantity: string; leverage?: number }>;
-        orders: Array<{
-          clientOrderId: string;
-          traderId: string;
-          symbol: string;
-          side: 'BUY' | 'SELL';
-          type: import('../../types').OrderType;
-          role: import('../../types').HedgeRole;
-          hedgeLevel: number;
-          quantity: string;
-          filledQuantity?: string;
-          price?: string | null;
-          stopPrice?: string | null;
-          status: OrderStatus;
-          positionSide?: 'LONG' | 'SHORT' | 'BOTH';
-        }>;
-      }) => void;
-    };
-    if (sim.rehydrate == null) return;
+  /**
+   * Grid-only branch: flatten exchange exposure for legacy reversal traders, then mark COMPLETED.
+   * Prevents orphaned Binance orders/positions while a new grid trader may reclaim the symbol.
+   */
+  private async retireNonGridTrader(dbTrader: { id: string; symbol: string }): Promise<void> {
+    log.warn(
+      `Retiring non-grid trader ${dbTrader.id} (${dbTrader.symbol}) with exchange cleanup — this branch is grid-only`,
+    );
 
-    const positions: Array<{ symbol: string; side: 'LONG' | 'SHORT'; entryPrice: string; quantity: string; leverage?: number }> = [];
-    if (
-      state.positionOpen
-      && state.side != null
-      && state.entryPrice != null
-      && state.quantity != null
-      && state.quantity !== '0'
-    ) {
-      positions.push({
-        symbol: dbTrader.symbol,
-        side: state.side,
-        entryPrice: state.entryPrice,
-        quantity: state.quantity,
-        leverage: dbTrader.leverage,
-      });
+    try {
+      await this.executionProvider.cancelAllOrders(dbTrader.symbol);
+    } catch (err) {
+      log.warn(`cancelAllOrders failed while retiring ${dbTrader.symbol}`, { error: String(err) });
     }
 
-    const openOrders = dbTrader.orders
-      .filter((o) => OPEN_ORDER_STATUSES.includes(o.status as OrderStatus))
-      .map((o) => {
-        const role = o.role as import('../../types').HedgeRole;
-        const posSide: 'LONG' | 'SHORT' =
-          role === 'SHORT' ? 'SHORT' : 'LONG';
-        return {
-          clientOrderId: o.clientOrderId,
-          traderId: dbTrader.id,
-          symbol: dbTrader.symbol,
-          side: inferOrderSide(o),
-          type: o.type as import('../../types').OrderType,
-          role,
-          hedgeLevel: o.hedgeLevel,
-          quantity: o.quantity,
-          filledQuantity: o.filledQuantity,
-          price: o.price,
-          stopPrice: o.stopPrice,
-          status: o.status as OrderStatus,
-          positionSide: posSide,
-        };
-      });
+    try {
+      const positions = await this.executionProvider.getPositions(dbTrader.symbol);
+      for (const pos of positions) {
+        const qty = new Decimal(pos.quantity).abs();
+        if (qty.lte(0)) continue;
+        try {
+          await this.executionProvider.closePosition(
+            dbTrader.symbol,
+            pos.side as 'LONG' | 'SHORT',
+            qty.toFixed(),
+          );
+        } catch (err) {
+          log.error(`closePosition failed while retiring ${dbTrader.symbol}`, {
+            side: pos.side,
+            error: String(err),
+          });
+        }
+      }
+    } catch (err) {
+      log.warn(`getPositions failed while retiring ${dbTrader.symbol}`, { error: String(err) });
+    }
 
-    sim.rehydrate({ positions, orders: openOrders });
+    try {
+      await this.db.order.updateMany({
+        where: { traderId: dbTrader.id, status: { in: OPEN_ORDER_STATUSES } },
+        data: { status: 'CANCELED' },
+      });
+      await this.db.position.updateMany({
+        where: { traderId: dbTrader.id, isOpen: true },
+        data: { isOpen: false, closedAt: new Date() },
+      });
+      await this.db.trader.update({
+        where: { id: dbTrader.id },
+        data: {
+          status: 'COMPLETED',
+          completionReason: 'legacy_reversal_skipped',
+          completedAt: new Date(),
+        },
+      });
+    } catch (err) {
+      log.error(`DB cleanup failed while retiring ${dbTrader.id}`, { error: String(err) });
+      await this.db.trader.update({
+        where: { id: dbTrader.id },
+        data: { status: 'FAILED', completionReason: 'legacy_reversal_cleanup_failed' },
+      }).catch(() => {});
+    }
   }
 
   /**
@@ -738,36 +594,22 @@ export class TraderManager extends EventEmitter {
         marginMode: this.traderConfig.marginMode,
         initialCapital: allocation.traderEquity.toFixed(8),
         positionSize: allocation.positionNotional.toFixed(8),
-        behavior: this.traderConfig.traderBehavior ?? 'reversal',
-        ...(isGridBehavior(this.traderConfig)
-          ? {
-              gridLevelsPerSide: this.traderConfig.gridLevelsPerSide ?? 10,
-              gridDistancePercent: this.traderConfig.gridDistancePercent ?? '5',
-              traderTakeProfitPercent: this.traderConfig.traderTakeProfitPercent ?? '10',
-            }
-          : {}),
+        behavior: 'grid_directional',
+        gridLevelsPerSide: this.traderConfig.gridLevelsPerSide ?? 10,
+        gridDistancePercent: this.traderConfig.gridDistancePercent ?? '5',
+        traderTakeProfitPercent: this.traderConfig.traderTakeProfitPercent ?? '10',
       } as any,
     });
 
-    const trader: IManagedTrader = isGridBehavior(this.traderConfig)
-      ? new GridDirectionalTrader(
-        dbTrader.id,
-        symbol,
-        this.mode,
-        this.executionProvider,
-        this.traderConfig,
-        this.db,
-        this.accountLedger,
-      )
-      : new Trader(
-        dbTrader.id,
-        symbol,
-        this.mode,
-        this.executionProvider,
-        this.traderConfig,
-        this.db,
-        this.accountLedger,
-      );
+    const trader: IManagedTrader = new GridDirectionalTrader(
+      dbTrader.id,
+      symbol,
+      this.mode,
+      this.executionProvider,
+      this.traderConfig,
+      this.db,
+      this.accountLedger,
+    );
 
     this.wireTraderEvents(trader);
     this.symbolToTrader.set(symbol, traderId);
@@ -908,7 +750,7 @@ export class TraderManager extends EventEmitter {
           topGainers: this.topGainers.slice(0, 20),
           tradingMode: this.mode,
           botStatus: this.isPaused ? 'PAUSED' : this.isRunning ? 'RUNNING' : 'STOPPED',
-          traderBehavior: this.traderConfig.traderBehavior ?? 'reversal',
+          traderBehavior: 'grid_directional',
           currentBalance: snap.currentBalance ?? snap.balance,
           highestBalance24h: snap.highestBalance24h ?? snap.balance,
           lowestBalance24h: snap.lowestBalance24h ?? snap.balance,
@@ -930,7 +772,14 @@ export class TraderManager extends EventEmitter {
   }
 
   private countOpenPositions(): number {
-    return [...this.traders.values()].filter((t) => t.hasOpenPosition() && t.isActive()).length;
+    return [...this.traders.values()]
+      .filter((t) => t.isActive())
+      .reduce((n, t) => n + t.getOpenLegCount(), 0);
+  }
+
+  /** Open filled legs across active traders (grid may have many per symbol). */
+  getOpenPositionCount(): number {
+    return this.countOpenPositions();
   }
 
   getActiveTraderCount(): number {

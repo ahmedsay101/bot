@@ -28,10 +28,14 @@ export function ConfigurationPage(): React.ReactElement {
 
   return (
     <Box>
-      <Typography variant="h4" fontWeight="bold" mb={3}>Configuration</Typography>
+      <Typography variant="h4" fontWeight="bold" mb={1}>Configuration</Typography>
+      <Typography color="text.secondary" mb={3} sx={{ maxWidth: 720 }}>
+        This branch runs directional grid traders only. Equity is split across max trader slots;
+        each slot builds LONG levels above and SHORT levels below an immutable start price.
+      </Typography>
       <Alert severity="info" sx={{ mb: 2 }}>
         Equity allocation is automatic: Testing = 2000 USDT + realized PnL; Live = Binance Futures balance.
-        Each trader gets Equity / MaxTraders as allocation, sized by capital steps (notional = step amount × leverage).
+        Each trader gets Equity / MaxTraders as allocation, sized across grid level weights.
       </Alert>
       {saved && <Alert severity="success" sx={{ mb: 2 }}>Configuration saved successfully</Alert>}
 
@@ -50,24 +54,13 @@ export function ConfigurationPage(): React.ReactElement {
             </Grid>
             <Grid item xs={12} sm={6} md={4}>
               <TextField
-                label="Trader Lifetime (hours)"
-                type="number"
-                value={current.traderLifetimeHours ?? 24}
-                onChange={(e) => handleChange('traderLifetimeHours', parseFloat(e.target.value))}
-                fullWidth
-                inputProps={{ min: 0.001, step: 1 }}
-                helperText="Trader is destroyed and replaced after this duration"
-              />
-            </Grid>
-            <Grid item xs={12} sm={6} md={4}>
-              <TextField
                 label="Leverage"
                 type="number"
                 value={current.leverage}
                 onChange={(e) => handleChange('leverage', parseInt(e.target.value, 10))}
                 fullWidth
                 inputProps={{ min: 1, max: 125 }}
-                helperText="Position notional = (Equity ÷ MaxTraders) × Leverage"
+                helperText="Applied to grid level notionals"
               />
             </Grid>
             <Grid item xs={12} sm={6} md={4}>
@@ -97,113 +90,43 @@ export function ConfigurationPage(): React.ReactElement {
               </FormControl>
             </Grid>
             <Grid item xs={12} sm={6} md={4}>
-              <FormControl fullWidth>
-                <InputLabel>Starting Side</InputLabel>
-                <Select
-                  value={current.startingSide ?? 'SHORT'}
-                  label="Starting Side"
-                  onChange={(e) => handleChange('startingSide', e.target.value)}
-                >
-                  <MenuItem value="SHORT">SHORT</MenuItem>
-                  <MenuItem value="LONG">LONG</MenuItem>
-                </Select>
-              </FormControl>
-            </Grid>
-            <Grid item xs={12} sm={6} md={4}>
-              <FormControl fullWidth>
-                <InputLabel>Trader Behavior</InputLabel>
-                <Select
-                  value={current.traderBehavior ?? 'reversal'}
-                  label="Trader Behavior"
-                  onChange={(e) => handleChange('traderBehavior', e.target.value)}
-                >
-                  <MenuItem value="reversal">Reversal</MenuItem>
-                  <MenuItem value="grid_directional">Grid Directional</MenuItem>
-                </Select>
-              </FormControl>
-            </Grid>
-            {(current.traderBehavior ?? 'reversal') === 'grid_directional' && (
-              <>
-                <Grid item xs={12} sm={6} md={4}>
-                  <TextField
-                    label="Grid Levels Per Side"
-                    type="number"
-                    value={current.gridLevelsPerSide ?? 10}
-                    onChange={(e) => handleChange('gridLevelsPerSide', parseInt(e.target.value, 10))}
-                    fullWidth
-                    inputProps={{ min: 1, max: 100 }}
-                    helperText="Levels above and below start price"
-                  />
-                </Grid>
-                <Grid item xs={12} sm={6} md={4}>
-                  <TextField
-                    label="Grid Distance %"
-                    value={current.gridDistancePercent ?? '5'}
-                    onChange={(e) => handleChange('gridDistancePercent', e.target.value)}
-                    fullWidth
-                    helperText="Percent points between levels (5 = 5%)"
-                  />
-                </Grid>
-                <Grid item xs={12} sm={6} md={4}>
-                  <TextField
-                    label="Trader Take Profit %"
-                    value={current.traderTakeProfitPercent ?? '10'}
-                    onChange={(e) => handleChange('traderTakeProfitPercent', e.target.value)}
-                    fullWidth
-                    helperText="Percent points (10 = 10%)"
-                  />
-                </Grid>
-                <Grid item xs={12} sm={6} md={4}>
-                  <TextField
-                    label="Trader Max Lifetime (hours)"
-                    type="number"
-                    value={current.traderMaxLifetimeHours ?? 12}
-                    onChange={(e) => handleChange('traderMaxLifetimeHours', parseFloat(e.target.value))}
-                    fullWidth
-                    inputProps={{ min: 0.001, step: 1 }}
-                    helperText="Max lifetime for grid directional traders"
-                  />
-                </Grid>
-              </>
-            )}
-            <Grid item xs={12} sm={6} md={4}>
               <TextField
-                label="Capital Steps"
+                label="Grid Levels Per Side"
                 type="number"
-                value={current.capitalSteps ?? 5}
-                onChange={(e) => handleChange('capitalSteps', parseInt(e.target.value, 10))}
+                value={current.gridLevelsPerSide ?? 10}
+                onChange={(e) => handleChange('gridLevelsPerSide', parseInt(e.target.value, 10))}
                 fullWidth
                 inputProps={{ min: 1, max: 100 }}
-                helperText="Allocation divided into N steps (TP +1, SL −1)"
-              />
-            </Grid>
-            <Grid item xs={12}>
-              <FormControlLabel
-                control={
-                  <Switch
-                    checked={Boolean(current.switchPositionOnTakeProfit)}
-                    onChange={(e) => handleChange('switchPositionOnTakeProfit', e.target.checked)}
-                  />
-                }
-                label="Switch position on Take Profit (on: TP→opposite, SL→same; off: TP→same, SL→opposite)"
+                helperText="Levels above and below start price"
               />
             </Grid>
             <Grid item xs={12} sm={6} md={4}>
               <TextField
-                label="Take Profit %"
-                value={current.takeProfitPercent ?? '0.10'}
-                helperText="e.g. 0.10 = 10% — next side depends on Switch on TP setting"
-                onChange={(e) => handleChange('takeProfitPercent', e.target.value)}
+                label="Grid Distance %"
+                value={current.gridDistancePercent ?? '5'}
+                onChange={(e) => handleChange('gridDistancePercent', e.target.value)}
                 fullWidth
+                helperText="Percent points between levels (5 = 5%)"
               />
             </Grid>
             <Grid item xs={12} sm={6} md={4}>
               <TextField
-                label="Stop Loss %"
-                value={current.stopLossPercent ?? '0.10'}
-                helperText="e.g. 0.10 = 10% — next side depends on Switch on TP setting"
-                onChange={(e) => handleChange('stopLossPercent', e.target.value)}
+                label="Trader Take Profit %"
+                value={current.traderTakeProfitPercent ?? '10'}
+                onChange={(e) => handleChange('traderTakeProfitPercent', e.target.value)}
                 fullWidth
+                helperText="Combined unrealized exit target (10 = 10%)"
+              />
+            </Grid>
+            <Grid item xs={12} sm={6} md={4}>
+              <TextField
+                label="Trader Max Lifetime (hours)"
+                type="number"
+                value={current.traderMaxLifetimeHours ?? 12}
+                onChange={(e) => handleChange('traderMaxLifetimeHours', parseFloat(e.target.value))}
+                fullWidth
+                inputProps={{ min: 0.001, step: 1 }}
+                helperText="Force-close and recycle slot after this duration"
               />
             </Grid>
             <Grid item xs={12} sm={6} md={4}>

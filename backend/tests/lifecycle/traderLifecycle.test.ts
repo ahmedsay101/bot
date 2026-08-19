@@ -33,7 +33,7 @@ const traderConfig: TraderConfig = {
   startingSide: 'SHORT',
   capitalSteps: 5,
   switchPositionOnTakeProfit: false,
-  traderBehavior: 'reversal',
+  traderBehavior: 'grid_directional',
   gridLevelsPerSide: 10,
   gridDistancePercent: '5',
   traderTakeProfitPercent: '10',

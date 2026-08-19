@@ -133,6 +133,10 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
     return this.openLegs.size > 0;
   }
 
+  getOpenLegCount(): number {
+    return this.openLegs.size;
+  }
+
   getOpenNotional(): string | null {
     if (this.openLegs.size === 0) return null;
     let n = new Decimal(0);

@@ -1434,6 +1434,7 @@ export class Trader extends EventEmitter implements IManagedTrader {
   getEndsAt(): Date | null { return this.endsAt; }
   getCurrentSide(): TradeSide | null { return this.currentSide; }
   hasOpenPosition(): boolean { return this.positionOpen; }
+  getOpenLegCount(): number { return this.positionOpen ? 1 : 0; }
   getOpenNotional(): string | null {
     if (!this.positionOpen || this.entryPrice == null || this.quantity == null) return null;
     return new Decimal(this.entryPrice).mul(this.quantity).toFixed(8);

@@ -397,7 +397,7 @@ export interface Configuration {
   startingSide: 'LONG' | 'SHORT';
   capitalSteps: number;
   switchPositionOnTakeProfit?: boolean;
-  traderBehavior?: 'reversal' | 'grid_directional';
+  traderBehavior?: 'grid_directional';
   gridLevelsPerSide?: number;
   gridDistancePercent?: string;
   traderTakeProfitPercent?: string;

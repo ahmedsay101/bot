@@ -35,6 +35,8 @@ export interface IManagedTrader extends EventEmitter {
   getStatus(): TraderStatus;
   isActive(): boolean;
   hasOpenPosition(): boolean;
+  /** Number of open position legs (grid may have many). */
+  getOpenLegCount(): number;
   getOpenNotional(): string | null;
   getId(): string;
   getSymbol(): string;

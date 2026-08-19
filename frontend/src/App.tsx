@@ -5,12 +5,6 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ReactQueryDevtools } from '@tanstack/react-query-devtools';
 import { Layout } from './components/layout/Layout';
 import { DashboardPage } from './pages/DashboardPage';
-import { TradersPage, TraderDetailPage } from './pages/TradersPage';
-import { OrdersPage } from './pages/OrdersPage';
-import { StatisticsPage } from './pages/StatisticsPage';
-import { ConfigurationPage } from './pages/ConfigurationPage';
-import { LogsPage } from './pages/LogsPage';
-import { SystemHealthPage } from './pages/SystemHealthPage';
 import { useWebSocket } from './services/websocket';
 
 const queryClient = new QueryClient({
@@ -25,16 +19,19 @@ const queryClient = new QueryClient({
 const darkTheme = createTheme({
   palette: {
     mode: 'dark',
-    primary: { main: '#2196f3' },
-    secondary: { main: '#f50057' },
-    success: { main: '#4caf50' },
-    background: { default: '#0a0e1a', paper: '#141824' },
+    primary: { main: '#2dd4bf' },
+    secondary: { main: '#60a5fa' },
+    success: { main: '#3dd68c' },
+    error: { main: '#ff6b6b' },
+    background: { default: '#070b12', paper: '#0f1622' },
   },
   typography: {
-    fontFamily: '"IBM Plex Sans", "Segoe UI", sans-serif',
+    fontFamily: '"Sora", "IBM Plex Sans", "Segoe UI", sans-serif',
   },
+  shape: { borderRadius: 10 },
   components: {
     MuiCard: { styleOverrides: { root: { backgroundImage: 'none' } } },
+    MuiButton: { styleOverrides: { root: { textTransform: 'none', fontWeight: 700 } } },
   },
 });
 
@@ -44,16 +41,7 @@ function AppContent(): React.ReactElement {
     <Layout>
       <Routes>
         <Route path="/" element={<DashboardPage />} />
-        <Route path="/traders" element={<TradersPage />} />
-        <Route path="/traders/:id" element={<TraderDetailPage />} />
-        <Route path="/orders" element={<OrdersPage />} />
-        <Route path="/statistics" element={<StatisticsPage />} />
-        <Route path="/config" element={<ConfigurationPage />} />
-        <Route path="/logs" element={<LogsPage />} />
-        <Route path="/health" element={<SystemHealthPage />} />
-        <Route path="/positions" element={<Navigate to="/traders" replace />} />
-        <Route path="/trades" element={<Navigate to="/orders" replace />} />
-        <Route path="/simulation" element={<Navigate to="/health" replace />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </Layout>
   );
