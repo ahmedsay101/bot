@@ -103,10 +103,10 @@ export function ConfigurationPage(): React.ReactElement {
             <Grid item xs={12} sm={6} md={4}>
               <TextField
                 label="Grid Distance %"
-                value={current.gridDistancePercent ?? '5'}
+                value={current.gridDistancePercent ?? '2'}
                 onChange={(e) => handleChange('gridDistancePercent', e.target.value)}
                 fullWidth
-                helperText="Percent points between levels (5 = 5%)"
+                helperText="Percent points between levels (2 = 2%)"
               />
             </Grid>
             <Grid item xs={12} sm={6} md={4}>

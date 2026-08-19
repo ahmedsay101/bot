@@ -344,7 +344,7 @@ export class TraderManager extends EventEmitter {
           endsAt: dbTrader.endsAt,
           startPrice: dbAny.startPrice ?? '0',
           levelsPerSide: dbAny.gridLevelsPerSide ?? this.traderConfig.gridLevelsPerSide ?? 10,
-          distancePercent: dbAny.gridDistancePercent ?? this.traderConfig.gridDistancePercent ?? '5',
+          distancePercent: dbAny.gridDistancePercent ?? this.traderConfig.gridDistancePercent ?? '2',
           takeProfitPercent:
             dbAny.traderTakeProfitPercent ?? this.traderConfig.traderTakeProfitPercent ?? '10',
           traderAllocatedAmount: dbTrader.traderAllocatedAmount,
@@ -596,7 +596,7 @@ export class TraderManager extends EventEmitter {
         positionSize: allocation.positionNotional.toFixed(8),
         behavior: 'grid_directional',
         gridLevelsPerSide: this.traderConfig.gridLevelsPerSide ?? 10,
-        gridDistancePercent: this.traderConfig.gridDistancePercent ?? '5',
+        gridDistancePercent: this.traderConfig.gridDistancePercent ?? '2',
         traderTakeProfitPercent: this.traderConfig.traderTakeProfitPercent ?? '10',
       } as any,
     });

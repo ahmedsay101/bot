@@ -117,7 +117,7 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
     this.mode = mode;
     this.riskManager = new RiskManager();
     this.levelsPerSide = Math.max(1, Math.floor(traderConfig.gridLevelsPerSide ?? 10));
-    this.distancePercent = String(traderConfig.gridDistancePercent ?? '5');
+    this.distancePercent = String(traderConfig.gridDistancePercent ?? '2');
     this.takeProfitPercent = String(traderConfig.traderTakeProfitPercent ?? '10');
   }
 
