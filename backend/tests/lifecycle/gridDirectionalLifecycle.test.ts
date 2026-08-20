@@ -39,7 +39,6 @@ const baseConfig: TraderConfig = {
   traderBehavior: 'grid_directional',
   gridLevelsPerSide: 10,
   gridDistancePercent: '5',
-  maxOpenPositionsPerTrader: 2,
   traderTakeProfitPercent: '999',
   traderMaxLifetimeHours: 12,
   refreshInterval: 60000,
@@ -223,23 +222,29 @@ describe('No-SL max-2 GridDirectionalTrader', () => {
     trader.destroy();
   });
 
-  it('TEST 6–8: two positions max; third blocked; slot frees after TP', async () => {
+  it('TEST 6–8: one per side; same-side stack blocked; LONG+SHORT allowed', async () => {
     const trader = await boot();
-    // Gap through L1 and L2 so both can activate (while loop)
+    // Gap through L1 and L2 — only one LONG may open (per-side)
     await tick('112', trader, 1000);
     await wait(400);
+    expect(trader.getOpenLegCount()).toBe(1);
+    expect(trader.toSummary().grid!.longOpen).toBe(1);
+    expect(trader.toSummary().grid!.shortOpen).toBe(0);
+
+    // Drop through start — LONG stays open (no SL); SHORT may open
+    await tick('95', trader, 900);
+    await wait(400);
+    const s = trader.toSummary();
+    expect(s.grid!.longOpen).toBe(1);
+    expect(s.grid!.shortOpen).toBe(1);
     expect(trader.getOpenLegCount()).toBe(2);
-    await tick('118', trader, 800); // would hit L3 eligibility but slots full
+
+    // Still cannot open a second LONG
+    await tick('112', trader, 800);
     await wait(300);
+    expect(trader.toSummary().grid!.longOpen).toBe(1);
     expect(trader.getOpenLegCount()).toBeLessThanOrEqual(2);
 
-    // Close one via TP
-    await tickThroughTp(trader);
-    expect(trader.getOpenLegCount()).toBeLessThanOrEqual(2);
-    // With a free slot and mark still high, another level may activate
-    await wait(400);
-    expect(trader.getOpenLegCount()).toBeGreaterThanOrEqual(1);
-    expect(trader.getOpenLegCount()).toBeLessThanOrEqual(2);
     trader.destroy();
   });
 
@@ -250,7 +255,9 @@ describe('No-SL max-2 GridDirectionalTrader', () => {
     const margin = parseFloat(s.currentPosition!.stepAmount);
     expect(margin).toBeGreaterThan(240);
     expect(margin).toBeLessThan(260);
-    expect(s.grid!.maxOpenPositions).toBe(2);
+    expect(s.grid!.maxPerSide).toBe(1);
+    expect(s.grid!.longOpen).toBe(1);
+    expect(s.grid!.shortOpen).toBe(0);
     trader.destroy();
   });
 

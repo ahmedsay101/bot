@@ -125,8 +125,6 @@ export interface TraderConfig {
   gridLevelsPerSide: number;
   /** Distance between grid levels in percent points (e.g. '5' = 5%). */
   gridDistancePercent: string;
-  /** Max simultaneous open positions for grid traders (default 2). */
-  maxOpenPositionsPerTrader?: number;
   /** Grid directional take-profit in percent points (e.g. '10' = 10%). */
   traderTakeProfitPercent: string;
   /** Max lifetime for grid directional traders in hours (default 12). */
@@ -292,8 +290,11 @@ export interface GridTraderView {
   currentCapital?: string;
   initialCapital?: string;
   gridDistanceAbs?: string;
-  maxOpenPositions?: number;
+  /** Always 1 — at most one open position per side. */
+  maxPerSide?: number;
   activeOpenCount?: number;
+  longOpen?: number;
+  shortOpen?: number;
   capitalHistory?: Array<{ at: string; capital: string; event: string; netPnl?: string }>;
 }
 

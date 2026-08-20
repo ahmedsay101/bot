@@ -248,8 +248,10 @@ export interface GridTraderView {
   currentCapital?: string;
   initialCapital?: string;
   gridDistanceAbs?: string;
-  maxOpenPositions?: number;
+  maxPerSide?: number;
   activeOpenCount?: number;
+  longOpen?: number;
+  shortOpen?: number;
   capitalHistory?: Array<{ at: string; capital: string; event: string; netPnl?: string }>;
 }
 

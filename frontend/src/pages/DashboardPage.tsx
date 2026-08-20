@@ -397,7 +397,7 @@ function GridTraderCard({
               )}
             </Box>
             <Typography variant="caption" color="text.secondary">
-              Max {grid.maxOpenPositions ?? 2} positions · {grid.levelsPerSide}×{grid.levelsPerSide} · {grid.distancePercent}% · {trader.leverage}x
+              ≤1 LONG + ≤1 SHORT · {grid.levelsPerSide}×{grid.levelsPerSide} · {grid.distancePercent}% · {trader.leverage}x
             </Typography>
           </Box>
           <Box sx={{ textAlign: 'right' }}>
@@ -416,12 +416,13 @@ function GridTraderCard({
                 : trader.currentPosition != null
                   ? [trader.currentPosition]
                   : [];
-              const maxOpen = grid.maxOpenPositions ?? 2;
               if (positions.length === 0) return null;
+              const longOpen = grid.longOpen ?? positions.filter((p) => p.side === 'LONG').length;
+              const shortOpen = grid.shortOpen ?? positions.filter((p) => p.side === 'SHORT').length;
               return (
                 <Box sx={{ mb: 1.5 }}>
                   <Typography variant="caption" fontWeight={800} sx={{ letterSpacing: 0.8, color: 'text.secondary' }}>
-                    ACTIVE POSITIONS · {positions.length} / {maxOpen}
+                    ACTIVE POSITIONS · L {longOpen}/1 · S {shortOpen}/1
                   </Typography>
                   {positions.map((pos) => (
                     <Box
@@ -480,8 +481,8 @@ function GridTraderCard({
                 <Stat label="Net PnL" value={pnl(trader.totalPnl)} color={col(trader.totalPnl)} />
                 <Stat label="Unrealized" value={pnl(trader.unrealizedPnl)} color={col(trader.unrealizedPnl)} />
                 <Stat
-                  label="Open positions"
-                  value={`${grid.activeOpenCount ?? (trader.currentPositions?.length ?? (trader.currentPosition ? 1 : 0))} / ${grid.maxOpenPositions ?? 2}`}
+                  label="Open L / S"
+                  value={`${grid.longOpen ?? 0}/1 · ${grid.shortOpen ?? 0}/1`}
                 />
                 <Stat label="Grid TP done" value={`${grid.longFilled + grid.shortFilled}/${grid.levelsPerSide * 2}`} />
               </Box>

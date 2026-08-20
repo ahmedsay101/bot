@@ -1,9 +1,9 @@
 /**
- * Max-2 open-position directional grid (no SL):
- * - Up to maxOpenPositions simultaneous opens (default 2)
+ * Per-side directional grid (no SL):
+ * - At most one LONG and one SHORT open (TP sits at next level so same-side stack is blocked). Capital ÷2 for side pair.
  * - Levels one-shot: PENDING → ACTIVE → TP_HIT | CANCELLED
  * - TP = entry ± absolute grid distance; no stop-loss orders
- * - Dynamic currentCapital (L1 = 50% of current with maxOpen=2)
+ * - Dynamic currentCapital (L1 = 50% of current via GRID_SIDE_PAIR_FACTOR)
  */
 import { EventEmitter } from 'events';
 import { v4 as uuidv4 } from 'uuid';
@@ -28,7 +28,7 @@ import {
   sizeLevelPosition,
   traderProfitPercent,
   isLevelTerminal,
-  DEFAULT_MAX_OPEN_POSITIONS,
+  GRID_SIDE_PAIR_FACTOR,
   type GridLevelPlan,
 } from './gridCalc';
 import {
@@ -133,7 +133,6 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
   private levelsPerSide = 10;
   private distancePercent = '5';
   private takeProfitPercent = '10';
-  private maxOpenPositions = DEFAULT_MAX_OPEN_POSITIONS;
   private levels = new Map<string, LevelState>();
   private activePositions = new Map<string, ActivePosition>();
   private activating = false;
@@ -170,10 +169,6 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
     this.levelsPerSide = Math.max(1, Math.floor(traderConfig.gridLevelsPerSide ?? 10));
     this.distancePercent = String(traderConfig.gridDistancePercent ?? '2');
     this.takeProfitPercent = String(traderConfig.traderTakeProfitPercent ?? '10');
-    this.maxOpenPositions = Math.max(
-      1,
-      Math.floor((traderConfig as any).maxOpenPositionsPerTrader ?? DEFAULT_MAX_OPEN_POSITIONS),
-    );
   }
 
   getStatus(): TraderStatus { return this.status; }
@@ -200,7 +195,7 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
   }
 
   async initialize(): Promise<void> {
-    log.info(`Initializing no-SL max-${this.maxOpenPositions} grid ${this.id} for ${this.symbol}`);
+    log.info(`Initializing no-SL per-side grid ${this.id} for ${this.symbol}`);
     this.symbolInfo = await withRetry(
       () => this.executionProvider.getSymbolInfo(this.symbol),
       { maxAttempts: 3, delayMs: 1000 },
@@ -239,7 +234,6 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
       levelsPerSide: this.levelsPerSide,
       distancePercent: this.distancePercent,
       symbolInfo: this.symbolInfo,
-      maxOpenPositions: this.maxOpenPositions,
     });
     this.startPrice = plan.startPrice;
     this.gridDistanceAbs = new Decimal(plan.gridDistanceAbs);
@@ -274,7 +268,6 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
         endsAt: this.endsAt,
         status: 'INITIALIZING',
         timelineJson: JSON.stringify(this.capitalHistory),
-        maxOpenPositionsPerTrader: this.maxOpenPositions,
       } as any,
     });
 
@@ -307,7 +300,7 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
       symbol: this.symbol,
       startPrice: this.startPrice,
       capital: this.currentCapital.toFixed(8),
-      maxOpenPositions: this.maxOpenPositions,
+      maxPerSide: 1,
       endsAt: this.endsAt?.toISOString(),
     });
   }
@@ -327,17 +320,6 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
     this.levelsPerSide = Number(state.gridLevelsPerSide ?? state.levelsPerSide ?? this.levelsPerSide);
     this.distancePercent = String(state.gridDistancePercent ?? state.distancePercent ?? this.distancePercent);
     this.takeProfitPercent = String(state.traderTakeProfitPercent ?? state.takeProfitPercent ?? this.takeProfitPercent);
-    this.maxOpenPositions = Math.max(
-      1,
-      Math.floor(
-        Number(
-          state.maxOpenPositionsPerTrader
-            ?? state.maxOpenPositions
-            ?? (this.traderConfig as any).maxOpenPositionsPerTrader
-            ?? DEFAULT_MAX_OPEN_POSITIONS,
-        ),
-      ),
-    );
     this.positionsOpened = Number(state.positionsOpened ?? 0);
     this.positionsClosed = Number(state.positionsClosed ?? 0);
     this.takeProfits = Number(state.takeProfits ?? 0);
@@ -362,7 +344,7 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
       const level = Number(row.level);
       const weight = Number(row.weight);
       const n = this.levelsPerSide;
-      const allocationPct = new Decimal(weight).div(n).div(this.maxOpenPositions).toFixed(8);
+      const allocationPct = new Decimal(weight).div(n).div(GRID_SIDE_PAIR_FACTOR).toFixed(8);
       const plan: GridLevelPlan = {
         level,
         direction,
@@ -471,7 +453,8 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
       activeCount: this.activePositions.size,
       activeKeys: [...this.activePositions.keys()],
       capital: this.currentCapital.toFixed(8),
-      maxOpenPositions: this.maxOpenPositions,
+      longOpen: this.hasOpenSide('LONG') ? 1 : 0,
+      shortOpen: this.hasOpenSide('SHORT') ? 1 : 0,
     });
   }
 
@@ -494,9 +477,7 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
       void this.beginExit('TRADER_TP');
       return;
     }
-    if (this.activePositions.size < this.maxOpenPositions) {
-      void this.tryActivateNextLevel();
-    }
+    void this.tryActivateNextLevel();
   }
 
   async onOrderUpdate(update: OrderUpdate): Promise<void> {
@@ -726,8 +707,10 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
         initialCapital: this.initialCapital.toFixed(8),
         gridDistanceAbs: this.gridDistanceAbs.toFixed(8),
         capitalHistory: this.capitalHistory,
-        maxOpenPositions: this.maxOpenPositions,
+        maxPerSide: 1,
         activeOpenCount: this.activePositions.size,
+        longOpen: this.hasOpenSide('LONG') ? 1 : 0,
+        shortOpen: this.hasOpenSide('SHORT') ? 1 : 0,
       } as any,
     };
 
@@ -736,17 +719,22 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
 
   // ── Activation ───────────────────────────────────────────────────────────
 
+  private hasOpenSide(direction: TradeSide): boolean {
+    for (const a of this.activePositions.values()) {
+      if (a.direction === direction) return true;
+    }
+    return false;
+  }
+
   private async tryActivateNextLevel(): Promise<void> {
     if (this.activating || this.exiting || this.isDestroyed) return;
     if (this.status !== 'ACTIVE' || this.isPaused) return;
     if (this.symbolInfo == null || this.startPrice == null) return;
-    if (this.activePositions.size >= this.maxOpenPositions) return;
 
     this.activating = true;
     try {
       while (
-        this.activePositions.size < this.maxOpenPositions
-        && !this.exiting
+        !this.exiting
         && !this.isDestroyed
         && this.status === 'ACTIVE'
         && !this.isPaused
@@ -756,17 +744,21 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
         let candidate: LevelState | null = null;
 
         if (mark.gt(start)) {
-          const longs = [...this.levels.values()]
-            .filter((l) => l.plan.direction === 'LONG' && l.status === 'PENDING')
-            .filter((l) => mark.gte(l.plan.triggerPrice))
-            .sort((a, b) => a.plan.level - b.plan.level);
-          candidate = longs[0] ?? null;
+          if (!this.hasOpenSide('LONG')) {
+            const longs = [...this.levels.values()]
+              .filter((l) => l.plan.direction === 'LONG' && l.status === 'PENDING')
+              .filter((l) => mark.gte(l.plan.triggerPrice))
+              .sort((a, b) => a.plan.level - b.plan.level);
+            candidate = longs[0] ?? null;
+          }
         } else if (mark.lt(start)) {
-          const shorts = [...this.levels.values()]
-            .filter((l) => l.plan.direction === 'SHORT' && l.status === 'PENDING')
-            .filter((l) => mark.lte(l.plan.triggerPrice))
-            .sort((a, b) => a.plan.level - b.plan.level);
-          candidate = shorts[0] ?? null;
+          if (!this.hasOpenSide('SHORT')) {
+            const shorts = [...this.levels.values()]
+              .filter((l) => l.plan.direction === 'SHORT' && l.status === 'PENDING')
+              .filter((l) => mark.lte(l.plan.triggerPrice))
+              .sort((a, b) => a.plan.level - b.plan.level);
+            candidate = shorts[0] ?? null;
+          }
         }
 
         if (candidate == null) break;
@@ -778,7 +770,7 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
   }
 
   private async activateLevel(level: LevelState): Promise<void> {
-    if (this.activePositions.size >= this.maxOpenPositions) return;
+    if (this.hasOpenSide(level.plan.direction)) return;
     if (this.symbolInfo == null || this.startPrice == null) return;
     if (level.status !== 'PENDING') return;
 
@@ -792,7 +784,6 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
       leverage: this.traderConfig.leverage,
       entryPrice: level.plan.triggerPrice,
       symbolInfo: this.symbolInfo,
-      maxOpenPositions: this.maxOpenPositions,
     });
     if (new Decimal(sized.quantity).lte(0)) {
       level.status = 'SKIPPED';
@@ -898,7 +889,8 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
       notional: sized.notional,
       capital: this.currentCapital.toFixed(8),
       activeOpenCount: this.activePositions.size,
-      maxOpenPositions: this.maxOpenPositions,
+      longOpen: this.hasOpenSide('LONG') ? 1 : 0,
+      shortOpen: this.hasOpenSide('SHORT') ? 1 : 0,
     });
 
     if (result.status === 'FILLED' && result.avgFillPrice != null) {
