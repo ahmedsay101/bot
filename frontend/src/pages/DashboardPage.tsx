@@ -288,9 +288,8 @@ function GridLadder({ grid, markPrice }: { grid: GridTraderView; markPrice: stri
                   Notional {money(l.notional)}
                   {' · '}
                   {statusLabel(l.status)}
-                  {l.tpPrice != null ? ` · TP $${px(l.tpPrice)}` : ''}
-                  {l.slPrice != null ? ` · SL $${px(l.slPrice)}` : ''}
                   {l.entryPrice != null ? ` · entry $${px(l.entryPrice)}` : ''}
+                  {l.tpPrice != null ? ` · TP $${px(l.tpPrice)}` : ''}
                   {l.unrealizedPnl != null ? ` · PnL ${pnl(l.unrealizedPnl)}` : ''}
                 </Typography>
               </Box>
@@ -398,7 +397,7 @@ function GridTraderCard({
               )}
             </Box>
             <Typography variant="caption" color="text.secondary">
-              Single-position grid · {grid.levelsPerSide}×{grid.levelsPerSide} · {grid.distancePercent}% · {trader.leverage}x
+              Max {grid.maxOpenPositions ?? 2} positions · {grid.levelsPerSide}×{grid.levelsPerSide} · {grid.distancePercent}% · {trader.leverage}x
             </Typography>
           </Box>
           <Box sx={{ textAlign: 'right' }}>
@@ -411,27 +410,48 @@ function GridTraderCard({
 
         <Grid container spacing={1.5}>
           <Grid item xs={12} md={7}>
-            {trader.currentPosition != null && (
-              <Box
-                sx={{
-                  mb: 1.5, p: 1.5, borderRadius: 2,
-                  border: `1px solid ${trader.currentPosition.side === 'LONG' ? LONG : SHORT}`,
-                  bgcolor: 'rgba(0,0,0,0.35)',
-                }}
-              >
-                <Typography variant="caption" fontWeight={800} sx={{ letterSpacing: 0.8, color: 'text.secondary' }}>
-                  ACTIVE POSITION · {trader.currentPosition.side} #{trader.currentPosition.number}
-                </Typography>
-                <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 1, mt: 1 }}>
-                  <Stat label="Entry" value={`$${px(trader.currentPosition.entryPrice)}`} />
-                  <Stat label="TP" value={`$${px(trader.currentPosition.tpPrice)}`} color={LONG} />
-                  <Stat label="SL" value={`$${px(trader.currentPosition.slPrice)}`} color={SHORT} />
-                  <Stat label="Margin" value={money(trader.currentPosition.stepAmount)} />
-                  <Stat label="Notional" value={money(trader.currentPosition.positionNotional)} />
-                  <Stat label="Net uPnL" value={pnl(trader.currentPosition.netUnrealizedPnl ?? trader.currentPosition.unrealizedPnl)} color={col(trader.currentPosition.netUnrealizedPnl ?? trader.currentPosition.unrealizedPnl)} />
+            {(() => {
+              const positions = trader.currentPositions?.length
+                ? trader.currentPositions
+                : trader.currentPosition != null
+                  ? [trader.currentPosition]
+                  : [];
+              const maxOpen = grid.maxOpenPositions ?? 2;
+              if (positions.length === 0) return null;
+              return (
+                <Box sx={{ mb: 1.5 }}>
+                  <Typography variant="caption" fontWeight={800} sx={{ letterSpacing: 0.8, color: 'text.secondary' }}>
+                    ACTIVE POSITIONS · {positions.length} / {maxOpen}
+                  </Typography>
+                  {positions.map((pos) => (
+                    <Box
+                      key={`${pos.side}-${pos.number}`}
+                      sx={{
+                        mt: 1, p: 1.5, borderRadius: 2,
+                        border: `1px solid ${pos.side === 'LONG' ? LONG : SHORT}`,
+                        bgcolor: 'rgba(0,0,0,0.35)',
+                      }}
+                    >
+                      <Typography variant="caption" fontWeight={800} sx={{ color: pos.side === 'LONG' ? LONG : SHORT }}>
+                        {pos.side} #{pos.number}
+                      </Typography>
+                      <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 1, mt: 1 }}>
+                        <Stat label="Entry" value={`$${px(pos.entryPrice)}`} />
+                        <Stat label="Mark" value={`$${px(trader.markPrice)}`} color={MARK} />
+                        <Stat label="TP" value={`$${px(pos.tpPrice)}`} color={LONG} />
+                        <Stat label="Margin" value={money(pos.stepAmount)} />
+                        <Stat label="Notional" value={money(pos.positionNotional)} />
+                        <Stat
+                          label="Net uPnL"
+                          value={pnl(pos.netUnrealizedPnl ?? pos.unrealizedPnl)}
+                          color={col(pos.netUnrealizedPnl ?? pos.unrealizedPnl)}
+                        />
+                      </Box>
+                    </Box>
+                  ))}
                 </Box>
-              </Box>
-            )}
+              );
+            })()}
             <GridLadder grid={grid} markPrice={trader.markPrice} />
           </Grid>
 
@@ -459,17 +479,21 @@ function GridTraderCard({
                 />
                 <Stat label="Net PnL" value={pnl(trader.totalPnl)} color={col(trader.totalPnl)} />
                 <Stat label="Unrealized" value={pnl(trader.unrealizedPnl)} color={col(trader.unrealizedPnl)} />
-                <Stat label="Done L/S" value={`${grid.longFilled}/${grid.shortFilled}`} />
+                <Stat
+                  label="Open positions"
+                  value={`${grid.activeOpenCount ?? (trader.currentPositions?.length ?? (trader.currentPosition ? 1 : 0))} / ${grid.maxOpenPositions ?? 2}`}
+                />
+                <Stat label="Grid TP done" value={`${grid.longFilled + grid.shortFilled}/${grid.levelsPerSide * 2}`} />
               </Box>
 
-              <FillMeter label="LONG done" filled={grid.longFilled} total={grid.levelsPerSide} color={LONG} />
-              <FillMeter label="SHORT done" filled={grid.shortFilled} total={grid.levelsPerSide} color={SHORT} />
+              <FillMeter label="LONG TP" filled={grid.longFilled} total={grid.levelsPerSide} color={LONG} />
+              <FillMeter label="SHORT TP" filled={grid.shortFilled} total={grid.levelsPerSide} color={SHORT} />
 
               <Box sx={{ mt: 1.5 }}>
                 <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.4 }}>
-                  <Typography variant="caption" color="text.secondary">Take-profit ({grid.takeProfitPercent}%)</Typography>
+                  <Typography variant="caption" color="text.secondary">Trader TP ({grid.takeProfitPercent}% of initial)</Typography>
                   <Typography variant="caption" fontFamily="monospace" fontWeight={800}>
-                    {tpProgress.toFixed(0)}%
+                    {tpNow.toFixed(1)}% / {tpTarget}%
                   </Typography>
                 </Box>
                 <LinearProgress
@@ -484,9 +508,9 @@ function GridTraderCard({
 
               <Box sx={{ mt: 1.25 }}>
                 <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.4 }}>
-                  <Typography variant="caption" color="text.secondary">Lifetime left</Typography>
+                  <Typography variant="caption" color="text.secondary">Lifetime</Typography>
                   <Typography variant="caption" fontFamily="monospace" fontWeight={800}>
-                    {formatDuration(stats.remainingMs)}
+                    {formatDuration(stats.runtimeMs)} / {formatDuration(lifetimeMs)}
                   </Typography>
                 </Box>
                 <LinearProgress
@@ -502,18 +526,19 @@ function GridTraderCard({
 
             <Box sx={{ p: 1.5, borderRadius: 2, border: `1px solid ${BORDER}`, bgcolor: 'rgba(0,0,0,0.2)' }}>
               <Typography variant="caption" fontWeight={800} color="text.secondary" sx={{ letterSpacing: 0.6 }}>
-                EXIT WHEN
+                TRADER EXIT CONDITIONS
               </Typography>
               <Stack spacing={0.75} sx={{ mt: 1 }}>
                 <Typography variant="body2" sx={{ fontSize: 13 }}>
-                  Combined PnL ≥ <Box component="span" fontWeight={800} sx={{ color: LONG }}>{grid.takeProfitPercent}%</Box>
-                  {' '}(now {grid.profitPercent}%)
+                  1. Trader TP ≥ <Box component="span" fontWeight={800} sx={{ color: LONG }}>{grid.takeProfitPercent}%</Box>
+                  {' '}of initial ({tpNow.toFixed(1)}% / {tpTarget}%)
                 </Typography>
                 <Typography variant="body2" sx={{ fontSize: 13 }}>
-                  Full LONG side ({grid.levelsPerSide}/{grid.levelsPerSide}) or full SHORT side
+                  2. Max lifetime ({formatDuration(stats.remainingMs)} left)
                 </Typography>
                 <Typography variant="body2" sx={{ fontSize: 13 }}>
-                  Max lifetime expires ({formatDuration(stats.remainingMs)} left)
+                  3. Grid exhausted: either side {grid.levelsPerSide}/{grid.levelsPerSide} TP
+                  {' '}(L {grid.longFilled}/{grid.levelsPerSide} · S {grid.shortFilled}/{grid.levelsPerSide})
                 </Typography>
               </Stack>
               <Divider sx={{ my: 1.25, borderColor: BORDER }} />

@@ -203,6 +203,7 @@ export class TraderManager extends EventEmitter {
       'maxTraders', 'initialCapital', 'positionSize', 'leverage', 'marginMode',
       'traderLifetimeHours',
       'gridLevelsPerSide', 'gridDistancePercent',
+      'maxOpenPositionsPerTrader',
       'traderTakeProfitPercent', 'traderMaxLifetimeHours',
       'refreshInterval', 'retryLimit', 'feeRate', 'makerFeeRate', 'takerFeeRate', 'slippage',
     ] as const;

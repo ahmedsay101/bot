@@ -4,12 +4,13 @@ import {
   calcGridTriggerPrice,
   calcGridDistanceAbs,
   calcLevelTpPrice,
-  calcLevelSlPrice,
   calculatePositionAllocation,
   levelWeight,
+  levelAllocationFraction,
   sizeLevelPosition,
   triangularWeight,
   traderProfitPercent,
+  DEFAULT_MAX_OPEN_POSITIONS,
 } from '../../src/modules/trader/grid/gridCalc';
 import type { SymbolInfo } from '../../src/types';
 
@@ -28,7 +29,7 @@ const info: SymbolInfo = {
   status: 'TRADING',
 };
 
-describe('gridCalc — single-position directional grid', () => {
+describe('gridCalc — no-SL max-2 directional grid', () => {
   it('triangularWeight(10) = 55', () => {
     expect(triangularWeight(10)).toBe(55);
   });
@@ -39,15 +40,22 @@ describe('gridCalc — single-position directional grid', () => {
     expect(levelWeight(10, 10)).toBe(1);
   });
 
-  it('Formula B: L1 = 100% capital, L2 = 90%', () => {
-    expect(calculatePositionAllocation('500', 1, 10).toFixed(0)).toBe('500');
-    expect(calculatePositionAllocation('500', 2, 10).toFixed(0)).toBe('450');
-    expect(calculatePositionAllocation('500', 10, 10).toFixed(0)).toBe('50');
+  it('allocation fractions: L1=50%, L2=45%, L10=5%', () => {
+    expect(levelAllocationFraction(1, 10, 2).toFixed(2)).toBe('0.50');
+    expect(levelAllocationFraction(2, 10, 2).toFixed(2)).toBe('0.45');
+    expect(levelAllocationFraction(3, 10, 2).toFixed(2)).toBe('0.40');
+    expect(levelAllocationFraction(10, 10, 2).toFixed(2)).toBe('0.05');
   });
 
-  it('capital shrinks: next level uses reduced current capital', () => {
-    expect(calculatePositionAllocation('470', 1, 10).toFixed(0)).toBe('470');
-    expect(calculatePositionAllocation('470', 2, 10).toFixed(1)).toBe('423.0');
+  it('Formula: L1 = 50% capital, L2 = 45%, L10 = 5%', () => {
+    expect(calculatePositionAllocation('500', 1, 10, 2).toFixed(0)).toBe('250');
+    expect(calculatePositionAllocation('500', 2, 10, 2).toFixed(0)).toBe('225');
+    expect(calculatePositionAllocation('500', 10, 10, 2).toFixed(0)).toBe('25');
+  });
+
+  it('capital grows: next level uses updated current capital', () => {
+    expect(calculatePositionAllocation('520', 2, 10, 2).toFixed(0)).toBe('234');
+    expect(calculatePositionAllocation('520', 3, 10, 2).toFixed(0)).toBe('208');
   });
 
   it('non-compounded LONG/SHORT prices from 100 @ 5%', () => {
@@ -62,16 +70,15 @@ describe('gridCalc — single-position directional grid', () => {
     expect(calcGridDistanceAbs('100', 5).toFixed(2)).toBe('5.00');
   });
 
-  it('TP = entry ± gridDistance; SL = start', () => {
+  it('TP = entry ± gridDistance (no SL helper used)', () => {
     const dist = calcGridDistanceAbs('100', 5);
     expect(calcLevelTpPrice('105', 'LONG', dist, info)).toBe('110.00');
     expect(calcLevelTpPrice('110', 'LONG', dist, info)).toBe('115.00');
     expect(calcLevelTpPrice('95', 'SHORT', dist, info)).toBe('90.00');
     expect(calcLevelTpPrice('90', 'SHORT', dist, info)).toBe('85.00');
-    expect(calcLevelSlPrice('100', info)).toBe('100.00');
   });
 
-  it('buildGridPlan: reversed weights, 20 levels', () => {
+  it('buildGridPlan: 50% L1, 20 levels, no slPrice', () => {
     const plan = buildGridPlan({
       startPrice: '100',
       traderAllocation: '500',
@@ -79,19 +86,22 @@ describe('gridCalc — single-position directional grid', () => {
       levelsPerSide: 10,
       distancePercent: 5,
       symbolInfo: info,
+      maxOpenPositions: DEFAULT_MAX_OPEN_POSITIONS,
     });
     expect(plan.levels).toHaveLength(20);
+    expect(plan.maxOpenPositions).toBe(2);
     expect(plan.gridDistanceAbs).toBe('5.00000000');
     const long1 = plan.levels.find((l) => l.direction === 'LONG' && l.level === 1)!;
     expect(long1.weight).toBe(10);
+    expect(long1.allocationPct).toBe('0.50000000');
     expect(long1.triggerPrice).toBe('105.00');
     expect(long1.tpPrice).toBe('110.00');
-    expect(long1.slPrice).toBe('100.00');
+    expect((long1 as any).slPrice).toBeUndefined();
     const long10 = plan.levels.find((l) => l.direction === 'LONG' && l.level === 10)!;
-    expect(long10.weight).toBe(1);
+    expect(long10.allocationPct).toBe('0.05000000');
   });
 
-  it('sizeLevelPosition applies leverage once from current capital', () => {
+  it('sizeLevelPosition applies leverage once from 50% L1 capital', () => {
     const sized = sizeLevelPosition({
       currentCapital: '500',
       level: 1,
@@ -99,9 +109,11 @@ describe('gridCalc — single-position directional grid', () => {
       leverage: 5,
       entryPrice: '100',
       symbolInfo: info,
+      maxOpenPositions: 2,
     });
-    // margin ≈ 500, notional ≈ 2500, qty ≈ 25
-    expect(new Decimal(sized.allocatedMargin).gte(490)).toBe(true);
+    // margin ≈ 250, notional ≈ 1250
+    expect(new Decimal(sized.allocatedMargin).gte(240)).toBe(true);
+    expect(new Decimal(sized.allocatedMargin).lte(255)).toBe(true);
     expect(new Decimal(sized.notional).div(sized.allocatedMargin).toFixed(0)).toBe('5');
   });
 

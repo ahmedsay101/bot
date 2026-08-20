@@ -125,6 +125,8 @@ export interface TraderConfig {
   gridLevelsPerSide: number;
   /** Distance between grid levels in percent points (e.g. '5' = 5%). */
   gridDistancePercent: string;
+  /** Max simultaneous open positions for grid traders (default 2). */
+  maxOpenPositionsPerTrader?: number;
   /** Grid directional take-profit in percent points (e.g. '10' = 10%). */
   traderTakeProfitPercent: string;
   /** Max lifetime for grid directional traders in hours (default 12). */
@@ -182,7 +184,8 @@ export interface CurrentPositionView {
   entryPrice: string;
   quantity: string;
   tpPrice: string;
-  slPrice: string;
+  /** @deprecated grid strategy has no SL — may be empty/null */
+  slPrice?: string | null;
   /** Gross unrealized (price MTM only). */
   unrealizedPnl: string;
   /** Estimated exit fee at mark (taker). */
@@ -289,6 +292,8 @@ export interface GridTraderView {
   currentCapital?: string;
   initialCapital?: string;
   gridDistanceAbs?: string;
+  maxOpenPositions?: number;
+  activeOpenCount?: number;
   capitalHistory?: Array<{ at: string; capital: string; event: string; netPnl?: string }>;
 }
 
@@ -308,6 +313,8 @@ export interface TraderSummaryView {
   leverage: number;
   capital: CapitalProgressView;
   currentPosition: CurrentPositionView | null;
+  /** All open grid positions (0–maxOpen). */
+  currentPositions?: CurrentPositionView[];
   stats: TraderLifecycleStats;
   timeline: PositionTimelineEntry[];
   distanceToTpPct: string | null;

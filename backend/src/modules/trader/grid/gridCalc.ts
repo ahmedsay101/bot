@@ -1,6 +1,6 @@
 /**
  * Pure directional-grid math (Decimal.js).
- * Single-position model: reversed weights (L1 largest), absolute TP spacing, SL = start.
+ * Max-2 open positions, no SL: reversed weights scaled by MAX_OPEN so L1 = 50%.
  */
 import Decimal from 'decimal.js';
 import type { SymbolInfo, TradeSide } from '../../../types';
@@ -14,21 +14,24 @@ export type GridLevelStatus =
   | 'PENDING'
   | 'ACTIVE'
   | 'TP_HIT'
-  | 'SL_HIT'
   | 'CANCELLED'
-  | 'SKIPPED';
+  | 'SKIPPED'
+  /** @deprecated historical only — new traders never write SL_HIT */
+  | 'SL_HIT';
+
+export const DEFAULT_MAX_OPEN_POSITIONS = 2;
 
 export interface GridLevelPlan {
   level: number;
   direction: GridDirection;
   /** Reversed weight: L1 = N, L10 = 1 */
   weight: number;
+  /** Allocation fraction of current capital (e.g. 0.5 for L1 with maxOpen=2). */
+  allocationPct: string;
   triggerPrice: string;
   limitPrice: string;
   /** Take-profit price (entry ± gridDistance); set at plan from trigger as estimate. */
   tpPrice: string;
-  /** Always startPrice. */
-  slPrice: string;
   /** Display-only estimate at init (uses initial capital); real size at activation. */
   theoreticalMargin: string;
   allocatedMargin: string;
@@ -41,6 +44,7 @@ export interface GridPlanResult {
   levelsPerSide: number;
   distancePercent: string;
   gridDistanceAbs: string;
+  maxOpenPositions: number;
   totalWeight: number;
   traderAllocation: string;
   leverage: number;
@@ -53,7 +57,7 @@ export function triangularWeight(n: number): number {
   return (levels * (levels + 1)) / 2;
 }
 
-/** Formula B: Level L weight = N − L + 1 (L1 largest). */
+/** Formula B weight: Level L weight = N − L + 1 (L1 largest). */
 export function levelWeight(level: number, levelsPerSide: number): number {
   const n = Math.max(1, Math.floor(levelsPerSide));
   const L = Math.min(Math.max(1, Math.floor(level)), n);
@@ -61,18 +65,32 @@ export function levelWeight(level: number, levelsPerSide: number): number {
 }
 
 /**
+ * Allocation fraction of current capital for a level.
+ * pct = (N − L + 1) / N / maxOpenPositions
+ * With N=10, maxOpen=2 → L1=0.50, L2=0.45, …, L10=0.05
+ */
+export function levelAllocationFraction(
+  level: number,
+  levelsPerSide: number,
+  maxOpenPositions: number = DEFAULT_MAX_OPEN_POSITIONS,
+): Decimal {
+  const n = Math.max(1, Math.floor(levelsPerSide));
+  const maxOpen = Math.max(1, Math.floor(maxOpenPositions));
+  return new Decimal(levelWeight(level, n)).div(n).div(maxOpen);
+}
+
+/**
  * Margin for the active level from current trader capital.
- * margin = currentCapital × weight(L) / N
+ * margin = currentCapital × weight(L) / N / maxOpenPositions
  */
 export function calculatePositionAllocation(
   currentCapital: string | Decimal,
   level: number,
   levelsPerSide: number,
+  maxOpenPositions: number = DEFAULT_MAX_OPEN_POSITIONS,
 ): Decimal {
-  const n = Math.max(1, Math.floor(levelsPerSide));
-  const w = levelWeight(level, n);
   const capital = Decimal.max(new Decimal(0), new Decimal(currentCapital));
-  return capital.mul(w).div(n);
+  return capital.mul(levelAllocationFraction(level, levelsPerSide, maxOpenPositions));
 }
 
 /** Absolute grid step in price units: start × pct/100 (non-compounded). */
@@ -105,6 +123,7 @@ export function calcGridTriggerPrice(
 
 /**
  * Limit = trigger, tick-adjusted; BUY limit ≥ stop, SELL limit ≤ stop.
+ * Kept for plan display; entries use STOP_MARKET / MARKET-if-through.
  */
 export function calcGridLimitPrice(
   triggerPrice: string,
@@ -139,53 +158,48 @@ export function calcLevelTpPrice(
   return adjustPrice(raw, symbolInfo);
 }
 
-/** SL is always the immutable start price. */
-export function calcLevelSlPrice(startPrice: string | Decimal, symbolInfo: SymbolInfo): string {
-  return adjustPrice(startPrice, symbolInfo);
-}
-
 export function buildGridLevelPrices(
   startPrice: string,
   levelsPerSide: number,
   distancePercent: string | number,
   symbolInfo: SymbolInfo,
+  maxOpenPositions: number = DEFAULT_MAX_OPEN_POSITIONS,
 ): Array<{
   level: number;
   direction: GridDirection;
   triggerPrice: string;
   limitPrice: string;
   tpPrice: string;
-  slPrice: string;
   weight: number;
+  allocationPct: string;
 }> {
   const n = Math.max(1, Math.floor(levelsPerSide));
   const startAdj = adjustPrice(startPrice, symbolInfo);
   const distAbs = calcGridDistanceAbs(startAdj, distancePercent);
-  const slPrice = calcLevelSlPrice(startAdj, symbolInfo);
   const out: Array<{
     level: number;
     direction: GridDirection;
     triggerPrice: string;
     limitPrice: string;
     tpPrice: string;
-    slPrice: string;
     weight: number;
+    allocationPct: string;
   }> = [];
   for (const direction of ['LONG', 'SHORT'] as GridDirection[]) {
     for (let level = 1; level <= n; level++) {
       const raw = calcGridTriggerPrice(startAdj, level, direction, distancePercent);
       const triggerPrice = adjustPrice(raw, symbolInfo);
       const limitPrice = calcGridLimitPrice(triggerPrice, direction, symbolInfo);
-      // Estimate TP from trigger (actual TP uses fill price at activation)
       const tpPrice = calcLevelTpPrice(triggerPrice, direction, distAbs, symbolInfo);
+      const frac = levelAllocationFraction(level, n, maxOpenPositions);
       out.push({
         level,
         direction,
         triggerPrice,
         limitPrice,
         tpPrice,
-        slPrice,
         weight: levelWeight(level, n),
+        allocationPct: frac.toFixed(8),
       });
     }
   }
@@ -203,8 +217,10 @@ export function buildGridPlan(params: {
   levelsPerSide: number;
   distancePercent: string | number;
   symbolInfo: SymbolInfo;
+  maxOpenPositions?: number;
 }): GridPlanResult {
   const n = Math.max(1, Math.floor(params.levelsPerSide));
+  const maxOpen = Math.max(1, Math.floor(params.maxOpenPositions ?? DEFAULT_MAX_OPEN_POSITIONS));
   const allocation = new Decimal(params.traderAllocation);
   const lev = Math.max(1, params.leverage);
   const startAdj = adjustPrice(params.startPrice, params.symbolInfo);
@@ -214,11 +230,12 @@ export function buildGridPlan(params: {
     n,
     params.distancePercent,
     params.symbolInfo,
+    maxOpen,
   );
 
   const levels: GridLevelPlan[] = [];
   for (const row of priceRows) {
-    const theoreticalMargin = calculatePositionAllocation(allocation, row.level, n);
+    const theoreticalMargin = calculatePositionAllocation(allocation, row.level, n, maxOpen);
     const theoreticalNotional = calcPositionNotional(theoreticalMargin, lev);
     let quantity: string;
     try {
@@ -233,10 +250,10 @@ export function buildGridPlan(params: {
       level: row.level,
       direction: row.direction,
       weight: row.weight,
+      allocationPct: row.allocationPct,
       triggerPrice: row.triggerPrice,
       limitPrice: row.limitPrice,
       tpPrice: row.tpPrice,
-      slPrice: row.slPrice,
       theoreticalMargin: theoreticalMargin.toFixed(8),
       allocatedMargin: allocatedMargin.toFixed(8),
       notional: notional.toFixed(8),
@@ -249,6 +266,7 @@ export function buildGridPlan(params: {
     levelsPerSide: n,
     distancePercent: String(params.distancePercent),
     gridDistanceAbs: distAbs.toFixed(8),
+    maxOpenPositions: maxOpen,
     totalWeight: triangularWeight(n),
     traderAllocation: allocation.toFixed(8),
     leverage: lev,
@@ -264,13 +282,17 @@ export function sizeLevelPosition(params: {
   leverage: number;
   entryPrice: string;
   symbolInfo: SymbolInfo;
-}): { allocatedMargin: string; notional: string; quantity: string; weight: number } {
+  maxOpenPositions?: number;
+}): { allocatedMargin: string; notional: string; quantity: string; weight: number; allocationPct: string } {
   const lev = Math.max(1, params.leverage);
+  const maxOpen = Math.max(1, Math.floor(params.maxOpenPositions ?? DEFAULT_MAX_OPEN_POSITIONS));
   const weight = levelWeight(params.level, params.levelsPerSide);
+  const frac = levelAllocationFraction(params.level, params.levelsPerSide, maxOpen);
   const margin = calculatePositionAllocation(
     params.currentCapital,
     params.level,
     params.levelsPerSide,
+    maxOpen,
   );
   const theoreticalNotional = calcPositionNotional(margin, lev);
   let quantity: string;
@@ -286,6 +308,7 @@ export function sizeLevelPosition(params: {
     notional: notional.toFixed(8),
     quantity,
     weight,
+    allocationPct: frac.toFixed(8),
   };
 }
 
@@ -300,4 +323,8 @@ export function traderProfitPercent(
 
 export function isLevelTerminal(status: string): boolean {
   return status === 'TP_HIT' || status === 'SL_HIT' || status === 'CANCELLED' || status === 'SKIPPED';
+}
+
+export function isLevelTpComplete(status: string): boolean {
+  return status === 'TP_HIT';
 }

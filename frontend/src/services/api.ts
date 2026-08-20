@@ -106,7 +106,7 @@ export interface CurrentPositionView {
   entryPrice: string;
   quantity: string;
   tpPrice: string;
-  slPrice: string;
+  slPrice?: string | null;
   unrealizedPnl: string;
   estimatedExitFee?: string;
   netUnrealizedPnl?: string;
@@ -202,6 +202,7 @@ export interface TraderSummary {
   leverage: number;
   capital: CapitalProgressView;
   currentPosition: CurrentPositionView | null;
+  currentPositions?: CurrentPositionView[];
   stats: TraderLifecycleStats;
   timeline: PositionTimelineEntry[];
   distanceToTpPct?: string | null;
@@ -247,6 +248,8 @@ export interface GridTraderView {
   currentCapital?: string;
   initialCapital?: string;
   gridDistanceAbs?: string;
+  maxOpenPositions?: number;
+  activeOpenCount?: number;
   capitalHistory?: Array<{ at: string; capital: string; event: string; netPnl?: string }>;
 }
 
