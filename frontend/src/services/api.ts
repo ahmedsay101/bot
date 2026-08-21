@@ -256,6 +256,10 @@ export interface GridTraderView {
   longOpen?: number;
   shortOpen?: number;
   capitalHistory?: Array<{ at: string; capital: string; event: string; netPnl?: string }>;
+  traderTpTarget?: string;
+  traderTpCurrentPnl?: string;
+  traderTpProgress?: string;
+  traderTpReached?: boolean;
 }
 
 export interface TraderDetail extends Trader {

@@ -295,16 +295,92 @@ describe('No-SL max-2 GridDirectionalTrader', () => {
     trader.destroy();
   });
 
-  it('does NOT destroy on large trader PnL (TRADER_TP removed)', async () => {
-    const trader = await boot({
-      ...baseConfig,
-      traderTakeProfitPercent: '1', // old threshold — must be ignored
+  describe('TRADER_TP restored', () => {
+    it('exposes frozen TP target from initial capital', async () => {
+      const trader = await boot({ ...baseConfig, traderTakeProfitPercent: '10' });
+      const g = trader.toSummary().grid!;
+      expect(parseFloat(g.traderTpTarget!)).toBeCloseTo(50, 4);
+      expect(g.takeProfitPercent).toBe('10');
+      await tick('105', trader, 700);
+      // Capital may change after entry fees; target stays on initial $500
+      expect(parseFloat(trader.toSummary().grid!.traderTpTarget!)).toBeCloseTo(50, 4);
+      expect(trader.getStatus()).toBe('ACTIVE');
+      trader.destroy();
     });
-    await tick('105', trader, 700);
-    await tickThroughTp(trader);
-    // After a profitable TP, old 1% trader TP would have fired; must stay ACTIVE
-    expect(trader.getStatus()).toBe('ACTIVE');
-    expect(trader.toSummary().grid!.exitReason).toBeNull();
-    trader.destroy();
+
+    it('destroys trader when combined net PnL reaches TRADER_TP', async () => {
+      let completedEvents = 0;
+      const trader = await boot({ ...baseConfig, traderTakeProfitPercent: '1' });
+      trader.on('traderEvent', (e: any) => {
+        if (e?.type === 'COMPLETED') completedEvents += 1;
+      });
+      await tick('105', trader, 700);
+      expect(trader.toSummary().grid!.traderTpReached).toBe(false);
+      await tickThroughTp(trader);
+      await wait(1200);
+      expect(trader.getStatus()).toBe('COMPLETED');
+      expect(trader.toSummary().grid!.exitReason).toBe('TRADER_TP');
+      expect(completedEvents).toBe(1);
+    });
+
+    it('cancels pending entries and closes open legs on TRADER_TP', async () => {
+      const trader = await boot({ ...baseConfig, traderTakeProfitPercent: '10' });
+      await tick('105', trader, 700);
+      await tick('95', trader, 900);
+      await wait(400);
+      expect(trader.getOpenLegCount()).toBe(2);
+      expect(trader.getStatus()).toBe('ACTIVE');
+      // Combined path: exit closes BOTH open legs and cancels remaining PENDING
+      await (trader as any).beginExit('TRADER_TP');
+      await wait(500);
+      expect(trader.getStatus()).toBe('COMPLETED');
+      expect(trader.toSummary().grid!.exitReason).toBe('TRADER_TP');
+      expect(trader.getOpenLegCount()).toBe(0);
+      const pending = trader.toSummary().grid!.levels.filter((l) => l.status === 'PENDING');
+      expect(pending.length).toBe(0);
+    });
+
+    it('stays ACTIVE when net PnL is below trader TP target', async () => {
+      const trader = await boot({ ...baseConfig, traderTakeProfitPercent: '10' });
+      await tick('105', trader, 700);
+      await tickThroughTp(trader);
+      await wait(400);
+      // L1 net ≈ few dollars; 10% of $500 = $50 — must remain ACTIVE
+      expect(trader.getStatus()).toBe('ACTIVE');
+      expect(trader.toSummary().grid!.traderTpReached).toBe(false);
+      expect(parseFloat(trader.toSummary().grid!.traderTpCurrentPnl!)).toBeLessThan(50);
+      trader.destroy();
+    });
+
+    it('only one exit workflow when TRADER_TP and GRID_EXHAUSTED race', async () => {
+      const trader = await boot({ ...baseConfig, traderTakeProfitPercent: '999' });
+      await tick('105', trader, 500);
+      let completed = 0;
+      trader.on('traderEvent', (e: any) => {
+        if (e?.type === 'COMPLETED') completed += 1;
+      });
+      const p1 = (trader as any).beginExit('TRADER_TP');
+      const p2 = (trader as any).beginExit('GRID_EXHAUSTED');
+      const p3 = (trader as any).beginExit('MAX_LIFETIME');
+      await Promise.all([p1, p2, p3]);
+      expect(trader.toSummary().grid!.exitReason).toBe('TRADER_TP');
+      expect(completed).toBe(1);
+      expect(trader.getStatus()).toBe('COMPLETED');
+    });
+
+    it('resume during EXITING does not duplicate COMPLETED', async () => {
+      const trader = await boot({ ...baseConfig, traderTakeProfitPercent: '1' });
+      let completed = 0;
+      trader.on('traderEvent', (e: any) => {
+        if (e?.type === 'COMPLETED') completed += 1;
+      });
+      await tick('105', trader, 700);
+      await tickThroughTp(trader);
+      await wait(200);
+      await trader.resumeCompleting();
+      await wait(1000);
+      expect(completed).toBe(1);
+      expect(trader.toSummary().grid!.exitReason).toBe('TRADER_TP');
+    });
   });
 });

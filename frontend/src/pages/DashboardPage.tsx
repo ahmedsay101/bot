@@ -494,6 +494,38 @@ function GridTraderCard({
               <FillMeter label="LONG TP" filled={grid.longFilled} total={grid.levelsPerSide} color={LONG} />
               <FillMeter label="SHORT TP" filled={grid.shortFilled} total={grid.levelsPerSide} color={SHORT} />
 
+              {(() => {
+                const tpTarget = parseFloat(grid.traderTpTarget ?? '0') || 0;
+                const tpCurrent = parseFloat(grid.traderTpCurrentPnl ?? '0') || 0;
+                const tpProg = Math.min(100, Math.max(0, parseFloat(grid.traderTpProgress ?? '0') || 0));
+                const tpPct = parseFloat(grid.takeProfitPercent) || 0;
+                const initial = parseFloat(grid.initialCapital ?? '0') || 0;
+                return (
+                  <Box sx={{ mt: 1.25 }}>
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.4 }}>
+                      <Typography variant="caption" color="text.secondary">Trader TP</Typography>
+                      <Typography variant="caption" fontFamily="monospace" fontWeight={800} sx={{ color: col(tpCurrent) }}>
+                        {pnl(String(tpCurrent))} / {pnl(String(tpTarget))} · {tpProg.toFixed(1)}%
+                      </Typography>
+                    </Box>
+                    <LinearProgress
+                      variant="determinate"
+                      value={tpProg}
+                      sx={{
+                        height: 8, borderRadius: 99, bgcolor: 'rgba(255,255,255,0.06)',
+                        '& .MuiLinearProgress-bar': {
+                          bgcolor: grid.traderTpReached ? LONG : '#2dd4bf',
+                          borderRadius: 99,
+                        },
+                      }}
+                    />
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+                      Initial {money(String(initial))} · {tpPct}% → target {pnl(String(tpTarget))}
+                    </Typography>
+                  </Box>
+                );
+              })()}
+
               <Box sx={{ mt: 1.25 }}>
                 <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.4 }}>
                   <Typography variant="caption" color="text.secondary">Lifetime</Typography>
@@ -518,10 +550,14 @@ function GridTraderCard({
               </Typography>
               <Stack spacing={0.75} sx={{ mt: 1 }}>
                 <Typography variant="body2" sx={{ fontSize: 13 }}>
-                  1. Max lifetime ({formatDuration(stats.remainingMs)} left)
+                  1. Total TP: {grid.takeProfitPercent}% of initial
+                  {' '}({pnl(grid.traderTpCurrentPnl ?? '0')} / {pnl(grid.traderTpTarget ?? '0')})
                 </Typography>
                 <Typography variant="body2" sx={{ fontSize: 13 }}>
-                  2. Grid exhausted: either side {grid.levelsPerSide}/{grid.levelsPerSide} TP
+                  2. Max lifetime ({formatDuration(stats.remainingMs)} left)
+                </Typography>
+                <Typography variant="body2" sx={{ fontSize: 13 }}>
+                  3. Grid exhausted: either side {grid.levelsPerSide}/{grid.levelsPerSide} TP
                   {' '}(L {grid.longFilled}/{grid.levelsPerSide} · S {grid.shortFilled}/{grid.levelsPerSide})
                 </Typography>
               </Stack>

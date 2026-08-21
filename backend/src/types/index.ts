@@ -301,6 +301,14 @@ export interface GridTraderView {
   longOpen?: number;
   shortOpen?: number;
   capitalHistory?: Array<{ at: string; capital: string; event: string; netPnl?: string }>;
+  /** Absolute net-PnL target = initialCapital × takeProfitPercent / 100 (frozen). */
+  traderTpTarget?: string;
+  /** Combined realized + open net PnL (fees included). */
+  traderTpCurrentPnl?: string;
+  /** Progress toward trader TP (0–100). */
+  traderTpProgress?: string;
+  /** Whether combined net PnL has reached traderTpTarget. */
+  traderTpReached?: boolean;
 }
 
 /** Compact trader view for REST + dashboard WebSocket snapshots. */

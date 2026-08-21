@@ -14,6 +14,8 @@ import {
   DEFAULT_MAX_OPEN_POSITIONS,
   resolveGridDistanceAbs,
   inferGridDistanceAbsFromTriggers,
+  calcTraderTpTarget,
+  isTraderTpReached,
 } from '../../src/modules/trader/grid/gridCalc';
 import type { SymbolInfo } from '../../src/types';
 
@@ -207,5 +209,33 @@ describe('gridCalc — ascending capital scale (deep levels larger)', () => {
       const delta = new Decimal(l.tpPrice).minus(l.triggerPrice).abs();
       expect(delta.toFixed(2)).toBe(step.toFixed(2));
     }
+  });
+});
+
+describe('gridCalc — trader total TP target (frozen on initial capital)', () => {
+  it('TEST 1: $500 × 10% → +$50 target', () => {
+    expect(calcTraderTpTarget('500', '10').toFixed(2)).toBe('50.00');
+  });
+
+  it('TEST 2: target ignores current capital growth', () => {
+    const target = calcTraderTpTarget('500', '10');
+    expect(target.toFixed(2)).toBe('50.00');
+    // current capital $600 must not change target
+    expect(calcTraderTpTarget('500', '10').toFixed(2)).toBe('50.00');
+    expect(isTraderTpReached('49', '500', '10')).toBe(false);
+  });
+
+  it('TEST 3–4: net PnL threshold', () => {
+    expect(isTraderTpReached('49', '500', '10')).toBe(false);
+    expect(isTraderTpReached('50', '500', '10')).toBe(true);
+    expect(isTraderTpReached('51', '500', '10')).toBe(true);
+  });
+
+  it('TEST 5: gross above target but net below does not reach', () => {
+    const gross = 52;
+    const fees = 3;
+    const net = gross - fees; // 49
+    expect(isTraderTpReached(String(net), '500', '10')).toBe(false);
+    expect(isTraderTpReached(String(gross), '500', '10')).toBe(true); // would wrongly fire if using gross
   });
 });

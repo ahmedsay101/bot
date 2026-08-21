@@ -54,6 +54,7 @@ import type { PrismaClient } from '@prisma/client';
 const log = createContextLogger('GridDirectionalTrader');
 
 type ExitReason =
+  | 'TRADER_TP'
   | 'MAX_LIFETIME'
   | 'GRID_EXHAUSTED'
   | 'FORCE'
@@ -105,8 +106,7 @@ function normalizeExitReason(raw: unknown): ExitReason | null {
   if (s === 'FULL_LONG_GRID' || s === 'FULL_SHORT_GRID' || s === 'GRID_EXHAUSTED') {
     return 'GRID_EXHAUSTED';
   }
-  if (s === 'MAX_LIFETIME' || s === 'FORCE' || s === 'ERROR') return s;
-  // Legacy TRADER_TP is no longer a strategy exit
+  if (s === 'TRADER_TP' || s === 'MAX_LIFETIME' || s === 'FORCE' || s === 'ERROR') return s;
   return null;
 }
 
@@ -475,6 +475,10 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
       void this.beginExit('MAX_LIFETIME');
       return;
     }
+    if (this.isTraderTpHit()) {
+      void this.beginExit('TRADER_TP');
+      return;
+    }
     void this.tryActivateNextLevel();
   }
 
@@ -556,6 +560,12 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
     }
     const totalNet = this.realizedPnl.plus(openNet);
     const profitPct = traderProfitPercent(totalNet, this.initialCapital).toFixed(4);
+    const tpPct = new Decimal(this.takeProfitPercent);
+    const tpTarget = this.initialCapital.mul(tpPct).div(100);
+    const tpProgress = tpTarget.gt(0)
+      ? Decimal.min(100, totalNet.div(tpTarget).mul(100))
+      : new Decimal(0);
+    const tpReached = totalNet.gte(tpTarget) && tpTarget.gt(0);
 
     const currentPositions: CurrentPositionView[] = [];
     for (const a of this.activePositions.values()) {
@@ -711,6 +721,10 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
         activeOpenCount: this.activePositions.size,
         longOpen: this.hasOpenSide('LONG') ? 1 : 0,
         shortOpen: this.hasOpenSide('SHORT') ? 1 : 0,
+        traderTpTarget: tpTarget.toFixed(8),
+        traderTpCurrentPnl: totalNet.toFixed(8),
+        traderTpProgress: tpProgress.toFixed(4),
+        traderTpReached: tpReached,
       } as any,
     };
 
@@ -1088,6 +1102,8 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
   }
 
   private async handleTpFill(key: string, update: OrderUpdate): Promise<void> {
+    // Exit workflow owns forced closes — ignore late TP fills during EXITING.
+    if (this.exiting || this.isDestroyed) return;
     const active = this.activePositions.get(key);
     if (active == null || active.closing) return;
     if (update.avgFillPrice == null) return;
@@ -1184,8 +1200,33 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
       await this.beginExit('GRID_EXHAUSTED');
       return;
     }
+    if (this.isTraderTpHit()) {
+      await this.beginExit('TRADER_TP');
+      return;
+    }
 
     await this.tryActivateNextLevel();
+  }
+
+  /**
+   * Trader-level TP: net (realized + open net uPnL incl. fees) vs % of INITIAL allocation.
+   * Target does not move with currentCapital.
+   */
+  private isTraderTpHit(): boolean {
+    const rates = feeRatesFromConfig(this.traderConfig);
+    let openNet = new Decimal(0);
+    for (const a of this.activePositions.values()) {
+      const gross = calcPositionUnrealizedPnl(
+        a.direction,
+        a.entryPrice,
+        this.markPrice,
+        a.quantity,
+      );
+      const estExit = estimateOpenExitFee(this.markPrice, a.quantity, rates);
+      openNet = openNet.plus(gross.minus(a.entryFee).minus(estExit));
+    }
+    const pct = traderProfitPercent(this.realizedPnl.plus(openNet), this.initialCapital);
+    return pct.gte(this.takeProfitPercent);
   }
 
   private recomputeUnrealized(): void {

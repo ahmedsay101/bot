@@ -335,6 +335,25 @@ export function traderProfitPercent(
   return new Decimal(netProfit).div(alloc).mul(100);
 }
 
+/** Absolute trader TP target from INITIAL allocation (not current capital). */
+export function calcTraderTpTarget(
+  initialCapital: string | Decimal,
+  takeProfitPercent: string | Decimal,
+): Decimal {
+  return new Decimal(initialCapital).mul(new Decimal(takeProfitPercent)).div(100);
+}
+
+/** Whether combined net trader PnL has reached the frozen TP target. */
+export function isTraderTpReached(
+  netPnl: string | Decimal,
+  initialCapital: string | Decimal,
+  takeProfitPercent: string | Decimal,
+): boolean {
+  const target = calcTraderTpTarget(initialCapital, takeProfitPercent);
+  if (target.lte(0)) return false;
+  return new Decimal(netPnl).gte(target);
+}
+
 export function isLevelTerminal(status: string): boolean {
   return status === 'TP_HIT' || status === 'SL_HIT' || status === 'CANCELLED' || status === 'SKIPPED';
 }
