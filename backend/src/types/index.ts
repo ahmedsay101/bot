@@ -274,6 +274,7 @@ export interface GridLevelView {
   tpPrice?: string | null;
   slPrice?: string | null;
   weight?: number;
+  allocationPct?: string | null;
   completionReason?: string | null;
 }
 
@@ -290,8 +291,12 @@ export interface GridTraderView {
   currentCapital?: string;
   initialCapital?: string;
   gridDistanceAbs?: string;
+  /** currentCapital + unrealized (presentation equity) */
+  equity?: string;
   /** Always 1 — at most one open position per side. */
   maxPerSide?: number;
+  /** Structural max = 1 LONG + 1 SHORT. */
+  maxOpenPositions?: number;
   activeOpenCount?: number;
   longOpen?: number;
   shortOpen?: number;

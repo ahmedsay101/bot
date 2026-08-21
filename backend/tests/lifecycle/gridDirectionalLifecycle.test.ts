@@ -174,16 +174,15 @@ describe('No-SL max-2 GridDirectionalTrader', () => {
     const trader = await boot();
     await tick('105', trader, 700);
     const types = [...db._orders.values()].map((o: any) => o.type);
-    expect(types).toContain('TAKE_PROFIT');
+    expect(types).toContain('TAKE_PROFIT_MARKET');
     expect(types.some((t: string) => t === 'STOP_MARKET' && String(t).includes('SL'))).toBe(false);
-    // No STOP_MARKET exit at start — only entry STOP_MARKET/MARKET + TAKE_PROFIT
+    // No STOP_MARKET exit at start — only entry STOP_MARKET/MARKET + TAKE_PROFIT_MARKET
     const stopMarkets = [...db._orders.values()].filter((o: any) => o.type === 'STOP_MARKET');
     for (const o of stopMarkets) {
       expect(o.stopPrice).not.toBe('100.00'); // would be SL at start
     }
-    // Ensure no order with role/stop at start after position open except entry
     const tpOnlyExits = [...db._orders.values()].filter((o: any) =>
-      String(o.clientOrderId).includes('-tp') || o.type === 'TAKE_PROFIT',
+      String(o.clientOrderId).includes('-tp') || o.type === 'TAKE_PROFIT_MARKET' || o.type === 'TAKE_PROFIT',
     );
     expect(tpOnlyExits.length).toBeGreaterThanOrEqual(1);
     const slIds = [...db._orders.values()].filter((o: any) => String(o.clientOrderId).includes('-sl'));
@@ -248,13 +247,13 @@ describe('No-SL max-2 GridDirectionalTrader', () => {
     trader.destroy();
   });
 
-  it('TEST 9–11: L1 margin ≈ 50% of capital', async () => {
+  it('TEST 9–11: L1 margin ≈ 5% of capital', async () => {
     const trader = await boot();
     await tick('105', trader, 700);
     const s = trader.toSummary();
     const margin = parseFloat(s.currentPosition!.stepAmount);
-    expect(margin).toBeGreaterThan(240);
-    expect(margin).toBeLessThan(260);
+    expect(margin).toBeGreaterThan(20);
+    expect(margin).toBeLessThan(35);
     expect(s.grid!.maxPerSide).toBe(1);
     expect(s.grid!.longOpen).toBe(1);
     expect(s.grid!.shortOpen).toBe(0);
@@ -270,7 +269,8 @@ describe('No-SL max-2 GridDirectionalTrader', () => {
     let s = trader.toSummary();
     expect(s.currentPosition?.number).toBe(4);
     const capitalBefore = parseFloat(s.grid!.currentCapital!);
-    expect(capitalBefore).toBeGreaterThan(500);
+    // Small early TPs — capital should still move (fees/net), not reset
+    expect(capitalBefore).not.toBe(500);
 
     await tick('115', trader, 600);
     await tick('110', trader, 600);
@@ -285,13 +285,26 @@ describe('No-SL max-2 GridDirectionalTrader', () => {
     trader.destroy();
   }, 120000);
 
-  it('L1 weight display still largest', async () => {
+  it('L1 weight is smallest; L10 is largest', async () => {
     const trader = await boot();
     const g = trader.toSummary().grid!;
     const l1 = g.levels.find((l) => l.direction === 'LONG' && l.level === 1)!;
     const l10 = g.levels.find((l) => l.direction === 'LONG' && l.level === 10)!;
-    expect(l1.weight).toBe(10);
-    expect(l10.weight).toBe(1);
+    expect(l1.weight).toBe(1);
+    expect(l10.weight).toBe(10);
+    trader.destroy();
+  });
+
+  it('does NOT destroy on large trader PnL (TRADER_TP removed)', async () => {
+    const trader = await boot({
+      ...baseConfig,
+      traderTakeProfitPercent: '1', // old threshold — must be ignored
+    });
+    await tick('105', trader, 700);
+    await tickThroughTp(trader);
+    // After a profitable TP, old 1% trader TP would have fired; must stay ACTIVE
+    expect(trader.getStatus()).toBe('ACTIVE');
+    expect(trader.toSummary().grid!.exitReason).toBeNull();
     trader.destroy();
   });
 });

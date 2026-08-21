@@ -279,6 +279,9 @@ function GridLadder({ grid, markPrice }: { grid: GridTraderView; markPrice: stri
                 <Typography fontFamily="monospace" fontWeight={800} sx={{ fontSize: 12 }}>
                   {l.direction} #{l.level}
                   {l.weight != null ? ` · w${l.weight}` : ''}
+                  {l.allocationPct != null
+                    ? ` · ${(parseFloat(l.allocationPct) * 100).toFixed(0)}%`
+                    : ''}
                 </Typography>
                 <Typography variant="caption" color="text.secondary" display="block" sx={{ fontSize: 10 }}>
                   Margin {money(l.allocatedMargin)}
@@ -357,15 +360,13 @@ function GridTraderCard({
   const lifeProgress = lifetimeMs > 0
     ? Math.min(100, ((lifetimeMs - stats.remainingMs) / lifetimeMs) * 100)
     : 0;
-  const tpTarget = parseFloat(grid.takeProfitPercent || '10') || 10;
-  const tpNow = parseFloat(grid.profitPercent) || 0;
-  const tpProgress = Math.min(100, Math.max(0, (tpNow / tpTarget) * 100));
   const vsStart = (() => {
     const start = parseFloat(grid.startPrice) || 0;
     const mark = parseFloat(trader.markPrice) || 0;
     if (start <= 0 || mark <= 0) return null;
     return ((mark - start) / start) * 100;
   })();
+  const netPct = parseFloat(grid.profitPercent) || 0;
 
   return (
     <Box
@@ -401,10 +402,10 @@ function GridTraderCard({
             </Typography>
           </Box>
           <Box sx={{ textAlign: 'right' }}>
-            <Typography fontWeight={900} sx={{ color: col(grid.profitPercent), fontSize: 22, lineHeight: 1.1 }}>
-              {tpNow >= 0 ? '+' : ''}{tpNow.toFixed(2)}%
+            <Typography fontWeight={900} sx={{ color: col(netPct), fontSize: 22, lineHeight: 1.1 }}>
+              {netPct >= 0 ? '+' : ''}{netPct.toFixed(2)}%
             </Typography>
-            <Typography variant="caption" color="text.secondary">trader PnL %</Typography>
+            <Typography variant="caption" color="text.secondary">net PnL %</Typography>
           </Box>
         </Box>
 
@@ -471,41 +472,27 @@ function GridTraderCard({
                 <Stat label="Mark" value={`$${px(trader.markPrice)}`} color={MARK} />
                 <Stat label="Initial alloc" value={money(grid.initialCapital ?? trader.capital?.traderAllocatedAmount)} />
                 <Stat label="Current capital" value={money(grid.currentCapital ?? trader.capital?.currentStepAmount)} color="#2dd4bf" />
-                <Stat label="Leverage" value={`${trader.leverage}x`} />
+                <Stat
+                  label="Equity"
+                  value={money(grid.equity ?? String(
+                    (parseFloat(grid.currentCapital ?? trader.capital?.currentStepAmount ?? '0') || 0)
+                    + (parseFloat(trader.unrealizedPnl) || 0),
+                  ))}
+                />
                 <Stat label="Open Notional" value={money(trader.capital?.positionNotional)} />
-                <Stat
-                  label="vs Start"
-                  value={vsStart == null ? '—' : `${vsStart >= 0 ? '+' : ''}${vsStart.toFixed(2)}%`}
-                  color={vsStart == null ? undefined : col(vsStart)}
-                />
-                <Stat label="Net PnL" value={pnl(trader.totalPnl)} color={col(trader.totalPnl)} />
+                <Stat label="Realized" value={pnl(trader.realizedPnl)} color={col(trader.realizedPnl)} />
                 <Stat label="Unrealized" value={pnl(trader.unrealizedPnl)} color={col(trader.unrealizedPnl)} />
+                <Stat label="Net PnL" value={pnl(trader.totalPnl)} color={col(trader.totalPnl)} />
+                <Stat label="Leverage" value={`${trader.leverage}x`} />
                 <Stat
-                  label="Open L / S"
-                  value={`${grid.longOpen ?? 0}/1 · ${grid.shortOpen ?? 0}/1`}
+                  label="Open"
+                  value={`${grid.activeOpenCount ?? 0} / ${grid.maxOpenPositions ?? 2}`}
                 />
-                <Stat label="Grid TP done" value={`${grid.longFilled + grid.shortFilled}/${grid.levelsPerSide * 2}`} />
+                <Stat label="Open L / S" value={`${grid.longOpen ?? 0}/1 · ${grid.shortOpen ?? 0}/1`} />
               </Box>
 
               <FillMeter label="LONG TP" filled={grid.longFilled} total={grid.levelsPerSide} color={LONG} />
               <FillMeter label="SHORT TP" filled={grid.shortFilled} total={grid.levelsPerSide} color={SHORT} />
-
-              <Box sx={{ mt: 1.5 }}>
-                <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.4 }}>
-                  <Typography variant="caption" color="text.secondary">Trader TP ({grid.takeProfitPercent}% of initial)</Typography>
-                  <Typography variant="caption" fontFamily="monospace" fontWeight={800}>
-                    {tpNow.toFixed(1)}% / {tpTarget}%
-                  </Typography>
-                </Box>
-                <LinearProgress
-                  variant="determinate"
-                  value={tpProgress}
-                  sx={{
-                    height: 8, borderRadius: 99, bgcolor: 'rgba(255,255,255,0.06)',
-                    '& .MuiLinearProgress-bar': { bgcolor: LONG, borderRadius: 99 },
-                  }}
-                />
-              </Box>
 
               <Box sx={{ mt: 1.25 }}>
                 <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.4 }}>
@@ -531,14 +518,10 @@ function GridTraderCard({
               </Typography>
               <Stack spacing={0.75} sx={{ mt: 1 }}>
                 <Typography variant="body2" sx={{ fontSize: 13 }}>
-                  1. Trader TP ≥ <Box component="span" fontWeight={800} sx={{ color: LONG }}>{grid.takeProfitPercent}%</Box>
-                  {' '}of initial ({tpNow.toFixed(1)}% / {tpTarget}%)
+                  1. Max lifetime ({formatDuration(stats.remainingMs)} left)
                 </Typography>
                 <Typography variant="body2" sx={{ fontSize: 13 }}>
-                  2. Max lifetime ({formatDuration(stats.remainingMs)} left)
-                </Typography>
-                <Typography variant="body2" sx={{ fontSize: 13 }}>
-                  3. Grid exhausted: either side {grid.levelsPerSide}/{grid.levelsPerSide} TP
+                  2. Grid exhausted: either side {grid.levelsPerSide}/{grid.levelsPerSide} TP
                   {' '}(L {grid.longFilled}/{grid.levelsPerSide} · S {grid.shortFilled}/{grid.levelsPerSide})
                 </Typography>
               </Stack>

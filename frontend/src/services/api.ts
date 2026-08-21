@@ -232,6 +232,7 @@ export interface GridLevelView {
   tpPrice?: string | null;
   slPrice?: string | null;
   weight?: number;
+  allocationPct?: string | null;
   completionReason?: string | null;
 }
 
@@ -248,7 +249,9 @@ export interface GridTraderView {
   currentCapital?: string;
   initialCapital?: string;
   gridDistanceAbs?: string;
+  equity?: string;
   maxPerSide?: number;
+  maxOpenPositions?: number;
   activeOpenCount?: number;
   longOpen?: number;
   shortOpen?: number;

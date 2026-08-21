@@ -1,6 +1,6 @@
 ﻿/**
  * Pure directional-grid math (Decimal.js).
- * No SL. Capital scaled for possible simultaneous LONG+SHORT (/2), so L1 = 50%.
+ * No SL. Capital scales deeper: L1 smallest (5%), LN largest (50%) with maxOpen=2.
  * At most one open position per side (enforced by trader, not config).
  */
 import Decimal from 'decimal.js';
@@ -20,8 +20,9 @@ export type GridLevelStatus =
   /** @deprecated historical only — new traders never write SL_HIT */
   | 'SL_HIT';
 
-/** Capital reserve for both sides (one LONG + one SHORT may be open together). */
+/** Max simultaneous opens (1 LONG + 1 SHORT). Used in allocation ÷ factor. */
 export const GRID_SIDE_PAIR_FACTOR = 2;
+export const DEFAULT_MAX_OPEN_POSITIONS = GRID_SIDE_PAIR_FACTOR;
 
 export interface GridLevelPlan {
   level: number;
@@ -53,24 +54,42 @@ export function triangularWeight(n: number): number {
   return (levels * (levels + 1)) / 2;
 }
 
+/**
+ * Ascending weight: Level L weight = L (L1 smallest, LN largest).
+ */
 export function levelWeight(level: number, levelsPerSide: number): number {
   const n = Math.max(1, Math.floor(levelsPerSide));
   const L = Math.min(Math.max(1, Math.floor(level)), n);
-  return n - L + 1;
+  return L;
 }
 
-export function levelAllocationFraction(level: number, levelsPerSide: number): Decimal {
+/**
+ * Allocation fraction of current capital.
+ * pct = levelNumber / N / maxOpenPositions
+ * With N=10, maxOpen=2 → L1=0.05 … L10=0.50
+ */
+export function levelAllocationFraction(
+  level: number,
+  levelsPerSide: number,
+  maxOpenPositions: number = DEFAULT_MAX_OPEN_POSITIONS,
+): Decimal {
   const n = Math.max(1, Math.floor(levelsPerSide));
-  return new Decimal(levelWeight(level, n)).div(n).div(GRID_SIDE_PAIR_FACTOR);
+  const maxOpen = Math.max(1, Math.floor(maxOpenPositions));
+  return new Decimal(levelWeight(level, n)).div(n).div(maxOpen);
 }
 
+/**
+ * Margin for a level from current trader capital.
+ * margin = currentCapital × (level / N / maxOpen)
+ */
 export function calculatePositionAllocation(
   currentCapital: string | Decimal,
   level: number,
   levelsPerSide: number,
+  maxOpenPositions: number = DEFAULT_MAX_OPEN_POSITIONS,
 ): Decimal {
   const capital = Decimal.max(new Decimal(0), new Decimal(currentCapital));
-  return capital.mul(levelAllocationFraction(level, levelsPerSide));
+  return capital.mul(levelAllocationFraction(level, levelsPerSide, maxOpenPositions));
 }
 
 export function calcGridDistanceAbs(
@@ -78,6 +97,50 @@ export function calcGridDistanceAbs(
   distancePercent: string | number,
 ): Decimal {
   return new Decimal(startPrice).mul(new Decimal(distancePercent).div(100)).abs();
+}
+
+/**
+ * Immutable one-step spacing from the built ladder (preferred over percent × start).
+ * Uses |trigger(L2) − trigger(L1)| on either side so TP never drifts if config % changes.
+ */
+export function inferGridDistanceAbsFromTriggers(
+  levels: Array<{ level: number; direction: string; triggerPrice: string }>,
+): Decimal | null {
+  for (const direction of ['LONG', 'SHORT']) {
+    const side = levels
+      .filter((l) => l.direction === direction)
+      .sort((a, b) => a.level - b.level);
+    if (side.length < 2) continue;
+    const a = new Decimal(side[0]!.triggerPrice);
+    const b = new Decimal(side[1]!.triggerPrice);
+    const step = a.minus(b).abs();
+    if (step.gt(0)) return step;
+  }
+  return null;
+}
+
+/**
+ * Resolve the grid step used for position TPs.
+ * Prefer ladder-inferred spacing; fall back to start × percent / 100.
+ */
+export function resolveGridDistanceAbs(params: {
+  levels?: Array<{ level: number; direction: string; triggerPrice: string }>;
+  startPrice?: string | Decimal | null;
+  distancePercent?: string | number | null;
+  storedAbs?: string | Decimal | null;
+}): Decimal {
+  // Ladder spacing is the source of truth (survives config % drift)
+  if (params.levels != null && params.levels.length > 0) {
+    const inferred = inferGridDistanceAbsFromTriggers(params.levels);
+    if (inferred != null) return inferred;
+  }
+  if (params.storedAbs != null && new Decimal(params.storedAbs).gt(0)) {
+    return new Decimal(params.storedAbs).abs();
+  }
+  if (params.startPrice != null && params.distancePercent != null) {
+    return calcGridDistanceAbs(params.startPrice, params.distancePercent);
+  }
+  throw new Error('Cannot resolve gridDistanceAbs: no levels, storedAbs, or start/percent');
 }
 
 export function calcGridTriggerPrice(
