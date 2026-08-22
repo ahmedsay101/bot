@@ -152,14 +152,25 @@ function trendColor(direction: string): string {
 
 function TrendBadge({ trend }: { trend: GridTrendView | TrendCandidate }): React.ReactElement {
   const dir = String(trend.direction ?? 'NONE').toUpperCase();
-  const max = 'maxScore' in trend && trend.maxScore != null ? trend.maxScore : trend.requiredScore;
-  const score = `${trend.score}/${max}`;
-  const strength = String(('strength' in trend && trend.strength) || (trend.confirmed ? 'STRONG' : '—')).toUpperCase();
-  const label = trend.confirmed
-    ? `${dir} ${strength} ${score}`
-    : `${dir} ${strength} ${score}`;
+  const conf =
+    trend.confidenceScore != null
+      ? trend.confidenceScore
+      : Math.round((trend.confidence ?? 0) * (trend.maxScore ?? 100));
+  const regime = 'regime' in trend && trend.regime ? String(trend.regime) : '';
+  const decision = trend.decision ?? (trend.confirmed ? 'TRADE' : 'NO_TRADE');
+  const label =
+    decision === 'TRADE'
+      ? `STRONG ${dir} · ${conf}/100`
+      : `${dir} · ${conf}/100 · NO TRADE`;
+  const title =
+    `Signal quality ${conf}/100 (not a probability guarantee).` +
+    (regime ? ` Regime: ${regime}.` : '') +
+    (trend.efficiencyRatio != null ? ` ER: ${trend.efficiencyRatio.toFixed(2)}.` : '') +
+    (trend.reversalRisk != null ? ` Reversal risk: ${trend.reversalRisk}/100.` : '') +
+    (trend.mtfAligned != null ? ` MTF: ${trend.mtfAligned}/${trend.mtfTotal ?? 4}.` : '');
   return (
     <Chip
+      title={title}
       label={label}
       size="small"
       sx={{
@@ -753,10 +764,10 @@ export function DashboardPage(): React.ReactElement {
                               fontWeight={800}
                               sx={{ color: trendColor(String(trend.direction)), display: 'block' }}
                             >
-                              {String(trend.direction)} {trend.score}/{trend.requiredScore}
+                              {String(trend.direction)} {(trend.confidenceScore ?? trend.score)}/100
                             </Typography>
                             <Typography variant="caption" sx={{ fontSize: 9, color: trend.confirmed ? BULL : 'text.secondary' }}>
-                              {trend.confirmed ? 'CONFIRMED' : 'pending'}
+                              {trend.decision === 'TRADE' || trend.confirmed ? 'TRADE' : String(trend.regime ?? 'NO TRADE')}
                             </Typography>
                           </Box>
                         ) : (
@@ -779,18 +790,24 @@ export function DashboardPage(): React.ReactElement {
                     border: `1px solid ${BORDER}`,
                   }}
                 >
-                  <Typography variant="caption" fontWeight={800} sx={{ letterSpacing: 0.8, color: 'text.secondary', display: 'block', mb: 1 }}>
-                    TREND CANDIDATES
+                  <Typography variant="caption" fontWeight={800} sx={{ letterSpacing: 0.8, color: 'text.secondary', display: 'block', mb: 0.5 }}>
+                    TREND ANALYSIS
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary" display="block" sx={{ fontSize: 9, mb: 1, lineHeight: 1.35 }}>
+                    Confidence is signal quality, not a guarantee of future price movement.
                   </Typography>
                   {trendCandidates.slice(0, 20).map((t) => {
                     const active = list.some((tr) => tr.symbol === t.symbol);
+                    const conf = t.confidenceScore ?? Math.round((t.confidence ?? 0) * 100);
+                    const decision = t.decision ?? (t.confirmed ? 'TRADE' : 'NO_TRADE');
+                    const rejectHint = (t.rejectionReasons ?? t.reasons ?? []).slice(0, 2).join(' · ');
                     return (
                       <Box
                         key={t.symbol}
                         sx={{
                           display: 'flex',
                           justifyContent: 'space-between',
-                          alignItems: 'center',
+                          alignItems: 'flex-start',
                           py: 0.65,
                           px: 0.75,
                           mx: -0.75,
@@ -799,33 +816,39 @@ export function DashboardPage(): React.ReactElement {
                           borderBottom: `1px solid ${BORDER}`,
                           '&:last-child': { borderBottom: 'none' },
                         }}
+                        title={rejectHint || undefined}
                       >
-                        <Box>
+                        <Box sx={{ minWidth: 0, pr: 1 }}>
                           <Typography variant="caption" fontFamily="monospace" fontWeight={700}>
                             {t.symbol.replace('USDT', '')}
                             {active ? ' ●' : ''}
                           </Typography>
                           <Typography variant="caption" color="text.secondary" display="block" sx={{ fontSize: 10 }}>
-                            {t.timeframe ?? '—'}
-                            {t.confirmationTimeframe != null ? ` → ${t.confirmationTimeframe}` : ''}
+                            {t.regime ?? '—'}
+                            {t.adx != null ? ` · ADX ${t.adx.toFixed(0)}` : ''}
+                            {t.efficiencyRatio != null ? ` · ER ${t.efficiencyRatio.toFixed(2)}` : ''}
                           </Typography>
+                          {!t.confirmed && rejectHint ? (
+                            <Typography variant="caption" color="text.secondary" display="block" sx={{ fontSize: 9, opacity: 0.85 }}>
+                              {rejectHint}
+                            </Typography>
+                          ) : null}
                         </Box>
-                        <Box sx={{ textAlign: 'right' }}>
+                        <Box sx={{ textAlign: 'right', flexShrink: 0 }}>
                           <Typography
                             variant="caption"
                             fontWeight={800}
                             sx={{ color: trendColor(String(t.direction)), display: 'block' }}
                           >
-                            {String(t.direction)} · {String(t.strength ?? (t.confirmed ? 'STRONG' : '—'))}{' '}
-                            {t.score}/{t.maxScore ?? t.requiredScore}
+                            {String(t.direction)} · {conf}/100
                           </Typography>
                           <Typography
                             variant="caption"
-                            sx={{ fontSize: 9, fontWeight: 700, color: t.confirmed ? BULL : 'text.secondary' }}
+                            sx={{ fontSize: 9, fontWeight: 700, color: decision === 'TRADE' ? BULL : 'text.secondary' }}
                           >
-                            {t.confirmed
-                              ? (active ? 'TRADER ACTIVE' : 'STRONG · ELIGIBLE')
-                              : String(t.status ?? 'NOT ELIGIBLE').replace(/_/g, ' ')}
+                            {decision === 'TRADE'
+                              ? (active ? 'TRADER ACTIVE' : 'TRADE')
+                              : 'NO TRADE'}
                           </Typography>
                         </Box>
                       </Box>

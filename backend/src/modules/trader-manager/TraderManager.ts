@@ -84,18 +84,35 @@ export class TraderManager extends EventEmitter {
       rocPeriod: traderConfig.trendRocPeriod ?? DEFAULT_TREND_DETECTOR_CONFIG.calc.rocPeriod,
       momentumThreshold: traderConfig.trendMomentumThreshold ?? DEFAULT_TREND_DETECTOR_CONFIG.calc.momentumThreshold,
     };
+    const engine = {
+      ...DEFAULT_TREND_DETECTOR_CONFIG.engine,
+      minConfidence: traderConfig.trendMinStrongConfidence ?? DEFAULT_TREND_DETECTOR_CONFIG.engine.minConfidence,
+      minAdx: traderConfig.trendMinAdx ?? DEFAULT_TREND_DETECTOR_CONFIG.engine.minAdx,
+      minEfficiency: traderConfig.trendMinEfficiency ?? DEFAULT_TREND_DETECTOR_CONFIG.engine.minEfficiency,
+      minTrendRoomAtr: traderConfig.trendMinRoomAtr ?? DEFAULT_TREND_DETECTOR_CONFIG.engine.minTrendRoomAtr,
+      maxReversalRisk: traderConfig.trendMaxReversalRisk ?? DEFAULT_TREND_DETECTOR_CONFIG.engine.maxReversalRisk,
+      minRelativeVolume:
+        traderConfig.trendVolumeMultiplier ?? DEFAULT_TREND_DETECTOR_CONFIG.engine.minRelativeVolume,
+      minMtfAgree: traderConfig.trendMinMtfAgree ?? DEFAULT_TREND_DETECTOR_CONFIG.engine.minMtfAgree,
+      minCategoryConfirmed:
+        traderConfig.trendMinCategoryConfirmed ?? DEFAULT_TREND_DETECTOR_CONFIG.engine.minCategoryConfirmed,
+      adxPeriod: traderConfig.trendAdxPeriod ?? DEFAULT_TREND_DETECTOR_CONFIG.engine.adxPeriod,
+    };
     this.trendDetector = new TrendDetector({
       getKlines: (symbol, interval, limit) => this.binanceClient.getKlines(symbol, interval, limit),
       config: {
         primaryTimeframe: traderConfig.trendPrimaryTimeframe ?? '15m',
         confirmationTimeframe: traderConfig.trendConfirmationTimeframe ?? '1h',
+        timeframes: ['5m', '15m', '1h', '4h'],
         candleLimit: DEFAULT_TREND_DETECTOR_CONFIG.candleLimit,
         calc,
-        maxScore: DEFAULT_TREND_DETECTOR_CONFIG.maxScore,
-        strongMinScore: traderConfig.trendStrongMinScore ?? DEFAULT_TREND_DETECTOR_CONFIG.strongMinScore,
+        engine,
+        maxScore: 100,
+        strongMinScore: engine.minConfidence,
         concurrency: traderConfig.trendAnalysisConcurrency ?? DEFAULT_TREND_DETECTOR_CONFIG.concurrency,
         cacheTtlMs: (traderConfig.trendResultCacheSeconds ?? 60) * 1000,
         maxAgeMs: (traderConfig.trendResultMaxAgeSeconds ?? 300) * 1000,
+        btcSymbol: 'BTCUSDT',
       },
     });
   }
@@ -556,17 +573,18 @@ export class TraderManager extends EventEmitter {
       // ALWAYS analyze the full candidate list — never stop early for maxTraders.
       let trendResults: TrendDetectionView[];
       if (this.traderConfig.trendDetectionEnabled === false) {
-        // Dev/test bypass only — still marks as STRONG so pipeline stays identical.
+        // Dev/test bypass only — marks TRADE/STRONG so pipeline stays identical.
+        const now = Date.now();
         trendResults = symbols.map((symbol) => ({
           symbol,
           direction: 'BULLISH' as const,
           confirmed: true,
           strength: 'STRONG' as const,
           status: 'STRONG_CONFIRMED' as const,
-          score: 7,
-          maxScore: 7,
-          requiredScore: 6,
-          confidence: 1,
+          score: 95,
+          maxScore: 100,
+          requiredScore: this.trendDetector.config.engine.minConfidence,
+          confidence: 0.95,
           signals: {
             emaAlignment: true,
             priceVsEma: true,
@@ -588,10 +606,26 @@ export class TraderManager extends EventEmitter {
           confirmationTimeframe: '1h',
           confirmationConfirmed: true,
           adx: 35,
-          evaluatedAt: Date.now(),
-          timestamp: Date.now(),
+          evaluatedAt: now,
+          timestamp: now,
           priceChangePercent: gainBySymbol.get(symbol)?.priceChangePercent,
           gainRank: gainBySymbol.get(symbol)?.gainRank,
+          decision: 'TRADE' as const,
+          regime: 'STRONG_TREND' as const,
+          confidenceScore: 95,
+          rejectionReasons: [],
+          efficiencyRatio: 0.8,
+          relativeVolume: 1.8,
+          reversalRisk: 10,
+          distanceToResistanceATR: 4,
+          distanceToSupportATR: 2,
+          mtfAligned: 4,
+          mtfTotal: 4,
+          plusDi: 30,
+          minusDi: 10,
+          atrPercent: 1.2,
+          trendAge: 'DEVELOPING',
+          reasons: ['Trend detection disabled (bypass)'],
         }));
       } else {
         trendResults = await this.trendDetector.detectTrendForAll(symbols);
@@ -684,13 +718,27 @@ export class TraderManager extends EventEmitter {
   }
 
   /**
-   * Second safety layer: refuse create without fresh STRONG confirmed trend.
+   * Hard gate inside create path: TRADE + STRONG_TREND + confidence + fresh.
+   * Score alone cannot override these checks.
    */
   private assertStrongTrendCandidate(candidate: TrendDetectionView): void {
     if (this.traderConfig.trendDetectionEnabled === false) return;
+    if (candidate.decision !== 'TRADE') {
+      throw new Error(
+        `Trend gate rejected ${candidate.symbol}: decision=${candidate.decision} reasons=${(candidate.rejectionReasons ?? []).join('; ')}`,
+      );
+    }
+    if (candidate.regime !== 'STRONG_TREND') {
+      throw new Error(`Trend gate rejected ${candidate.symbol}: regime=${candidate.regime}`);
+    }
     if (!candidate.confirmed || candidate.strength !== 'STRONG') {
       throw new Error(
         `Trend gate rejected ${candidate.symbol}: confirmed=${candidate.confirmed} strength=${candidate.strength}`,
+      );
+    }
+    if (candidate.confidenceScore < candidate.requiredScore) {
+      throw new Error(
+        `Trend gate rejected ${candidate.symbol}: confidence ${candidate.confidenceScore} < ${candidate.requiredScore}`,
       );
     }
     if (!this.trendDetector.isFresh(candidate)) {
@@ -698,6 +746,9 @@ export class TraderManager extends EventEmitter {
     }
     if (candidate.direction === 'NONE' || candidate.status === 'ERROR') {
       throw new Error(`Trend gate rejected ${candidate.symbol}: invalid status`);
+    }
+    if ((candidate.rejectionReasons?.length ?? 0) > 0) {
+      throw new Error(`Trend gate rejected ${candidate.symbol}: hard rejects present`);
     }
   }
 

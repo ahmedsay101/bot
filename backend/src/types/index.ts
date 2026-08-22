@@ -146,6 +146,13 @@ export interface TraderConfig {
   trendAnalysisConcurrency?: number;
   trendResultCacheSeconds?: number;
   trendResultMaxAgeSeconds?: number;
+  /** Min confidence 0–100 for TRADE (default 85). */
+  trendMinStrongConfidence?: number;
+  trendMinEfficiency?: number;
+  trendMinRoomAtr?: number;
+  trendMaxReversalRisk?: number;
+  trendMinMtfAgree?: number;
+  trendMinCategoryConfirmed?: number;
   /** Max symbols from 24h tickers to trend-scan (default 50). */
   topGainersLimit?: number;
   refreshInterval: number;
@@ -427,6 +434,19 @@ export type DashboardEvent =
           confirmationTimeframe?: string;
           priceChangePercent?: string;
           gainRank?: number;
+          decision?: string;
+          regime?: string;
+          confidenceScore?: number;
+          rejectionReasons?: string[];
+          efficiencyRatio?: number;
+          relativeVolume?: number;
+          reversalRisk?: number;
+          distanceToResistanceATR?: number;
+          distanceToSupportATR?: number;
+          mtfAligned?: number;
+          mtfTotal?: number;
+          adx?: number;
+          reasons?: string[];
         }>;
         tradingMode: TraderMode;
         botStatus: string;

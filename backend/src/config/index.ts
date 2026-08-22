@@ -68,6 +68,12 @@ interface AppConfig {
     trendAnalysisConcurrency: number;
     trendResultCacheSeconds: number;
     trendResultMaxAgeSeconds: number;
+    trendMinStrongConfidence: number;
+    trendMinEfficiency: number;
+    trendMinRoomAtr: number;
+    trendMaxReversalRisk: number;
+    trendMinMtfAgree: number;
+    trendMinCategoryConfirmed: number;
     topGainersLimit: number;
     refreshInterval: number;
     retryLimit: number;
@@ -132,6 +138,12 @@ const schema = Joi.object({
   TREND_ANALYSIS_CONCURRENCY: Joi.number().integer().min(1).max(20).default(5),
   TREND_RESULT_CACHE_SECONDS: Joi.number().integer().min(0).max(600).default(60),
   TREND_RESULT_MAX_AGE_SECONDS: Joi.number().integer().min(30).max(3600).default(300),
+  TREND_MIN_STRONG_CONFIDENCE: Joi.number().integer().min(50).max(100).default(85),
+  TREND_MIN_EFFICIENCY: Joi.number().min(0.05).max(1).default(0.35),
+  TREND_MIN_ROOM_ATR: Joi.number().min(0).max(20).default(1.2),
+  TREND_MAX_REVERSAL_RISK: Joi.number().min(0).max(100).default(55),
+  TREND_MIN_MTF_AGREE: Joi.number().integer().min(2).max(4).default(3),
+  TREND_MIN_CATEGORY_CONFIRMED: Joi.number().integer().min(3).max(11).default(5),
   TOP_GAINERS_LIMIT: Joi.number().integer().min(1).max(200).default(50),
   REFRESH_INTERVAL: Joi.number().integer().min(5000).default(60000),
   RETRY_LIMIT: Joi.number().integer().min(1).max(20).default(5),
@@ -216,6 +228,12 @@ function loadConfig(): AppConfig {
       trendAnalysisConcurrency: env.TREND_ANALYSIS_CONCURRENCY as number,
       trendResultCacheSeconds: env.TREND_RESULT_CACHE_SECONDS as number,
       trendResultMaxAgeSeconds: env.TREND_RESULT_MAX_AGE_SECONDS as number,
+      trendMinStrongConfidence: env.TREND_MIN_STRONG_CONFIDENCE as number,
+      trendMinEfficiency: env.TREND_MIN_EFFICIENCY as number,
+      trendMinRoomAtr: env.TREND_MIN_ROOM_ATR as number,
+      trendMaxReversalRisk: env.TREND_MAX_REVERSAL_RISK as number,
+      trendMinMtfAgree: env.TREND_MIN_MTF_AGREE as number,
+      trendMinCategoryConfirmed: env.TREND_MIN_CATEGORY_CONFIRMED as number,
       topGainersLimit: env.TOP_GAINERS_LIMIT as number,
       refreshInterval: env.REFRESH_INTERVAL as number,
       retryLimit: env.RETRY_LIMIT as number,

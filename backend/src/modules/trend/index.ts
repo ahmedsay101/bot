@@ -27,3 +27,22 @@ export {
   type TrendDetectionView,
   type MultiTrendSignals,
 } from './TrendDetector';
+
+export {
+  evaluateTrendConfirmation,
+  DEFAULT_TREND_ENGINE_CONFIG,
+  toLegacyCompatible,
+  type TrendConfirmation,
+  type TrendEngineConfig,
+  type TrendDecision,
+  type MarketRegime,
+  type TfKey,
+} from './trendEngine';
+
+export {
+  buildHistoricalRecord,
+  calibrateConfidence,
+  DEFAULT_FORWARD_HORIZONS,
+  type HistoricalSignalRecord,
+  type CalibrationBucket,
+} from './historicalValidation';

@@ -1,5 +1,5 @@
 /**
- * Candidate scan ranking + eligibility (full top-gainer list already analyzed).
+ * Candidate scan ranking + eligibility (selective TRADE gate).
  */
 import {
   isEligibleForTraderCreation,
@@ -16,8 +16,8 @@ function view(partial: Partial<TrendDetectionView> & { symbol: string }): TrendD
     strength: 'NONE',
     status: 'NO_TREND',
     score: 0,
-    maxScore: 7,
-    requiredScore: 6,
+    maxScore: 100,
+    requiredScore: 85,
     confidence: 0,
     signals: {
       emaAlignment: false,
@@ -42,90 +42,113 @@ function view(partial: Partial<TrendDetectionView> & { symbol: string }): TrendD
     adx: 0,
     evaluatedAt: now,
     timestamp: now,
+    decision: 'NO_TRADE',
+    regime: 'UNCERTAIN',
+    confidenceScore: 0,
+    rejectionReasons: [],
+    efficiencyRatio: 0,
+    relativeVolume: 0,
+    reversalRisk: 100,
+    distanceToResistanceATR: 0,
+    distanceToSupportATR: 0,
+    mtfAligned: 0,
+    mtfTotal: 4,
+    plusDi: 0,
+    minusDi: 0,
+    atrPercent: 0,
+    trendAge: 'UNKNOWN',
+    reasons: [],
     ...partial,
   };
+}
+
+function tradeView(partial: Partial<TrendDetectionView> & { symbol: string }): TrendDetectionView {
+  return view({
+    decision: 'TRADE',
+    regime: 'STRONG_TREND',
+    confirmed: true,
+    strength: 'STRONG',
+    status: 'STRONG_CONFIRMED',
+    confidenceScore: 90,
+    score: 90,
+    requiredScore: 85,
+    confidence: 0.9,
+    adx: 35,
+    efficiencyRatio: 0.7,
+    mtfAligned: 4,
+    rejectionReasons: [],
+    ...partial,
+  });
 }
 
 describe('candidateScan', () => {
   const occupied = new Set<string>();
   const maxAgeMs = 300_000;
 
-  it('rejects weak/moderate/unconfirmed', () => {
+  it('rejects weak/moderate/unconfirmed / NO_TRADE', () => {
     expect(isEligibleForTraderCreation(
-      view({ symbol: 'A', strength: 'WEAK', confirmed: false, score: 4 }),
+      view({ symbol: 'A', strength: 'WEAK', confirmed: false, score: 40 }),
       { occupiedSymbols: occupied, maxAgeMs },
     )).toBe(false);
     expect(isEligibleForTraderCreation(
-      view({ symbol: 'B', strength: 'MODERATE', confirmed: false, score: 5 }),
+      view({
+        symbol: 'B',
+        strength: 'STRONG',
+        confirmed: true,
+        decision: 'NO_TRADE',
+        regime: 'STRONG_TREND',
+        confidenceScore: 90,
+      }),
       { occupiedSymbols: occupied, maxAgeMs },
     )).toBe(false);
   });
 
-  it('accepts only STRONG confirmed fresh non-occupied', () => {
+  it('accepts only TRADE + STRONG_TREND + confidence', () => {
     expect(isEligibleForTraderCreation(
-      view({
-        symbol: 'ETHUSDT',
-        strength: 'STRONG',
-        confirmed: true,
-        status: 'STRONG_CONFIRMED',
-        score: 7,
-        confidence: 1,
-        adx: 35,
-      }),
+      tradeView({ symbol: 'ETHUSDT' }),
       { occupiedSymbols: occupied, maxAgeMs },
     )).toBe(true);
 
     expect(isEligibleForTraderCreation(
-      view({
-        symbol: 'ETHUSDT',
-        strength: 'STRONG',
-        confirmed: true,
-        status: 'STRONG_CONFIRMED',
-        score: 7,
-      }),
+      tradeView({ symbol: 'ETHUSDT' }),
       { occupiedSymbols: new Set(['ETHUSDT']), maxAgeMs },
+    )).toBe(false);
+
+    expect(isEligibleForTraderCreation(
+      tradeView({ symbol: 'X', confidenceScore: 80, requiredScore: 85 }),
+      { occupiedSymbols: occupied, maxAgeMs },
     )).toBe(false);
   });
 
   it('rejects stale results', () => {
     expect(isEligibleForTraderCreation(
-      view({
+      tradeView({
         symbol: 'X',
-        strength: 'STRONG',
-        confirmed: true,
-        status: 'STRONG_CONFIRMED',
-        score: 7,
         evaluatedAt: Date.now() - 400_000,
       }),
       { occupiedSymbols: occupied, maxAgeMs: 300_000 },
     )).toBe(false);
   });
 
-  it('ranks by score then ADX over 24h gain', () => {
+  it('ranks by confidence then efficiency over 24h gain', () => {
     const results = [
-      view({
+      tradeView({
         symbol: 'BTCUSDT',
-        strength: 'STRONG',
-        confirmed: true,
-        status: 'STRONG_CONFIRMED',
-        score: 6,
-        confidence: 6 / 7,
+        confidenceScore: 86,
+        efficiencyRatio: 0.5,
         adx: 32,
       }),
-      view({
+      tradeView({
         symbol: 'ETHUSDT',
-        strength: 'STRONG',
-        confirmed: true,
-        status: 'STRONG_CONFIRMED',
-        score: 7,
-        confidence: 1,
+        confidenceScore: 93,
+        efficiencyRatio: 0.8,
         adx: 38,
       }),
       view({
         symbol: 'SOLUSDT',
         strength: 'MODERATE',
         confirmed: false,
-        score: 5,
+        score: 50,
       }),
     ];
     const gain = new Map([
@@ -138,13 +161,12 @@ describe('candidateScan', () => {
       maxAgeMs,
     });
     expect(ranked.map((r) => r.symbol)).toEqual(['ETHUSDT', 'BTCUSDT']);
-    // ETH ranks first despite lower 24h gain
     expect(ranked[0]!.gainRank).toBe(2);
   });
 
   it('summarizeScan counts strengths', () => {
     const s = summarizeScan([
-      view({ symbol: 'a', strength: 'STRONG', status: 'STRONG_CONFIRMED' }),
+      tradeView({ symbol: 'a' }),
       view({ symbol: 'b', strength: 'MODERATE', status: 'MODERATE' }),
       view({ symbol: 'c', strength: 'WEAK', status: 'WEAK' }),
       view({ symbol: 'd', strength: 'NONE', status: 'ERROR' }),
@@ -153,6 +175,7 @@ describe('candidateScan', () => {
     expect(s).toEqual({
       analyzed: 5,
       strong: 1,
+      trade: 1,
       moderate: 1,
       weak: 1,
       none: 1,
@@ -160,18 +183,8 @@ describe('candidateScan', () => {
     });
   });
 
-  it('availableSlots caps creates conceptually', () => {
-    const strong = ['A', 'B', 'C', 'D'].map((symbol) =>
-      view({
-        symbol,
-        strength: 'STRONG',
-        confirmed: true,
-        status: 'STRONG_CONFIRMED',
-        score: 7,
-        confidence: 1,
-        adx: 40,
-      }),
-    );
+  it('availableSlots caps creates — never fills with weak signals', () => {
+    const strong = ['A', 'B', 'C', 'D'].map((symbol) => tradeView({ symbol }));
     const gain = new Map(strong.map((r, i) => [r.symbol, { priceChangePercent: '1', gainRank: i + 1 }]));
     const ranked = rankStrongCandidates(strong, gain, { occupiedSymbols: new Set(['A']), maxAgeMs });
     const availableSlots = 2;

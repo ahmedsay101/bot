@@ -245,6 +245,18 @@ export interface TrendCandidate {
   gainRank?: number;
   evaluatedAt?: number;
   timestamp?: number;
+  decision?: 'TRADE' | 'NO_TRADE' | string;
+  regime?: string;
+  confidenceScore?: number;
+  rejectionReasons?: string[];
+  efficiencyRatio?: number;
+  relativeVolume?: number;
+  reversalRisk?: number;
+  distanceToResistanceATR?: number;
+  distanceToSupportATR?: number;
+  mtfAligned?: number;
+  mtfTotal?: number;
+  reasons?: string[];
 }
 
 export interface GridTrendView {
@@ -260,6 +272,16 @@ export interface GridTrendView {
   multiSignals?: Record<string, boolean>;
   timeframe?: string;
   confirmationTimeframe?: string;
+  decision?: string;
+  regime?: string;
+  confidenceScore?: number;
+  efficiencyRatio?: number;
+  relativeVolume?: number;
+  reversalRisk?: number;
+  distanceToResistanceATR?: number;
+  mtfAligned?: number;
+  mtfTotal?: number;
+  reasons?: string[];
 }
 
 export interface GridLevelView {
