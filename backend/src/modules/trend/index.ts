@@ -32,6 +32,7 @@ export {
   evaluateTrendConfirmation,
   DEFAULT_TREND_ENGINE_CONFIG,
   toLegacyCompatible,
+  isTradeableRegime,
   type TrendConfirmation,
   type TrendEngineConfig,
   type TrendDecision,

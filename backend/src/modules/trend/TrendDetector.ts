@@ -303,7 +303,7 @@ export class TrendDetector {
         {
           ...cfg.engine,
           minConfidence: 40,
-          minCategoryConfirmed: 2,
+          minCoreConfirmed: 2,
           minMtfAgree: 2,
           require4h1hAgree: false,
           maxReversalRisk: 90,

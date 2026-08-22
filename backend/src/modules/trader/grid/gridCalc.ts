@@ -161,6 +161,56 @@ export function calcGridTriggerPrice(
   return px;
 }
 
+/**
+ * Destruction threshold ONE grid-spacing % beyond the final LONG trigger.
+ * upperDestroy = lastLongLevel × (1 + spacingPercent/100)
+ * Trader stays alive while price <= threshold; destroy when price > threshold.
+ */
+export function getUpperGridExhaustionPrice(
+  lastLongLevel: string | Decimal,
+  gridSpacingPercent: string | number,
+): Decimal {
+  const last = new Decimal(lastLongLevel);
+  const pct = new Decimal(gridSpacingPercent).div(100);
+  return last.mul(new Decimal(1).plus(pct));
+}
+
+/**
+ * Destruction threshold ONE grid-spacing % beyond the final SHORT trigger.
+ * lowerDestroy = lastShortLevel × (1 - spacingPercent/100)
+ * Trader stays alive while price >= threshold; destroy when price < threshold.
+ */
+export function getLowerGridExhaustionPrice(
+  lastShortLevel: string | Decimal,
+  gridSpacingPercent: string | number,
+): Decimal {
+  const last = new Decimal(lastShortLevel);
+  const pct = new Decimal(gridSpacingPercent).div(100);
+  const out = last.mul(new Decimal(1).minus(pct));
+  if (out.lte(0)) {
+    throw new Error(`Lower exhaustion non-positive for last=${last.toFixed()} spacing=${gridSpacingPercent}`);
+  }
+  return out;
+}
+
+/** Strict `>` — exact upper threshold keeps trader alive. */
+export function isPricePastUpperExhaustion(
+  price: string | Decimal,
+  lastLongLevel: string | Decimal,
+  gridSpacingPercent: string | number,
+): boolean {
+  return new Decimal(price).gt(getUpperGridExhaustionPrice(lastLongLevel, gridSpacingPercent));
+}
+
+/** Strict `<` — exact lower threshold keeps trader alive. */
+export function isPricePastLowerExhaustion(
+  price: string | Decimal,
+  lastShortLevel: string | Decimal,
+  gridSpacingPercent: string | number,
+): boolean {
+  return new Decimal(price).lt(getLowerGridExhaustionPrice(lastShortLevel, gridSpacingPercent));
+}
+
 export function calcGridLimitPrice(
   triggerPrice: string,
   direction: GridDirection,

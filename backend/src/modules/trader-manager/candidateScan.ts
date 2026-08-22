@@ -3,6 +3,7 @@
  * Trend quality > 24h gain rank. Never manufacture signals to fill slots.
  */
 import type { TrendDetectionView } from '../trend/TrendDetector';
+import { isTradeableRegime } from '../trend/trendEngine';
 
 export interface RankedCandidate extends TrendDetectionView {
   priceChangePercent: string;
@@ -22,7 +23,7 @@ export function isEligibleForTraderCreation(
   if (view.decision !== 'TRADE') return false;
   if (!view.confirmed) return false;
   if (view.strength !== 'STRONG') return false;
-  if (view.regime !== 'STRONG_TREND') return false;
+  if (!isTradeableRegime(view.regime)) return false;
   if (view.status === 'ERROR') return false;
   if (view.direction === 'NONE') return false;
   if (view.confidenceScore < view.requiredScore) return false;
@@ -57,7 +58,10 @@ export function rankStrongCandidates(
   }
 
   eligible.sort((a, b) => {
+    // Prefer STRONG_TREND slightly over DEVELOPING when confidence ties
+    const regimeRank = (r: string) => (r === 'STRONG_TREND' ? 2 : r === 'DEVELOPING_STRONG_TREND' ? 1 : 0);
     if (b.confidenceScore !== a.confidenceScore) return b.confidenceScore - a.confidenceScore;
+    if (regimeRank(b.regime) !== regimeRank(a.regime)) return regimeRank(b.regime) - regimeRank(a.regime);
     if (b.efficiencyRatio !== a.efficiencyRatio) return b.efficiencyRatio - a.efficiencyRatio;
     if (b.mtfAligned !== a.mtfAligned) return b.mtfAligned - a.mtfAligned;
     if (b.adx !== a.adx) return b.adx - a.adx;
@@ -70,27 +74,48 @@ export function rankStrongCandidates(
 export function summarizeScan(results: TrendDetectionView[]): {
   analyzed: number;
   strong: number;
+  developingStrong: number;
   trade: number;
   moderate: number;
   weak: number;
   none: number;
   errors: number;
+  noTrade: number;
+  eligible: number;
 } {
   let strong = 0;
+  let developingStrong = 0;
   let trade = 0;
   let moderate = 0;
   let weak = 0;
   let none = 0;
   let errors = 0;
+  let noTrade = 0;
+  let eligible = 0;
   for (const r of results) {
     if (r.status === 'ERROR') errors++;
-    else if (r.decision === 'TRADE') {
+    if (r.decision === 'TRADE') {
       trade++;
-      strong++;
-    } else if (r.strength === 'STRONG') strong++;
-    else if (r.strength === 'MODERATE') moderate++;
+      eligible++;
+    } else {
+      noTrade++;
+    }
+    if (r.regime === 'STRONG_TREND') strong++;
+    else if (r.regime === 'DEVELOPING_STRONG_TREND') developingStrong++;
+    else if (r.strength === 'MODERATE' || r.regime === 'WEAK_TREND') moderate++;
     else if (r.strength === 'WEAK') weak++;
-    else none++;
+    else if (r.decision !== 'TRADE' && r.status !== 'ERROR') none++;
   }
-  return { analyzed: results.length, strong, trade, moderate, weak, none, errors };
+  return {
+    analyzed: results.length,
+    strong,
+    developingStrong,
+    trade,
+    moderate,
+    weak,
+    none,
+    errors,
+    noTrade,
+    eligible,
+  };
 }

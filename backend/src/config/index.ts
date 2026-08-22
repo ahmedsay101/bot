@@ -74,6 +74,9 @@ interface AppConfig {
     trendMaxReversalRisk: number;
     trendMinMtfAgree: number;
     trendMinCategoryConfirmed: number;
+    trendMinCoreConfirmed: number;
+    trendDevelopingStrongEnabled: boolean;
+    trendStrongRegimeEnabled: boolean;
     topGainersLimit: number;
     refreshInterval: number;
     retryLimit: number;
@@ -128,9 +131,9 @@ const schema = Joi.object({
   TREND_EMA_FAST: Joi.number().integer().min(2).max(500).default(20),
   TREND_EMA_SLOW: Joi.number().integer().min(3).max(500).default(50),
   TREND_ADX_PERIOD: Joi.number().integer().min(2).max(100).default(14),
-  TREND_MIN_ADX: Joi.number().min(0).max(100).default(25),
+  TREND_MIN_ADX: Joi.number().min(0).max(100).default(24),
   TREND_STRONG_ADX: Joi.number().min(0).max(100).default(30),
-  TREND_VOLUME_MULTIPLIER: Joi.number().min(0).default(1.2),
+  TREND_VOLUME_MULTIPLIER: Joi.number().min(0).default(1.1),
   TREND_MIN_CONFIRMATION_SCORE: Joi.number().integer().min(1).max(6).default(4),
   TREND_STRONG_MIN_SCORE: Joi.number().integer().min(1).max(7).default(6),
   TREND_ROC_PERIOD: Joi.number().integer().min(1).max(100).default(10),
@@ -138,12 +141,15 @@ const schema = Joi.object({
   TREND_ANALYSIS_CONCURRENCY: Joi.number().integer().min(1).max(20).default(5),
   TREND_RESULT_CACHE_SECONDS: Joi.number().integer().min(0).max(600).default(60),
   TREND_RESULT_MAX_AGE_SECONDS: Joi.number().integer().min(30).max(3600).default(300),
-  TREND_MIN_STRONG_CONFIDENCE: Joi.number().integer().min(50).max(100).default(85),
-  TREND_MIN_EFFICIENCY: Joi.number().min(0.05).max(1).default(0.35),
-  TREND_MIN_ROOM_ATR: Joi.number().min(0).max(20).default(1.2),
-  TREND_MAX_REVERSAL_RISK: Joi.number().min(0).max(100).default(55),
-  TREND_MIN_MTF_AGREE: Joi.number().integer().min(2).max(4).default(3),
-  TREND_MIN_CATEGORY_CONFIRMED: Joi.number().integer().min(3).max(11).default(5),
+  TREND_MIN_STRONG_CONFIDENCE: Joi.number().integer().min(50).max(100).default(78),
+  TREND_MIN_EFFICIENCY: Joi.number().min(0.05).max(1).default(0.48),
+  TREND_MIN_ROOM_ATR: Joi.number().min(0).max(20).default(1.0),
+  TREND_MAX_REVERSAL_RISK: Joi.number().min(0).max(100).default(75),
+  TREND_MIN_MTF_AGREE: Joi.number().integer().min(1).max(4).default(2),
+  TREND_MIN_CATEGORY_CONFIRMED: Joi.number().integer().min(2).max(11).default(3),
+  TREND_MIN_CORE_CONFIRMED: Joi.number().integer().min(2).max(4).default(3),
+  TREND_DEVELOPING_STRONG_ENABLED: Joi.boolean().default(true),
+  TREND_STRONG_REGIME_ENABLED: Joi.boolean().default(true),
   TOP_GAINERS_LIMIT: Joi.number().integer().min(1).max(200).default(50),
   REFRESH_INTERVAL: Joi.number().integer().min(5000).default(60000),
   RETRY_LIMIT: Joi.number().integer().min(1).max(20).default(5),
@@ -234,6 +240,9 @@ function loadConfig(): AppConfig {
       trendMaxReversalRisk: env.TREND_MAX_REVERSAL_RISK as number,
       trendMinMtfAgree: env.TREND_MIN_MTF_AGREE as number,
       trendMinCategoryConfirmed: env.TREND_MIN_CATEGORY_CONFIRMED as number,
+      trendMinCoreConfirmed: env.TREND_MIN_CORE_CONFIRMED as number,
+      trendDevelopingStrongEnabled: env.TREND_DEVELOPING_STRONG_ENABLED as boolean,
+      trendStrongRegimeEnabled: env.TREND_STRONG_REGIME_ENABLED as boolean,
       topGainersLimit: env.TOP_GAINERS_LIMIT as number,
       refreshInterval: env.REFRESH_INTERVAL as number,
       retryLimit: env.RETRY_LIMIT as number,

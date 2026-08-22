@@ -3,7 +3,8 @@
  * - Independent LONG/SHORT capital pools (50/50); margins L/triangular(N) of side pool
  * - No position TP/SL; PENDING → ACTIVE (filled) until trader exit
  * - Many simultaneous opens allowed (capital reserved so sum ≤ side pool)
- * - Destroy only on GRID_EXHAUSTED (N ACTIVE on one side) or MAX_LIFETIME
+ * - GRID_EXHAUSTED when a side is fully ACTIVE and price passes final level
+ *   by one additional configured grid spacing (strict > upper / < lower)
  */
 import { EventEmitter } from 'events';
 import { v4 as uuidv4 } from 'uuid';
@@ -31,6 +32,10 @@ import {
   resolveGridDistanceAbs,
   sideCapitalFromTrader,
   levelAllocationFraction,
+  getUpperGridExhaustionPrice,
+  getLowerGridExhaustionPrice,
+  isPricePastUpperExhaustion,
+  isPricePastLowerExhaustion,
   type GridLevelPlan,
 } from './gridCalc';
 import {
@@ -310,6 +315,7 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
     await this.setStatus('ACTIVE');
     this.scheduleLifetimeEnd();
     this.emitSnapshot();
+    this.logGridExhaustionBounds();
     await this.tryActivateNextLevel();
     log.info('[LIFECYCLE] GRID_ACTIVE', {
       traderId: this.id,
@@ -471,6 +477,10 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
       longOpen: this.countSideActive('LONG'),
       shortOpen: this.countSideActive('SHORT'),
     });
+    this.logGridExhaustionBounds();
+    if (this.status === 'ACTIVE' && !this.exiting) {
+      this.checkBufferedGridExhaustion();
+    }
   }
 
   async resumeCompleting(): Promise<void> {
@@ -488,6 +498,7 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
       void this.beginExit('MAX_LIFETIME');
       return;
     }
+    if (this.checkBufferedGridExhaustion()) return;
     void this.tryActivateNextLevel();
   }
 
@@ -732,6 +743,15 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
         longActive,
         shortActive,
         trend: this.trendSnapshot,
+        ...(() => {
+          const b = this.getExhaustionBounds();
+          return {
+            lastLongLevel: b.lastLong,
+            lastShortLevel: b.lastShort,
+            upperDestroyPrice: b.upperDestroy,
+            lowerDestroyPrice: b.lowerDestroy,
+          };
+        })(),
       } as any,
     };
 
@@ -744,6 +764,111 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
     return [...this.levels.values()].filter(
       (l) => l.plan.direction === direction && isLevelExhaustionCounted(l.status),
     ).length;
+  }
+
+  /** Highest LONG / lowest SHORT trigger prices (final grid levels). */
+  private getFinalGridTriggers(): { lastLong: string | null; lastShort: string | null } {
+    let lastLong: string | null = null;
+    let lastShort: string | null = null;
+    let maxLongL = -1;
+    let maxShortL = -1;
+    for (const l of this.levels.values()) {
+      if (l.plan.direction === 'LONG' && l.plan.level > maxLongL) {
+        maxLongL = l.plan.level;
+        lastLong = l.plan.triggerPrice;
+      }
+      if (l.plan.direction === 'SHORT' && l.plan.level > maxShortL) {
+        maxShortL = l.plan.level;
+        lastShort = l.plan.triggerPrice;
+      }
+    }
+    return { lastLong, lastShort };
+  }
+
+  private getExhaustionBounds(): {
+    lastLong: string | null;
+    lastShort: string | null;
+    upperDestroy: string | null;
+    lowerDestroy: string | null;
+  } {
+    const { lastLong, lastShort } = this.getFinalGridTriggers();
+    return {
+      lastLong,
+      lastShort,
+      upperDestroy: lastLong != null
+        ? getUpperGridExhaustionPrice(lastLong, this.distancePercent).toFixed(8)
+        : null,
+      lowerDestroy: lastShort != null
+        ? getLowerGridExhaustionPrice(lastShort, this.distancePercent).toFixed(8)
+        : null,
+    };
+  }
+
+  private logGridExhaustionBounds(): void {
+    const b = this.getExhaustionBounds();
+    log.info('[LIFECYCLE] GRID_CONFIGURATION', {
+      traderId: this.id,
+      symbol: this.symbol,
+      startPrice: this.startPrice,
+      gridSpacingPercent: this.distancePercent,
+      lastLongLevel: b.lastLong,
+      upperDestructionThreshold: b.upperDestroy,
+      lastShortLevel: b.lastShort,
+      lowerDestructionThreshold: b.lowerDestroy,
+    });
+  }
+
+  /**
+   * GRID_EXHAUSTED only after a side is fully ACTIVE and price passes
+   * finalLevel × (1 ± spacing%). Exact threshold keeps trader alive (strict >/&lt;).
+   * @returns true if exit was started
+   */
+  private checkBufferedGridExhaustion(): boolean {
+    if (this.exiting || this.isDestroyed || this.status !== 'ACTIVE') return false;
+    const price = this.markPrice;
+    if (price == null || price === '') return false;
+
+    const { lastLong, lastShort } = this.getFinalGridTriggers();
+    const longFull = this.countSideActive('LONG') >= this.levelsPerSide;
+    const shortFull = this.countSideActive('SHORT') >= this.levelsPerSide;
+
+    if (longFull && lastLong != null && isPricePastUpperExhaustion(price, lastLong, this.distancePercent)) {
+      const threshold = getUpperGridExhaustionPrice(lastLong, this.distancePercent);
+      const last = new Decimal(lastLong);
+      const px = new Decimal(price);
+      const beyondPct = last.isZero() ? new Decimal(0) : px.minus(last).div(last).mul(100);
+      log.info('[LIFECYCLE] GRID_EXHAUSTED', {
+        traderId: this.id,
+        symbol: this.symbol,
+        side: 'LONG',
+        lastGridLevel: lastLong,
+        destructionThreshold: threshold.toFixed(8),
+        currentPrice: price,
+        distanceBeyondGridPercent: beyondPct.toFixed(4),
+      });
+      void this.beginExit('GRID_EXHAUSTED');
+      return true;
+    }
+
+    if (shortFull && lastShort != null && isPricePastLowerExhaustion(price, lastShort, this.distancePercent)) {
+      const threshold = getLowerGridExhaustionPrice(lastShort, this.distancePercent);
+      const last = new Decimal(lastShort);
+      const px = new Decimal(price);
+      const beyondPct = last.isZero() ? new Decimal(0) : last.minus(px).div(last).mul(100);
+      log.info('[LIFECYCLE] GRID_EXHAUSTED', {
+        traderId: this.id,
+        symbol: this.symbol,
+        side: 'SHORT',
+        lastGridLevel: lastShort,
+        destructionThreshold: threshold.toFixed(8),
+        currentPrice: price,
+        distanceBeyondGridPercent: beyondPct.toFixed(4),
+      });
+      void this.beginExit('GRID_EXHAUSTED');
+      return true;
+    }
+
+    return false;
   }
 
   private sideCapital(direction: TradeSide): Decimal {
@@ -1050,13 +1175,8 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
     this.recomputeUnrealized();
     this.emitSnapshot();
 
-    if (
-      this.countSideActive('LONG') >= this.levelsPerSide
-      || this.countSideActive('SHORT') >= this.levelsPerSide
-    ) {
-      await this.beginExit('GRID_EXHAUSTED');
-      return;
-    }
+    // Final level ACTIVE ≠ destroy — wait until price passes one spacing buffer.
+    if (this.checkBufferedGridExhaustion()) return;
 
     await this.tryActivateNextLevel();
   }

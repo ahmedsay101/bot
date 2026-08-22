@@ -88,15 +88,20 @@ export class TraderManager extends EventEmitter {
       ...DEFAULT_TREND_DETECTOR_CONFIG.engine,
       minConfidence: traderConfig.trendMinStrongConfidence ?? DEFAULT_TREND_DETECTOR_CONFIG.engine.minConfidence,
       minAdx: traderConfig.trendMinAdx ?? DEFAULT_TREND_DETECTOR_CONFIG.engine.minAdx,
+      strongAdx: traderConfig.trendStrongAdx ?? DEFAULT_TREND_DETECTOR_CONFIG.engine.strongAdx,
       minEfficiency: traderConfig.trendMinEfficiency ?? DEFAULT_TREND_DETECTOR_CONFIG.engine.minEfficiency,
       minTrendRoomAtr: traderConfig.trendMinRoomAtr ?? DEFAULT_TREND_DETECTOR_CONFIG.engine.minTrendRoomAtr,
       maxReversalRisk: traderConfig.trendMaxReversalRisk ?? DEFAULT_TREND_DETECTOR_CONFIG.engine.maxReversalRisk,
       minRelativeVolume:
         traderConfig.trendVolumeMultiplier ?? DEFAULT_TREND_DETECTOR_CONFIG.engine.minRelativeVolume,
       minMtfAgree: traderConfig.trendMinMtfAgree ?? DEFAULT_TREND_DETECTOR_CONFIG.engine.minMtfAgree,
-      minCategoryConfirmed:
-        traderConfig.trendMinCategoryConfirmed ?? DEFAULT_TREND_DETECTOR_CONFIG.engine.minCategoryConfirmed,
+      minCoreConfirmed:
+        traderConfig.trendMinCoreConfirmed
+        ?? traderConfig.trendMinCategoryConfirmed
+        ?? DEFAULT_TREND_DETECTOR_CONFIG.engine.minCoreConfirmed,
       adxPeriod: traderConfig.trendAdxPeriod ?? DEFAULT_TREND_DETECTOR_CONFIG.engine.adxPeriod,
+      allowDevelopingStrong: traderConfig.trendDevelopingStrongEnabled !== false,
+      allowStrongTrend: traderConfig.trendStrongRegimeEnabled !== false,
     };
     this.trendDetector = new TrendDetector({
       getKlines: (symbol, interval, limit) => this.binanceClient.getKlines(symbol, interval, limit),
@@ -645,7 +650,13 @@ export class TraderManager extends EventEmitter {
       const summary = summarizeScan(trendResults);
       log.info('[LIFECYCLE] TOP_GAINER_TREND_SCAN', {
         candidates: symbols.length,
-        ...summary,
+        strong: summary.strong,
+        developingStrong: summary.developingStrong,
+        moderate: summary.moderate,
+        weak: summary.weak,
+        noTrade: summary.noTrade,
+        eligible: summary.eligible,
+        errors: summary.errors,
         availableSlots,
         durationMs: Date.now() - scanStarted,
         occupied: occupied.size,
@@ -678,6 +689,8 @@ export class TraderManager extends EventEmitter {
           availableSlots,
           scanned: symbols.length,
           strong: summary.strong,
+          developingStrong: summary.developingStrong,
+          eligible: summary.eligible,
         });
         return;
       }
@@ -718,8 +731,7 @@ export class TraderManager extends EventEmitter {
   }
 
   /**
-   * Hard gate inside create path: TRADE + STRONG_TREND + confidence + fresh.
-   * Score alone cannot override these checks.
+   * Hard gate: TRADE + tradeable regime + confidence + fresh.
    */
   private assertStrongTrendCandidate(candidate: TrendDetectionView): void {
     if (this.traderConfig.trendDetectionEnabled === false) return;
@@ -728,7 +740,7 @@ export class TraderManager extends EventEmitter {
         `Trend gate rejected ${candidate.symbol}: decision=${candidate.decision} reasons=${(candidate.rejectionReasons ?? []).join('; ')}`,
       );
     }
-    if (candidate.regime !== 'STRONG_TREND') {
+    if (candidate.regime !== 'STRONG_TREND' && candidate.regime !== 'DEVELOPING_STRONG_TREND') {
       throw new Error(`Trend gate rejected ${candidate.symbol}: regime=${candidate.regime}`);
     }
     if (!candidate.confirmed || candidate.strength !== 'STRONG') {

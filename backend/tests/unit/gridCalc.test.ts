@@ -12,8 +12,10 @@ import {
   sizeLevelPosition,
   triangularWeight,
   sideCapitalFromTrader,
-  resolveGridDistanceAbs,
-  inferGridDistanceAbsFromTriggers,
+  getUpperGridExhaustionPrice,
+  getLowerGridExhaustionPrice,
+  isPricePastUpperExhaustion,
+  isPricePastLowerExhaustion,
 } from '../../src/modules/trader/grid/gridCalc';
 import type { SymbolInfo } from '../../src/types';
 
@@ -105,5 +107,59 @@ describe('gridCalc — side pools + triangular normalization', () => {
   it('ascending weights', () => {
     expect(levelWeight(1, 10)).toBe(1);
     expect(levelWeight(10, 10)).toBe(10);
+  });
+});
+
+describe('grid exhaustion buffer (one spacing beyond final level)', () => {
+  it('1%: last long 110 → destroy above 111.10; last short 90 → destroy below 89.10', () => {
+    expect(getUpperGridExhaustionPrice('110', '1').toFixed(2)).toBe('111.10');
+    expect(getLowerGridExhaustionPrice('90', '1').toFixed(2)).toBe('89.10');
+  });
+
+  it('2% and 5% scale with configured spacing (not hardcoded)', () => {
+    expect(getUpperGridExhaustionPrice('110', '2').toFixed(2)).toBe('112.20');
+    expect(getLowerGridExhaustionPrice('90', '2').toFixed(2)).toBe('88.20');
+    expect(getUpperGridExhaustionPrice('110', '5').toFixed(2)).toBe('115.50');
+    expect(getLowerGridExhaustionPrice('90', '5').toFixed(2)).toBe('85.50');
+  });
+
+  it('strict boundary: exact threshold keeps trader alive', () => {
+    expect(isPricePastUpperExhaustion('111.10', '110', '1')).toBe(false);
+    expect(isPricePastUpperExhaustion('111.11', '110', '1')).toBe(true);
+    expect(isPricePastUpperExhaustion('110', '110', '1')).toBe(false);
+    expect(isPricePastUpperExhaustion('110.50', '110', '1')).toBe(false);
+    expect(isPricePastLowerExhaustion('89.10', '90', '1')).toBe(false);
+    expect(isPricePastLowerExhaustion('89.09', '90', '1')).toBe(true);
+    expect(isPricePastLowerExhaustion('90', '90', '1')).toBe(false);
+    expect(isPricePastLowerExhaustion('89.50', '90', '1')).toBe(false);
+  });
+
+  it('buffer equals exactly one configured spacing percent of last level', () => {
+    for (const pct of ['1', '2', '5']) {
+      const lastLong = new Decimal('110');
+      const lastShort = new Decimal('90');
+      const up = getUpperGridExhaustionPrice(lastLong, pct);
+      const lo = getLowerGridExhaustionPrice(lastShort, pct);
+      const d = new Decimal(pct).div(100);
+      expect(up.toFixed(8)).toBe(lastLong.mul(new Decimal(1).plus(d)).toFixed(8));
+      expect(lo.toFixed(8)).toBe(lastShort.mul(new Decimal(1).minus(d)).toFixed(8));
+    }
+  });
+
+  it('does not invent extra grid levels in buildGridPlan', () => {
+    const plan = buildGridPlan({
+      startPrice: '100',
+      traderAllocation: '1000',
+      leverage: 10,
+      levelsPerSide: 10,
+      distancePercent: 1,
+      symbolInfo: info,
+    });
+    expect(plan.levels).toHaveLength(20);
+    const lastLong = plan.levels.find((l) => l.direction === 'LONG' && l.level === 10)!;
+    expect(parseFloat(lastLong.triggerPrice)).toBeCloseTo(110, 2);
+    expect(getUpperGridExhaustionPrice(lastLong.triggerPrice, plan.distancePercent).toFixed(2)).toBe(
+      getUpperGridExhaustionPrice(lastLong.triggerPrice, '1').toFixed(2),
+    );
   });
 });

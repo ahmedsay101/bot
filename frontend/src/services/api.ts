@@ -333,6 +333,14 @@ export interface GridTraderView {
   shortSideUsed?: string;
   longActive?: number;
   shortActive?: number;
+  /** Final LONG trigger (not a destruction threshold). */
+  lastLongLevel?: string | null;
+  /** Final SHORT trigger (not a destruction threshold). */
+  lastShortLevel?: string | null;
+  /** Destroy when mark > this (lastLong × (1 + spacing%)). */
+  upperDestroyPrice?: string | null;
+  /** Destroy when mark < this (lastShort × (1 - spacing%)). */
+  lowerDestroyPrice?: string | null;
   trend?: GridTrendView;
   /** Deprecated — no trader TP exit in hold-to-exhaustion */
   traderTpTarget?: string;

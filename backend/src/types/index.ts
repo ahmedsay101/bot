@@ -153,6 +153,9 @@ export interface TraderConfig {
   trendMaxReversalRisk?: number;
   trendMinMtfAgree?: number;
   trendMinCategoryConfirmed?: number;
+  trendMinCoreConfirmed?: number;
+  trendDevelopingStrongEnabled?: boolean;
+  trendStrongRegimeEnabled?: boolean;
   /** Max symbols from 24h tickers to trend-scan (default 50). */
   topGainersLimit?: number;
   refreshInterval: number;
@@ -341,6 +344,14 @@ export interface GridTraderView {
   shortSideUsed?: string;
   longActive?: number;
   shortActive?: number;
+  /** Final LONG trigger price (not the destroy threshold). */
+  lastLongLevel?: string | null;
+  /** Final SHORT trigger price (not the destroy threshold). */
+  lastShortLevel?: string | null;
+  /** Destroy when mark > this = lastLong × (1 + spacing%). */
+  upperDestroyPrice?: string | null;
+  /** Destroy when mark < this = lastShort × (1 - spacing%). */
+  lowerDestroyPrice?: string | null;
   trend?: {
     symbol: string;
     direction: string;

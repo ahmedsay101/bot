@@ -201,20 +201,55 @@ describe('Hold-to-exhaustion GridDirectionalTrader', () => {
     trader.destroy();
   });
 
-  it('GRID_EXHAUSTED when all LONG levels ACTIVE', async () => {
+  it('GRID_EXHAUSTED only after final level + one spacing buffer', async () => {
     const trader = await boot({
       ...baseConfig,
       gridLevelsPerSide: 3,
       gridDistancePercent: '5',
     });
-    // Activate L1, L2, L3
+    // L1=105, L2=110, L3=115; upper destroy = 115 * 1.05 = 120.75
+    const g0 = trader.toSummary().grid!;
+    expect(parseFloat(g0.lastLongLevel!)).toBeCloseTo(115, 1);
+    expect(parseFloat(g0.upperDestroyPrice!)).toBeCloseTo(120.75, 2);
+
     await tick('105', trader, 800);
     await tick('110', trader, 800);
     await tick('115', trader, 1000);
+    await wait(500);
+    // Final level ACTIVE — still alive (buffer)
+    expect(trader.getStatus()).toBe('ACTIVE');
+    expect(trader.toSummary().grid!.exitReason).toBeNull();
+    expect(trader.toSummary().grid!.longActive).toBe(3);
+
+    await tick('120', trader, 700); // below 120.75
+    expect(trader.getStatus()).toBe('ACTIVE');
+
+    await tick('120.75', trader, 700); // exact threshold — alive (strict >)
+    expect(trader.getStatus()).toBe('ACTIVE');
+
+    await tick('120.76', trader, 1000); // past buffer
     await wait(800);
     expect(trader.getStatus()).toBe('COMPLETED');
     expect(trader.toSummary().grid!.exitReason).toBe('GRID_EXHAUSTED');
     expect(trader.getOpenLegCount()).toBe(0);
+  });
+
+  it('price gap across upper buffer still exhausts', async () => {
+    const trader = await boot({
+      ...baseConfig,
+      gridLevelsPerSide: 3,
+      gridDistancePercent: '5',
+    });
+    await tick('105', trader, 700);
+    await tick('110', trader, 700);
+    await tick('115', trader, 900);
+    await wait(400);
+    expect(trader.getStatus()).toBe('ACTIVE');
+    // Jump past 120.75 in one update
+    await tick('130', trader, 1000);
+    await wait(600);
+    expect(trader.getStatus()).toBe('COMPLETED');
+    expect(trader.toSummary().grid!.exitReason).toBe('GRID_EXHAUSTED');
   });
 
   it('MAX_LIFETIME destroys trader', async () => {

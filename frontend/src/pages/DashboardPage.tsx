@@ -561,17 +561,41 @@ function GridTraderCard({
                 EXIT CONDITIONS
               </Typography>
               <Typography variant="body2" sx={{ fontSize: 13, mt: 1, color: 'text.secondary' }}>
-                Trader exits when one side has all levels activated or lifetime expires.
+                After a side is fully ACTIVE, destroy only when price passes the final level by one grid spacing ({grid.distancePercent}%).
               </Typography>
               <Stack spacing={0.75} sx={{ mt: 1.25 }}>
                 <Typography variant="body2" sx={{ fontSize: 13 }}>
                   1. Max lifetime ({formatDuration(stats.remainingMs)} left)
                 </Typography>
                 <Typography variant="body2" sx={{ fontSize: 13 }}>
-                  2. Grid exhaustion: either side {n}/{n} ACTIVE
+                  2. Grid exhaustion buffer (side {n}/{n} ACTIVE, then beyond last level)
                   {' '}(L {longActive}/{n} · S {shortActive}/{n})
                 </Typography>
               </Stack>
+              {(grid.lastLongLevel != null || grid.lastShortLevel != null) && (
+                <Box sx={{ mt: 1.25, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1 }}>
+                  <Box>
+                    <Typography variant="caption" color="text.secondary" display="block">LONG last level</Typography>
+                    <Typography variant="body2" fontFamily="monospace" fontWeight={700}>
+                      ${grid.lastLongLevel != null ? parseFloat(grid.lastLongLevel).toFixed(2) : '—'}
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.5 }}>Destroy above</Typography>
+                    <Typography variant="body2" fontFamily="monospace" fontWeight={700} sx={{ color: LONG }}>
+                      ${grid.upperDestroyPrice != null ? parseFloat(grid.upperDestroyPrice).toFixed(2) : '—'}
+                    </Typography>
+                  </Box>
+                  <Box>
+                    <Typography variant="caption" color="text.secondary" display="block">SHORT last level</Typography>
+                    <Typography variant="body2" fontFamily="monospace" fontWeight={700}>
+                      ${grid.lastShortLevel != null ? parseFloat(grid.lastShortLevel).toFixed(2) : '—'}
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.5 }}>Destroy below</Typography>
+                    <Typography variant="body2" fontFamily="monospace" fontWeight={700} sx={{ color: SHORT }}>
+                      ${grid.lowerDestroyPrice != null ? parseFloat(grid.lowerDestroyPrice).toFixed(2) : '—'}
+                    </Typography>
+                  </Box>
+                </Box>
+              )}
               <Divider sx={{ my: 1.25, borderColor: BORDER }} />
               <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1 }}>
                 <Stat label="Opened" value={String(stats.positionsOpened)} />
@@ -847,7 +871,7 @@ export function DashboardPage(): React.ReactElement {
                             sx={{ fontSize: 9, fontWeight: 700, color: decision === 'TRADE' ? BULL : 'text.secondary' }}
                           >
                             {decision === 'TRADE'
-                              ? (active ? 'TRADER ACTIVE' : 'TRADE')
+                              ? (active ? 'TRADER ACTIVE' : 'ELIGIBLE')
                               : 'NO TRADE'}
                           </Typography>
                         </Box>
