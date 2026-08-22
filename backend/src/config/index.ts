@@ -52,6 +52,23 @@ interface AppConfig {
     /** Percent points, e.g. '10' = 10%. */
     traderTakeProfitPercent: string;
     traderMaxLifetimeHours: number;
+    trendDetectionEnabled: boolean;
+    trendPrimaryTimeframe: string;
+    trendConfirmationTimeframe: string;
+    trendEmaFast: number;
+    trendEmaSlow: number;
+    trendAdxPeriod: number;
+    trendMinAdx: number;
+    trendStrongAdx: number;
+    trendVolumeMultiplier: number;
+    trendMinConfirmationScore: number;
+    trendStrongMinScore: number;
+    trendRocPeriod: number;
+    trendMomentumThreshold: number;
+    trendAnalysisConcurrency: number;
+    trendResultCacheSeconds: number;
+    trendResultMaxAgeSeconds: number;
+    topGainersLimit: number;
     refreshInterval: number;
     retryLimit: number;
     feeRate: string;
@@ -99,6 +116,23 @@ const schema = Joi.object({
   GRID_DISTANCE_PERCENT: Joi.string().default('2'),
   TRADER_TAKE_PROFIT_PERCENT: Joi.string().default('10'),
   TRADER_MAX_LIFETIME_HOURS: Joi.number().min(0.001).max(720).default(12),
+  TREND_DETECTION_ENABLED: Joi.boolean().default(true),
+  TREND_PRIMARY_TIMEFRAME: Joi.string().default('15m'),
+  TREND_CONFIRMATION_TIMEFRAME: Joi.string().default('1h'),
+  TREND_EMA_FAST: Joi.number().integer().min(2).max(500).default(20),
+  TREND_EMA_SLOW: Joi.number().integer().min(3).max(500).default(50),
+  TREND_ADX_PERIOD: Joi.number().integer().min(2).max(100).default(14),
+  TREND_MIN_ADX: Joi.number().min(0).max(100).default(25),
+  TREND_STRONG_ADX: Joi.number().min(0).max(100).default(30),
+  TREND_VOLUME_MULTIPLIER: Joi.number().min(0).default(1.2),
+  TREND_MIN_CONFIRMATION_SCORE: Joi.number().integer().min(1).max(6).default(4),
+  TREND_STRONG_MIN_SCORE: Joi.number().integer().min(1).max(7).default(6),
+  TREND_ROC_PERIOD: Joi.number().integer().min(1).max(100).default(10),
+  TREND_MOMENTUM_THRESHOLD: Joi.number().default(0.5),
+  TREND_ANALYSIS_CONCURRENCY: Joi.number().integer().min(1).max(20).default(5),
+  TREND_RESULT_CACHE_SECONDS: Joi.number().integer().min(0).max(600).default(60),
+  TREND_RESULT_MAX_AGE_SECONDS: Joi.number().integer().min(30).max(3600).default(300),
+  TOP_GAINERS_LIMIT: Joi.number().integer().min(1).max(200).default(50),
   REFRESH_INTERVAL: Joi.number().integer().min(5000).default(60000),
   RETRY_LIMIT: Joi.number().integer().min(1).max(20).default(5),
   FEE_RATE: Joi.string().default('0.0005'),
@@ -166,6 +200,23 @@ function loadConfig(): AppConfig {
       gridDistancePercent: env.GRID_DISTANCE_PERCENT as string,
       traderTakeProfitPercent: env.TRADER_TAKE_PROFIT_PERCENT as string,
       traderMaxLifetimeHours: env.TRADER_MAX_LIFETIME_HOURS as number,
+      trendDetectionEnabled: env.TREND_DETECTION_ENABLED as boolean,
+      trendPrimaryTimeframe: env.TREND_PRIMARY_TIMEFRAME as string,
+      trendConfirmationTimeframe: env.TREND_CONFIRMATION_TIMEFRAME as string,
+      trendEmaFast: env.TREND_EMA_FAST as number,
+      trendEmaSlow: env.TREND_EMA_SLOW as number,
+      trendAdxPeriod: env.TREND_ADX_PERIOD as number,
+      trendMinAdx: env.TREND_MIN_ADX as number,
+      trendStrongAdx: env.TREND_STRONG_ADX as number,
+      trendVolumeMultiplier: env.TREND_VOLUME_MULTIPLIER as number,
+      trendMinConfirmationScore: env.TREND_MIN_CONFIRMATION_SCORE as number,
+      trendStrongMinScore: env.TREND_STRONG_MIN_SCORE as number,
+      trendRocPeriod: env.TREND_ROC_PERIOD as number,
+      trendMomentumThreshold: env.TREND_MOMENTUM_THRESHOLD as number,
+      trendAnalysisConcurrency: env.TREND_ANALYSIS_CONCURRENCY as number,
+      trendResultCacheSeconds: env.TREND_RESULT_CACHE_SECONDS as number,
+      trendResultMaxAgeSeconds: env.TREND_RESULT_MAX_AGE_SECONDS as number,
+      topGainersLimit: env.TOP_GAINERS_LIMIT as number,
       refreshInterval: env.REFRESH_INTERVAL as number,
       retryLimit: env.RETRY_LIMIT as number,
       feeRate: (env.TAKER_FEE_RATE as string) || (env.FEE_RATE as string),

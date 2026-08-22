@@ -129,6 +129,25 @@ export interface TraderConfig {
   traderTakeProfitPercent: string;
   /** Max lifetime for grid directional traders in hours (default 12). */
   traderMaxLifetimeHours: number;
+  /** When false, skip trend filter (tests only). Default true. */
+  trendDetectionEnabled?: boolean;
+  trendPrimaryTimeframe?: string;
+  trendConfirmationTimeframe?: string;
+  trendEmaFast?: number;
+  trendEmaSlow?: number;
+  trendAdxPeriod?: number;
+  trendMinAdx?: number;
+  trendStrongAdx?: number;
+  trendVolumeMultiplier?: number;
+  trendMinConfirmationScore?: number;
+  trendStrongMinScore?: number;
+  trendRocPeriod?: number;
+  trendMomentumThreshold?: number;
+  trendAnalysisConcurrency?: number;
+  trendResultCacheSeconds?: number;
+  trendResultMaxAgeSeconds?: number;
+  /** Max symbols from 24h tickers to trend-scan (default 50). */
+  topGainersLimit?: number;
   refreshInterval: number;
   retryLimit: number;
   feeRate: string;
@@ -309,6 +328,22 @@ export interface GridTraderView {
   traderTpProgress?: string;
   /** Whether combined net PnL has reached traderTpTarget. */
   traderTpReached?: boolean;
+  longSideCapital?: string;
+  shortSideCapital?: string;
+  longSideUsed?: string;
+  shortSideUsed?: string;
+  longActive?: number;
+  shortActive?: number;
+  trend?: {
+    symbol: string;
+    direction: string;
+    confirmed: boolean;
+    score: number;
+    requiredScore: number;
+    signals?: Record<string, boolean>;
+    timeframe?: string;
+    confirmationTimeframe?: string;
+  };
 }
 
 /** Compact trader view for REST + dashboard WebSocket snapshots. */
@@ -377,6 +412,22 @@ export type DashboardEvent =
         activeTraders: number;
         maxTraders: number;
         topGainers: Ticker24h[];
+        trendCandidates?: Array<{
+          symbol: string;
+          direction: string;
+          confirmed: boolean;
+          strength?: string;
+          status?: string;
+          score: number;
+          maxScore?: number;
+          requiredScore: number;
+          confidence?: number;
+          signals?: Record<string, boolean>;
+          timeframe?: string;
+          confirmationTimeframe?: string;
+          priceChangePercent?: string;
+          gainRank?: number;
+        }>;
         tradingMode: TraderMode;
         botStatus: string;
         /** Active strategy: reversal | grid_directional */

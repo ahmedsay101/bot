@@ -217,6 +217,51 @@ export interface TraderSummary {
   grid?: GridTraderView;
 }
 
+export interface TrendSignals {
+  emaAlignment: boolean;
+  priceVsEma: boolean;
+  adxStrong: boolean;
+  momentumOk: boolean;
+  volumeConfirmed: boolean;
+}
+
+export interface TrendCandidate {
+  symbol: string;
+  direction: 'NONE' | 'BULLISH' | 'BEARISH' | string;
+  confirmed: boolean;
+  strength?: 'STRONG' | 'MODERATE' | 'WEAK' | 'NONE' | string;
+  status?: string;
+  score: number;
+  maxScore?: number;
+  requiredScore: number;
+  confidence?: number;
+  signals?: TrendSignals | Record<string, boolean>;
+  multiSignals?: Record<string, boolean>;
+  timeframe?: string;
+  confirmationTimeframe?: string;
+  confirmationConfirmed?: boolean;
+  adx?: number;
+  priceChangePercent?: string;
+  gainRank?: number;
+  evaluatedAt?: number;
+  timestamp?: number;
+}
+
+export interface GridTrendView {
+  direction: 'NONE' | 'BULLISH' | 'BEARISH' | string;
+  confirmed: boolean;
+  strength?: string;
+  status?: string;
+  score: number;
+  maxScore?: number;
+  requiredScore: number;
+  confidence?: number;
+  signals: TrendSignals | Record<string, boolean>;
+  multiSignals?: Record<string, boolean>;
+  timeframe?: string;
+  confirmationTimeframe?: string;
+}
+
 export interface GridLevelView {
   level: number;
   direction: 'LONG' | 'SHORT';
@@ -226,9 +271,11 @@ export interface GridLevelView {
   notional: string;
   leverage?: number;
   quantity: string;
+  /** PENDING | ACTIVE | CANCELLED */
   status: string;
   entryPrice: string | null;
   unrealizedPnl: string | null;
+  /** Deprecated — hold-to-exhaustion has no per-level TP/SL */
   tpPrice?: string | null;
   slPrice?: string | null;
   weight?: number;
@@ -241,6 +288,7 @@ export interface GridTraderView {
   levelsPerSide: number;
   distancePercent: string;
   takeProfitPercent: string;
+  /** ACTIVE level counts (same as longActive / shortActive). */
   longFilled: number;
   shortFilled: number;
   levels: GridLevelView[];
@@ -256,6 +304,15 @@ export interface GridTraderView {
   longOpen?: number;
   shortOpen?: number;
   capitalHistory?: Array<{ at: string; capital: string; event: string; netPnl?: string }>;
+  /** 50/50 side capital pools */
+  longSideCapital?: string;
+  shortSideCapital?: string;
+  longSideUsed?: string;
+  shortSideUsed?: string;
+  longActive?: number;
+  shortActive?: number;
+  trend?: GridTrendView;
+  /** Deprecated — no trader TP exit in hold-to-exhaustion */
   traderTpTarget?: string;
   traderTpCurrentPnl?: string;
   traderTpProgress?: string;
@@ -347,6 +404,8 @@ export interface StatsSummary {
   usedMargin?: string;
   availableMargin?: string;
   topGainers: Ticker[];
+  /** Scanned symbols with trend filter scores (creation gate). */
+  trendCandidates?: TrendCandidate[];
   totalEquity?: string;
   totalPnl?: string;
   totalRealizedPnl: string;

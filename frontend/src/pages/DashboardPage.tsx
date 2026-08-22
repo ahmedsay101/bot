@@ -11,7 +11,7 @@ import {
   useEmergencyStop,
 } from '../hooks/useQueries';
 import { useSystemStore } from '../stores/systemStore';
-import type { TraderSummary, GridTraderView } from '../services/api';
+import type { TraderSummary, GridTraderView, TrendCandidate, GridTrendView } from '../services/api';
 
 const LONG = '#3dd68c';
 const SHORT = '#ff6b6b';
@@ -19,6 +19,8 @@ const MARK = '#f0c14b';
 const START = '#8ab4ff';
 const PANEL = 'rgba(18, 28, 42, 0.85)';
 const BORDER = 'rgba(120, 160, 200, 0.18)';
+const BULL = '#3dd68c';
+const BEAR = '#ff6b6b';
 
 function money(v: string | number | null | undefined, dp = 2): string {
   const n = parseFloat(String(v ?? '0'));
@@ -142,6 +144,37 @@ function BalanceRangeBar({
   );
 }
 
+function trendColor(direction: string): string {
+  if (direction === 'BULLISH') return BULL;
+  if (direction === 'BEARISH') return BEAR;
+  return 'text.secondary';
+}
+
+function TrendBadge({ trend }: { trend: GridTrendView | TrendCandidate }): React.ReactElement {
+  const dir = String(trend.direction ?? 'NONE').toUpperCase();
+  const max = 'maxScore' in trend && trend.maxScore != null ? trend.maxScore : trend.requiredScore;
+  const score = `${trend.score}/${max}`;
+  const strength = String(('strength' in trend && trend.strength) || (trend.confirmed ? 'STRONG' : '—')).toUpperCase();
+  const label = trend.confirmed
+    ? `${dir} ${strength} ${score}`
+    : `${dir} ${strength} ${score}`;
+  return (
+    <Chip
+      label={label}
+      size="small"
+      sx={{
+        height: 22,
+        fontWeight: 800,
+        fontSize: 11,
+        letterSpacing: 0.3,
+        bgcolor: trend.confirmed ? `${trendColor(dir)}22` : 'rgba(255,255,255,0.06)',
+        color: trendColor(dir),
+        border: `1px solid ${trend.confirmed ? trendColor(dir) : BORDER}`,
+      }}
+    />
+  );
+}
+
 type LadderRow =
   | { kind: 'level'; price: number; level: GridTraderView['levels'][0] }
   | { kind: 'start'; price: number }
@@ -172,19 +205,19 @@ function buildPriceLadder(grid: GridTraderView, markPrice: string): LadderRow[] 
 }
 
 function statusLabel(s: string): string {
-  if (s === 'TRIGGERED') return 'LIMIT LIVE';
   if (s === 'PENDING') return 'PENDING';
   if (s === 'ACTIVE') return 'ACTIVE';
-  if (s === 'FILLED') return 'FILLED';
-  if (s === 'TP_HIT') return 'TP HIT';
-  if (s === 'SL_HIT') return 'SL HIT';
   if (s === 'CANCELLED' || s === 'CANCELED') return 'CANCELLED';
+  if (s === 'TRIGGERED') return 'LIMIT LIVE';
+  if (s === 'FILLED') return 'FILLED';
   return s;
 }
 
 function GridLadder({ grid, markPrice }: { grid: GridTraderView; markPrice: string }): React.ReactElement {
   const rows = useMemo(() => buildPriceLadder(grid, markPrice), [grid, markPrice]);
   const mark = parseFloat(markPrice) || 0;
+  const longActive = grid.longActive ?? grid.longFilled;
+  const shortActive = grid.shortActive ?? grid.shortFilled;
 
   return (
     <Box>
@@ -193,7 +226,7 @@ function GridLadder({ grid, markPrice }: { grid: GridTraderView; markPrice: stri
           PRICE LADDER
         </Typography>
         <Typography variant="caption" color="text.secondary">
-          LONG {grid.longFilled}/{grid.levelsPerSide} · SHORT {grid.shortFilled}/{grid.levelsPerSide}
+          LONG {longActive}/{grid.levelsPerSide} · SHORT {shortActive}/{grid.levelsPerSide}
         </Typography>
       </Box>
       <Stack
@@ -257,7 +290,7 @@ function GridLadder({ grid, markPrice }: { grid: GridTraderView; markPrice: stri
           const l = row.level;
           const accent = l.direction === 'LONG' ? LONG : SHORT;
           const active = l.status === 'ACTIVE';
-          const done = l.status === 'TP_HIT' || l.status === 'SL_HIT';
+          const cancelled = l.status === 'CANCELLED' || l.status === 'CANCELED';
           return (
             <Box
               key={`${l.direction}-${l.level}`}
@@ -268,10 +301,10 @@ function GridLadder({ grid, markPrice }: { grid: GridTraderView; markPrice: stri
                 py: 0.55,
                 px: 1,
                 borderRadius: 1.25,
-                bgcolor: active ? `${accent}22` : done ? 'rgba(255,255,255,0.03)' : 'transparent',
+                bgcolor: active ? `${accent}22` : 'transparent',
                 border: '1px solid',
-                borderColor: active ? accent : done ? 'rgba(255,255,255,0.08)' : BORDER,
-                opacity: done || l.status === 'CANCELLED' || l.status === 'CANCELED' ? 0.55 : 1,
+                borderColor: active ? accent : BORDER,
+                opacity: cancelled ? 0.45 : 1,
               }}
             >
               <Box sx={{ width: 3, alignSelf: 'stretch', borderRadius: 99, bgcolor: accent, flexShrink: 0 }} />
@@ -279,21 +312,15 @@ function GridLadder({ grid, markPrice }: { grid: GridTraderView; markPrice: stri
                 <Typography fontFamily="monospace" fontWeight={800} sx={{ fontSize: 12 }}>
                   {l.direction} #{l.level}
                   {l.weight != null ? ` · w${l.weight}` : ''}
-                  {l.allocationPct != null
-                    ? ` · ${(parseFloat(l.allocationPct) * 100).toFixed(0)}%`
-                    : ''}
                 </Typography>
                 <Typography variant="caption" color="text.secondary" display="block" sx={{ fontSize: 10 }}>
-                  Margin {money(l.allocatedMargin)}
+                  Entry {l.entryPrice != null ? `$${px(l.entryPrice)}` : '—'}
                   {' · '}
-                  {l.leverage ?? '—'}x
+                  Margin {money(l.allocatedMargin)}
                   {' · '}
                   Notional {money(l.notional)}
                   {' · '}
                   {statusLabel(l.status)}
-                  {l.entryPrice != null ? ` · entry $${px(l.entryPrice)}` : ''}
-                  {l.tpPrice != null ? ` · TP $${px(l.tpPrice)}` : ''}
-                  {l.unrealizedPnl != null ? ` · PnL ${pnl(l.unrealizedPnl)}` : ''}
                 </Typography>
               </Box>
               <Typography fontFamily="monospace" fontWeight={700} sx={{ fontSize: 12, color: accent }}>
@@ -360,13 +387,10 @@ function GridTraderCard({
   const lifeProgress = lifetimeMs > 0
     ? Math.min(100, ((lifetimeMs - stats.remainingMs) / lifetimeMs) * 100)
     : 0;
-  const vsStart = (() => {
-    const start = parseFloat(grid.startPrice) || 0;
-    const mark = parseFloat(trader.markPrice) || 0;
-    if (start <= 0 || mark <= 0) return null;
-    return ((mark - start) / start) * 100;
-  })();
   const netPct = parseFloat(grid.profitPercent) || 0;
+  const longActive = grid.longActive ?? grid.longFilled;
+  const shortActive = grid.shortActive ?? grid.shortFilled;
+  const n = grid.levelsPerSide;
 
   return (
     <Box
@@ -388,6 +412,18 @@ function GridTraderCard({
                 {trader.symbol.replace('USDT', '')}
               </Typography>
               <Chip label={trader.status} size="small" color={trader.status === 'ACTIVE' ? 'success' : 'default'} sx={{ height: 22 }} />
+              <Chip
+                label={`${trader.leverage}x`}
+                size="small"
+                sx={{
+                  height: 22,
+                  fontWeight: 900,
+                  bgcolor: 'rgba(240, 193, 75, 0.18)',
+                  color: MARK,
+                  border: `1px solid ${MARK}`,
+                }}
+              />
+              {grid.trend != null && <TrendBadge trend={grid.trend} />}
               {gainer != null && (
                 <Chip
                   label={`#${gainerIdx + 1} · ${parseFloat(gainer.priceChangePercent).toFixed(2)}%`}
@@ -398,7 +434,7 @@ function GridTraderCard({
               )}
             </Box>
             <Typography variant="caption" color="text.secondary">
-              ≤1 LONG + ≤1 SHORT · {grid.levelsPerSide}×{grid.levelsPerSide} · {grid.distancePercent}% · {trader.leverage}x
+              Hold-to-exhaustion · {n}×{n} · {grid.distancePercent}% · two-sided pools
             </Typography>
           </Box>
           <Box sx={{ textAlign: 'right' }}>
@@ -418,12 +454,10 @@ function GridTraderCard({
                   ? [trader.currentPosition]
                   : [];
               if (positions.length === 0) return null;
-              const longOpen = grid.longOpen ?? positions.filter((p) => p.side === 'LONG').length;
-              const shortOpen = grid.shortOpen ?? positions.filter((p) => p.side === 'SHORT').length;
               return (
                 <Box sx={{ mb: 1.5 }}>
                   <Typography variant="caption" fontWeight={800} sx={{ letterSpacing: 0.8, color: 'text.secondary' }}>
-                    ACTIVE POSITIONS · L {longOpen}/1 · S {shortOpen}/1
+                    ACTIVE POSITIONS · {positions.length} open
                   </Typography>
                   {positions.map((pos) => (
                     <Box
@@ -435,16 +469,16 @@ function GridTraderCard({
                       }}
                     >
                       <Typography variant="caption" fontWeight={800} sx={{ color: pos.side === 'LONG' ? LONG : SHORT }}>
-                        {pos.side} #{pos.number}
+                        {pos.side} · Level #{pos.number}
                       </Typography>
                       <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 1, mt: 1 }}>
                         <Stat label="Entry" value={`$${px(pos.entryPrice)}`} />
                         <Stat label="Mark" value={`$${px(trader.markPrice)}`} color={MARK} />
-                        <Stat label="TP" value={`$${px(pos.tpPrice)}`} color={LONG} />
+                        <Stat label="Status" value={pos.status} />
                         <Stat label="Margin" value={money(pos.stepAmount)} />
                         <Stat label="Notional" value={money(pos.positionNotional)} />
                         <Stat
-                          label="Net uPnL"
+                          label="uPnL"
                           value={pnl(pos.netUnrealizedPnl ?? pos.unrealizedPnl)}
                           color={col(pos.netUnrealizedPnl ?? pos.unrealizedPnl)}
                         />
@@ -470,61 +504,28 @@ function GridTraderCard({
               <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1, mb: 1.25 }}>
                 <Stat label="Start" value={`$${px(grid.startPrice)}`} color={START} />
                 <Stat label="Mark" value={`$${px(trader.markPrice)}`} color={MARK} />
-                <Stat label="Initial alloc" value={money(grid.initialCapital ?? trader.capital?.traderAllocatedAmount)} />
-                <Stat label="Current capital" value={money(grid.currentCapital ?? trader.capital?.currentStepAmount)} color="#2dd4bf" />
+                <Stat label="Allocation" value={money(grid.initialCapital ?? trader.capital?.traderAllocatedAmount)} />
+                <Stat label="Leverage" value={`${trader.leverage}x`} color={MARK} />
+                <Stat label="LONG pool" value={money(grid.longSideCapital)} color={LONG} />
+                <Stat label="SHORT pool" value={money(grid.shortSideCapital)} color={SHORT} />
                 <Stat
-                  label="Equity"
-                  value={money(grid.equity ?? String(
-                    (parseFloat(grid.currentCapital ?? trader.capital?.currentStepAmount ?? '0') || 0)
-                    + (parseFloat(trader.unrealizedPnl) || 0),
-                  ))}
+                  label="LONG used"
+                  value={`${money(grid.longSideUsed)} / ${money(grid.longSideCapital)}`}
+                  color={LONG}
                 />
-                <Stat label="Open Notional" value={money(trader.capital?.positionNotional)} />
-                <Stat label="Realized" value={pnl(trader.realizedPnl)} color={col(trader.realizedPnl)} />
+                <Stat
+                  label="SHORT used"
+                  value={`${money(grid.shortSideUsed)} / ${money(grid.shortSideCapital)}`}
+                  color={SHORT}
+                />
+                <Stat label="Equity" value={money(grid.equity)} />
                 <Stat label="Unrealized" value={pnl(trader.unrealizedPnl)} color={col(trader.unrealizedPnl)} />
                 <Stat label="Net PnL" value={pnl(trader.totalPnl)} color={col(trader.totalPnl)} />
-                <Stat label="Leverage" value={`${trader.leverage}x`} />
-                <Stat
-                  label="Open"
-                  value={`${grid.activeOpenCount ?? 0} / ${grid.maxOpenPositions ?? 2}`}
-                />
-                <Stat label="Open L / S" value={`${grid.longOpen ?? 0}/1 · ${grid.shortOpen ?? 0}/1`} />
+                <Stat label="Fees" value={pnl(`-${trader.totalFees ?? stats.totalFees ?? '0'}`)} color={SHORT} />
               </Box>
 
-              <FillMeter label="LONG TP" filled={grid.longFilled} total={grid.levelsPerSide} color={LONG} />
-              <FillMeter label="SHORT TP" filled={grid.shortFilled} total={grid.levelsPerSide} color={SHORT} />
-
-              {(() => {
-                const tpTarget = parseFloat(grid.traderTpTarget ?? '0') || 0;
-                const tpCurrent = parseFloat(grid.traderTpCurrentPnl ?? '0') || 0;
-                const tpProg = Math.min(100, Math.max(0, parseFloat(grid.traderTpProgress ?? '0') || 0));
-                const tpPct = parseFloat(grid.takeProfitPercent) || 0;
-                const initial = parseFloat(grid.initialCapital ?? '0') || 0;
-                return (
-                  <Box sx={{ mt: 1.25 }}>
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.4 }}>
-                      <Typography variant="caption" color="text.secondary">Trader TP</Typography>
-                      <Typography variant="caption" fontFamily="monospace" fontWeight={800} sx={{ color: col(tpCurrent) }}>
-                        {pnl(String(tpCurrent))} / {pnl(String(tpTarget))} · {tpProg.toFixed(1)}%
-                      </Typography>
-                    </Box>
-                    <LinearProgress
-                      variant="determinate"
-                      value={tpProg}
-                      sx={{
-                        height: 8, borderRadius: 99, bgcolor: 'rgba(255,255,255,0.06)',
-                        '& .MuiLinearProgress-bar': {
-                          bgcolor: grid.traderTpReached ? LONG : '#2dd4bf',
-                          borderRadius: 99,
-                        },
-                      }}
-                    />
-                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
-                      Initial {money(String(initial))} · {tpPct}% → target {pnl(String(tpTarget))}
-                    </Typography>
-                  </Box>
-                );
-              })()}
+              <FillMeter label="LONG ACTIVE" filled={longActive} total={n} color={LONG} />
+              <FillMeter label="SHORT ACTIVE" filled={shortActive} total={n} color={SHORT} />
 
               <Box sx={{ mt: 1.25 }}>
                 <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.4 }}>
@@ -546,26 +547,25 @@ function GridTraderCard({
 
             <Box sx={{ p: 1.5, borderRadius: 2, border: `1px solid ${BORDER}`, bgcolor: 'rgba(0,0,0,0.2)' }}>
               <Typography variant="caption" fontWeight={800} color="text.secondary" sx={{ letterSpacing: 0.6 }}>
-                TRADER EXIT CONDITIONS
+                EXIT CONDITIONS
               </Typography>
-              <Stack spacing={0.75} sx={{ mt: 1 }}>
+              <Typography variant="body2" sx={{ fontSize: 13, mt: 1, color: 'text.secondary' }}>
+                Trader exits when one side has all levels activated or lifetime expires.
+              </Typography>
+              <Stack spacing={0.75} sx={{ mt: 1.25 }}>
                 <Typography variant="body2" sx={{ fontSize: 13 }}>
-                  1. Total TP: {grid.takeProfitPercent}% of initial
-                  {' '}({pnl(grid.traderTpCurrentPnl ?? '0')} / {pnl(grid.traderTpTarget ?? '0')})
+                  1. Max lifetime ({formatDuration(stats.remainingMs)} left)
                 </Typography>
                 <Typography variant="body2" sx={{ fontSize: 13 }}>
-                  2. Max lifetime ({formatDuration(stats.remainingMs)} left)
-                </Typography>
-                <Typography variant="body2" sx={{ fontSize: 13 }}>
-                  3. Grid exhausted: either side {grid.levelsPerSide}/{grid.levelsPerSide} TP
-                  {' '}(L {grid.longFilled}/{grid.levelsPerSide} · S {grid.shortFilled}/{grid.levelsPerSide})
+                  2. Grid exhaustion: either side {n}/{n} ACTIVE
+                  {' '}(L {longActive}/{n} · S {shortActive}/{n})
                 </Typography>
               </Stack>
               <Divider sx={{ my: 1.25, borderColor: BORDER }} />
               <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1 }}>
                 <Stat label="Opened" value={String(stats.positionsOpened)} />
-                <Stat label="Closed" value={String(stats.positionsClosed)} />
-                <Stat label="Fees" value={pnl(`-${trader.totalFees ?? stats.totalFees ?? '0'}`)} color={SHORT} />
+                <Stat label="Active L / S" value={`${longActive} / ${shortActive}`} />
+                <Stat label="Realized" value={pnl(trader.realizedPnl)} color={col(trader.realizedPnl)} />
                 <Stat label="Runtime" value={formatDuration(stats.runtimeMs)} />
               </Box>
             </Box>
@@ -586,7 +586,14 @@ export function DashboardPage(): React.ReactElement {
   const [confirmStop, setConfirmStop] = useState(false);
   const botStatus = summary?.botStatus;
   const gainers = summary?.topGainers ?? [];
+  const trendCandidates = summary?.trendCandidates ?? [];
+  const trendBySymbol = useMemo(() => {
+    const map = new Map<string, TrendCandidate>();
+    for (const t of trendCandidates) map.set(t.symbol, t);
+    return map;
+  }, [trendCandidates]);
   const list = traders ?? [];
+  const showSidebar = gainers.length > 0 || trendCandidates.length > 0;
 
   useEffect(() => {
     if (!confirmStop) return;
@@ -611,7 +618,7 @@ export function DashboardPage(): React.ReactElement {
             variant="overline"
             sx={{ color: '#2dd4bf', letterSpacing: 2, fontWeight: 800, display: 'block', lineHeight: 1.2 }}
           >
-            DIRECTIONAL GRID
+            HOLD-TO-EXHAUSTION GRID
           </Typography>
           <Typography variant="h4" fontWeight={900} sx={{ letterSpacing: -0.8, fontSize: { xs: '1.6rem', sm: '2rem' } }}>
             Live traders
@@ -671,7 +678,7 @@ export function DashboardPage(): React.ReactElement {
       />
 
       <Grid container spacing={2}>
-        <Grid item xs={12} lg={gainers.length > 0 ? 9 : 12}>
+        <Grid item xs={12} lg={showSidebar ? 9 : 12}>
           {list.length === 0 ? (
             <Box
               sx={{
@@ -682,7 +689,7 @@ export function DashboardPage(): React.ReactElement {
                 border: `1px dashed ${BORDER}`,
               }}
             >
-              <Typography color="text.secondary">No active traders — scanning top gainers…</Typography>
+              <Typography color="text.secondary">No active traders — scanning gainers + trend filter…</Typography>
             </Box>
           ) : (
             <Grid container spacing={2}>
@@ -695,56 +702,138 @@ export function DashboardPage(): React.ReactElement {
           )}
         </Grid>
 
-        {gainers.length > 0 && (
+        {showSidebar && (
           <Grid item xs={12} lg={3}>
-            <Box
-              sx={{
-                position: 'sticky',
-                top: 16,
-                p: 1.5,
-                borderRadius: 2.5,
-                bgcolor: PANEL,
-                border: `1px solid ${BORDER}`,
-              }}
-            >
-              <Typography variant="caption" fontWeight={800} sx={{ letterSpacing: 0.8, color: 'text.secondary', display: 'block', mb: 1 }}>
-                TOP GAINERS
-              </Typography>
-              {gainers.slice(0, 18).map((g) => {
-                const pct = parseFloat(g.priceChangePercent);
-                const active = list.some((t) => t.symbol === g.symbol);
-                return (
-                  <Box
-                    key={g.symbol}
-                    sx={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'center',
-                      py: 0.65,
-                      px: 0.75,
-                      mx: -0.75,
-                      borderRadius: 1,
-                      bgcolor: active ? 'rgba(45,212,191,0.1)' : 'transparent',
-                      borderBottom: `1px solid ${BORDER}`,
-                      '&:last-child': { borderBottom: 'none' },
-                    }}
-                  >
-                    <Box>
-                      <Typography variant="caption" fontFamily="monospace" fontWeight={700}>
-                        {g.symbol.replace('USDT', '')}
-                        {active ? ' ●' : ''}
-                      </Typography>
-                      <Typography variant="caption" color="text.secondary" display="block" sx={{ fontSize: 10 }}>
-                        ${parseFloat(g.lastPrice).toFixed(4)}
-                      </Typography>
-                    </Box>
-                    <Typography variant="caption" sx={{ color: pct >= 0 ? LONG : SHORT, fontWeight: 800 }}>
-                      {pct >= 0 ? '+' : ''}{pct.toFixed(2)}%
-                    </Typography>
-                  </Box>
-                );
-              })}
-            </Box>
+            <Stack spacing={2} sx={{ position: 'sticky', top: 16 }}>
+              {gainers.length > 0 && (
+                <Box
+                  sx={{
+                    p: 1.5,
+                    borderRadius: 2.5,
+                    bgcolor: PANEL,
+                    border: `1px solid ${BORDER}`,
+                  }}
+                >
+                  <Typography variant="caption" fontWeight={800} sx={{ letterSpacing: 0.8, color: 'text.secondary', display: 'block', mb: 1 }}>
+                    TOP GAINERS
+                  </Typography>
+                  {gainers.slice(0, 18).map((g) => {
+                    const pct = parseFloat(g.priceChangePercent);
+                    const active = list.some((t) => t.symbol === g.symbol);
+                    const trend = trendBySymbol.get(g.symbol);
+                    return (
+                      <Box
+                        key={g.symbol}
+                        sx={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          py: 0.65,
+                          px: 0.75,
+                          mx: -0.75,
+                          borderRadius: 1,
+                          bgcolor: active ? 'rgba(45,212,191,0.1)' : 'transparent',
+                          borderBottom: `1px solid ${BORDER}`,
+                          '&:last-child': { borderBottom: 'none' },
+                        }}
+                      >
+                        <Box>
+                          <Typography variant="caption" fontFamily="monospace" fontWeight={700}>
+                            {g.symbol.replace('USDT', '')}
+                            {active ? ' ●' : ''}
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary" display="block" sx={{ fontSize: 10 }}>
+                            ${parseFloat(g.lastPrice).toFixed(4)}
+                          </Typography>
+                        </Box>
+                        {trend != null ? (
+                          <Box sx={{ textAlign: 'right' }}>
+                            <Typography
+                              variant="caption"
+                              fontWeight={800}
+                              sx={{ color: trendColor(String(trend.direction)), display: 'block' }}
+                            >
+                              {String(trend.direction)} {trend.score}/{trend.requiredScore}
+                            </Typography>
+                            <Typography variant="caption" sx={{ fontSize: 9, color: trend.confirmed ? BULL : 'text.secondary' }}>
+                              {trend.confirmed ? 'CONFIRMED' : 'pending'}
+                            </Typography>
+                          </Box>
+                        ) : (
+                          <Typography variant="caption" sx={{ color: pct >= 0 ? LONG : SHORT, fontWeight: 800 }}>
+                            {pct >= 0 ? '+' : ''}{pct.toFixed(2)}%
+                          </Typography>
+                        )}
+                      </Box>
+                    );
+                  })}
+                </Box>
+              )}
+
+              {trendCandidates.length > 0 && (
+                <Box
+                  sx={{
+                    p: 1.5,
+                    borderRadius: 2.5,
+                    bgcolor: PANEL,
+                    border: `1px solid ${BORDER}`,
+                  }}
+                >
+                  <Typography variant="caption" fontWeight={800} sx={{ letterSpacing: 0.8, color: 'text.secondary', display: 'block', mb: 1 }}>
+                    TREND CANDIDATES
+                  </Typography>
+                  {trendCandidates.slice(0, 20).map((t) => {
+                    const active = list.some((tr) => tr.symbol === t.symbol);
+                    return (
+                      <Box
+                        key={t.symbol}
+                        sx={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          py: 0.65,
+                          px: 0.75,
+                          mx: -0.75,
+                          borderRadius: 1,
+                          bgcolor: t.confirmed ? 'rgba(61,214,140,0.08)' : 'transparent',
+                          borderBottom: `1px solid ${BORDER}`,
+                          '&:last-child': { borderBottom: 'none' },
+                        }}
+                      >
+                        <Box>
+                          <Typography variant="caption" fontFamily="monospace" fontWeight={700}>
+                            {t.symbol.replace('USDT', '')}
+                            {active ? ' ●' : ''}
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary" display="block" sx={{ fontSize: 10 }}>
+                            {t.timeframe ?? '—'}
+                            {t.confirmationTimeframe != null ? ` → ${t.confirmationTimeframe}` : ''}
+                          </Typography>
+                        </Box>
+                        <Box sx={{ textAlign: 'right' }}>
+                          <Typography
+                            variant="caption"
+                            fontWeight={800}
+                            sx={{ color: trendColor(String(t.direction)), display: 'block' }}
+                          >
+                            {String(t.direction)} · {String(t.strength ?? (t.confirmed ? 'STRONG' : '—'))}{' '}
+                            {t.score}/{t.maxScore ?? t.requiredScore}
+                          </Typography>
+                          <Typography
+                            variant="caption"
+                            sx={{ fontSize: 9, fontWeight: 700, color: t.confirmed ? BULL : 'text.secondary' }}
+                          >
+                            {t.confirmed
+                              ? (active ? 'TRADER ACTIVE' : 'STRONG · ELIGIBLE')
+                              : String(t.status ?? 'NOT ELIGIBLE').replace(/_/g, ' ')}
+                          </Typography>
+                        </Box>
+                      </Box>
+                    );
+                  })}
+                </Box>
+              )}
+            </Stack>
           </Grid>
         )}
       </Grid>

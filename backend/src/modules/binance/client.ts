@@ -14,6 +14,7 @@ import type {
   PositionSide,
   OrderType,
 } from '../../types';
+import type { Candle } from '../trend/trendCalc';
 
 const log = createContextLogger('BinanceClient');
 
@@ -274,6 +275,38 @@ export class BinanceClient {
       lowPrice: t.lowPrice,
       count: t.count,
     }));
+  }
+
+  /**
+   * Futures klines: GET /fapi/v1/klines
+   * Last candle is open (isClosed=false) when its closeTime is still in the future.
+   */
+  async getKlines(symbol: string, interval: string, limit = 100): Promise<Candle[]> {
+    const capped = Math.min(Math.max(1, limit), 1500);
+    const rows = await this.publicGet<
+      Array<[number, string, string, string, string, string, number, string, number, string, string, string]>
+    >('/klines', {
+      symbol,
+      interval,
+      limit: String(capped),
+    });
+
+    const now = Date.now();
+    return rows.map((r, i) => {
+      const closeTime = r[6];
+      const isLast = i === rows.length - 1;
+      const isClosed = isLast ? closeTime <= now : true;
+      return {
+        openTime: r[0],
+        open: r[1],
+        high: r[2],
+        low: r[3],
+        close: r[4],
+        volume: r[5],
+        closeTime,
+        isClosed,
+      };
+    });
   }
 
   async getMarkPrice(symbol: string): Promise<string> {

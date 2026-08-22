@@ -20,7 +20,8 @@ import type {
 import { calcTotalPnl } from '../calc/allocation';
 import { createContextLogger } from '../logger';
 import { withRetry } from '../utils/retry';
-import { selectReplacementSymbols } from './poolSelection';
+import { TrendDetector, DEFAULT_TREND_DETECTOR_CONFIG, type TrendDetectionView } from '../trend';
+import { rankStrongCandidates, summarizeScan } from './candidateScan';
 import type { PrismaClient } from '@prisma/client';
 
 const log = createContextLogger('TraderManager');
@@ -46,6 +47,9 @@ export class TraderManager extends EventEmitter {
   private traders = new Map<string, IManagedTrader>();
   private symbolToTrader = new Map<string, string>();
   private topGainers: Ticker24h[] = [];
+  private trendCandidates: TrendDetectionView[] = [];
+  private pendingTrends = new Map<string, TrendDetectionView>();
+  private trendDetector: TrendDetector;
   private refreshTimer: NodeJS.Timeout | null = null;
   private summaryTimer: NodeJS.Timeout | null = null;
   private pricePollTimer: NodeJS.Timeout | null = null;
@@ -68,6 +72,32 @@ export class TraderManager extends EventEmitter {
     private readonly accountLedger: AccountLedger,
   ) {
     super();
+    const calc = {
+      ...DEFAULT_TREND_DETECTOR_CONFIG.calc,
+      emaFast: traderConfig.trendEmaFast ?? DEFAULT_TREND_DETECTOR_CONFIG.calc.emaFast,
+      emaSlow: traderConfig.trendEmaSlow ?? DEFAULT_TREND_DETECTOR_CONFIG.calc.emaSlow,
+      adxPeriod: traderConfig.trendAdxPeriod ?? DEFAULT_TREND_DETECTOR_CONFIG.calc.adxPeriod,
+      minAdx: traderConfig.trendMinAdx ?? DEFAULT_TREND_DETECTOR_CONFIG.calc.minAdx,
+      strongAdx: traderConfig.trendStrongAdx ?? DEFAULT_TREND_DETECTOR_CONFIG.calc.strongAdx,
+      volumeMultiplier: traderConfig.trendVolumeMultiplier ?? DEFAULT_TREND_DETECTOR_CONFIG.calc.volumeMultiplier,
+      minScore: traderConfig.trendMinConfirmationScore ?? DEFAULT_TREND_DETECTOR_CONFIG.calc.minScore,
+      rocPeriod: traderConfig.trendRocPeriod ?? DEFAULT_TREND_DETECTOR_CONFIG.calc.rocPeriod,
+      momentumThreshold: traderConfig.trendMomentumThreshold ?? DEFAULT_TREND_DETECTOR_CONFIG.calc.momentumThreshold,
+    };
+    this.trendDetector = new TrendDetector({
+      getKlines: (symbol, interval, limit) => this.binanceClient.getKlines(symbol, interval, limit),
+      config: {
+        primaryTimeframe: traderConfig.trendPrimaryTimeframe ?? '15m',
+        confirmationTimeframe: traderConfig.trendConfirmationTimeframe ?? '1h',
+        candleLimit: DEFAULT_TREND_DETECTOR_CONFIG.candleLimit,
+        calc,
+        maxScore: DEFAULT_TREND_DETECTOR_CONFIG.maxScore,
+        strongMinScore: traderConfig.trendStrongMinScore ?? DEFAULT_TREND_DETECTOR_CONFIG.strongMinScore,
+        concurrency: traderConfig.trendAnalysisConcurrency ?? DEFAULT_TREND_DETECTOR_CONFIG.concurrency,
+        cacheTtlMs: (traderConfig.trendResultCacheSeconds ?? 60) * 1000,
+        maxAgeMs: (traderConfig.trendResultMaxAgeSeconds ?? 300) * 1000,
+      },
+    });
   }
 
   async start(): Promise<void> {
@@ -479,13 +509,16 @@ export class TraderManager extends EventEmitter {
 
   /**
    * SSOT for trader-pool management.
-   * maxTraders = desired active slots (NOT a ranking cutoff).
-   * Scans ranked top-gainers top→bottom, skipping occupied/invalid.
-   * On Binance ticker failure: keep current pool (no destroy / no create).
+   * 1) Fetch full top-gainers list (TOP_GAINERS_LIMIT)
+   * 2) Run trend detection on EVERY candidate (concurrency-limited)
+   * 3) Rank STRONG confirmed only
+   * 4) Create at most availableSlots traders
+   * Existing traders / price loop are unaffected (refreshInFlight only gates pool reconcile).
    */
   async reconcileTraderPool(): Promise<void> {
     if (this.isPaused || this.refreshInFlight) return;
     this.refreshInFlight = true;
+    const scanStarted = Date.now();
 
     try {
       let tickers: Ticker24h[];
@@ -504,45 +537,126 @@ export class TraderManager extends EventEmitter {
       tickers.sort(
         (a, b) => parseFloat(b.priceChangePercent) - parseFloat(a.priceChangePercent),
       );
-      this.topGainers = tickers;
+      const limit = Math.max(1, this.traderConfig.topGainersLimit ?? 50);
+      this.topGainers = tickers.slice(0, limit);
       await this.broadcastSummary(true);
 
       const occupied = new Set(this.symbolToTrader.keys());
-      const ranked = this.topGainers.map((t) => t.symbol);
-      const toCreate = selectReplacementSymbols({
-        rankedSymbols: ranked,
-        maxTraders: this.traderConfig.maxTraders,
-        occupiedSymbols: occupied,
-        blockedSymbols: new Set(),
-        isValidSymbol: (s) => this.isStructurallyValidSymbol(s),
-      });
+      const availableSlots = Math.max(0, this.traderConfig.maxTraders - occupied.size);
 
-      if (toCreate.length === 0) {
-        const slots = this.traderConfig.maxTraders - this.getOccupiedSlots();
-        if (slots > 0) {
-          log.warn(`Fewer than maxTraders eligible symbols available`, {
-            maxTraders: this.traderConfig.maxTraders,
-            occupied: this.getOccupiedSlots(),
-            slotsNeeded: slots,
-            ranked: ranked.length,
-          });
-        }
-        return;
+      const candidates = this.topGainers.filter((t) => this.isStructurallyValidSymbol(t.symbol));
+      const symbols = candidates.map((t) => t.symbol);
+      const gainBySymbol = new Map(
+        candidates.map((t, i) => [
+          t.symbol,
+          { priceChangePercent: t.priceChangePercent, gainRank: i + 1 },
+        ]),
+      );
+
+      // ALWAYS analyze the full candidate list — never stop early for maxTraders.
+      let trendResults: TrendDetectionView[];
+      if (this.traderConfig.trendDetectionEnabled === false) {
+        // Dev/test bypass only — still marks as STRONG so pipeline stays identical.
+        trendResults = symbols.map((symbol) => ({
+          symbol,
+          direction: 'BULLISH' as const,
+          confirmed: true,
+          strength: 'STRONG' as const,
+          status: 'STRONG_CONFIRMED' as const,
+          score: 7,
+          maxScore: 7,
+          requiredScore: 6,
+          confidence: 1,
+          signals: {
+            emaAlignment: true,
+            priceVsEma: true,
+            adxStrong: true,
+            diConfirms: true,
+            momentumOk: true,
+            volumeConfirmed: true,
+          },
+          multiSignals: {
+            emaPrimary: true,
+            emaConfirmation: true,
+            adx: true,
+            di: true,
+            momentum: true,
+            volume: true,
+            priceStructure: true,
+          },
+          timeframe: '15m',
+          confirmationTimeframe: '1h',
+          confirmationConfirmed: true,
+          adx: 35,
+          evaluatedAt: Date.now(),
+          timestamp: Date.now(),
+          priceChangePercent: gainBySymbol.get(symbol)?.priceChangePercent,
+          gainRank: gainBySymbol.get(symbol)?.gainRank,
+        }));
+      } else {
+        trendResults = await this.trendDetector.detectTrendForAll(symbols);
       }
 
-      log.info(`Pool reconcile: creating ${toCreate.length} traders`, {
-        symbols: toCreate,
+      // Enrich with gain metadata for dashboard
+      this.trendCandidates = trendResults.map((r) => {
+        const g = gainBySymbol.get(r.symbol);
+        return {
+          ...r,
+          priceChangePercent: g?.priceChangePercent ?? r.priceChangePercent,
+          gainRank: g?.gainRank ?? r.gainRank,
+        };
+      });
+      await this.broadcastSummary(true);
+
+      const summary = summarizeScan(trendResults);
+      log.info('[LIFECYCLE] TOP_GAINER_TREND_SCAN', {
+        candidates: symbols.length,
+        ...summary,
+        availableSlots,
+        durationMs: Date.now() - scanStarted,
         occupied: occupied.size,
         maxTraders: this.traderConfig.maxTraders,
       });
 
-      for (const symbol of toCreate) {
+      if (availableSlots <= 0) {
+        log.info('[LIFECYCLE] NO_SLOTS — scan complete, no creates', {
+          occupied: occupied.size,
+          maxTraders: this.traderConfig.maxTraders,
+        });
+        return;
+      }
+
+      const ranked = rankStrongCandidates(this.trendCandidates, gainBySymbol, {
+        occupiedSymbols: occupied,
+        pendingSymbols: new Set(this.pendingTrends.keys()),
+        maxAgeMs: this.trendDetector.config.maxAgeMs,
+      });
+
+      const toCreate = ranked.slice(0, availableSlots);
+      log.info('[LIFECYCLE] TREND_SELECTION', {
+        strongEligible: ranked.length,
+        selected: toCreate.map((c) => c.symbol),
+        scores: toCreate.map((c) => `${c.symbol}:${c.score}/${c.maxScore}`),
+      });
+
+      if (toCreate.length === 0) {
+        log.warn('[LIFECYCLE] NO_STRONG_TREND_CANDIDATES', {
+          availableSlots,
+          scanned: symbols.length,
+          strong: summary.strong,
+        });
+        return;
+      }
+
+      for (const candidate of toCreate) {
         if (this.getOccupiedSlots() >= this.traderConfig.maxTraders) break;
-        if (this.symbolToTrader.has(symbol)) continue;
+        if (this.symbolToTrader.has(candidate.symbol)) continue;
+        this.pendingTrends.set(candidate.symbol, candidate);
         try {
-          await this.createTrader(symbol);
+          await this.createTraderFromCandidate(candidate);
         } catch (err) {
-          log.error(`Failed to create trader for ${symbol}`, { error: String(err) });
+          this.pendingTrends.delete(candidate.symbol);
+          log.error(`Failed to create trader for ${candidate.symbol}`, { error: String(err) });
         }
       }
     } catch (err) {
@@ -569,6 +683,29 @@ export class TraderManager extends EventEmitter {
     return this.isStructurallyValidSymbol(symbol);
   }
 
+  /**
+   * Second safety layer: refuse create without fresh STRONG confirmed trend.
+   */
+  private assertStrongTrendCandidate(candidate: TrendDetectionView): void {
+    if (this.traderConfig.trendDetectionEnabled === false) return;
+    if (!candidate.confirmed || candidate.strength !== 'STRONG') {
+      throw new Error(
+        `Trend gate rejected ${candidate.symbol}: confirmed=${candidate.confirmed} strength=${candidate.strength}`,
+      );
+    }
+    if (!this.trendDetector.isFresh(candidate)) {
+      throw new Error(`Trend gate rejected ${candidate.symbol}: stale evaluation`);
+    }
+    if (candidate.direction === 'NONE' || candidate.status === 'ERROR') {
+      throw new Error(`Trend gate rejected ${candidate.symbol}: invalid status`);
+    }
+  }
+
+  private async createTraderFromCandidate(candidate: TrendDetectionView): Promise<void> {
+    this.assertStrongTrendCandidate(candidate);
+    await this.createTrader(candidate.symbol);
+  }
+
   private async createTrader(symbol: string): Promise<void> {
     if (this.symbolToTrader.has(symbol)) {
       log.warn(`Attempted to create duplicate trader for ${symbol}`);
@@ -579,12 +716,31 @@ export class TraderManager extends EventEmitter {
       return;
     }
 
+    const trend = this.pendingTrends.get(symbol);
+    if (trend == null) {
+      // No bypass: must have come from the scan pipeline
+      if (this.traderConfig.trendDetectionEnabled !== false) {
+        log.warn(`[LIFECYCLE] CREATE_BLOCKED_NO_TREND`, { symbol });
+        return;
+      }
+    } else {
+      try {
+        this.assertStrongTrendCandidate(trend);
+      } catch (err) {
+        log.warn(`[LIFECYCLE] CREATE_BLOCKED`, { symbol, error: String(err) });
+        this.pendingTrends.delete(symbol);
+        return;
+      }
+    }
+
     const traderId = uuidv4();
     log.info(`[LIFECYCLE] TRADER_SLOT_CREATE`, {
       traderId,
       symbol,
       occupied: this.getOccupiedSlots(),
       maxTraders: this.traderConfig.maxTraders,
+      trendStrength: trend?.strength,
+      trendScore: trend?.score,
     });
 
     const allocation = await this.accountLedger.getAllocation(
@@ -618,6 +774,12 @@ export class TraderManager extends EventEmitter {
       this.db,
       this.accountLedger,
     );
+
+    const pending = this.pendingTrends.get(symbol) ?? null;
+    this.pendingTrends.delete(symbol);
+    if (pending != null && typeof (trader as any).setTrendSnapshot === 'function') {
+      (trader as any).setTrendSnapshot(pending);
+    }
 
     this.wireTraderEvents(trader);
     this.symbolToTrader.set(symbol, traderId);
@@ -756,6 +918,7 @@ export class TraderManager extends EventEmitter {
           activeTraders: this.getOccupiedSlots(),
           maxTraders: this.traderConfig.maxTraders,
           topGainers: this.topGainers.slice(0, 20),
+          trendCandidates: this.trendCandidates as any,
           tradingMode: this.mode,
           botStatus: this.isPaused ? 'PAUSED' : this.isRunning ? 'RUNNING' : 'STOPPED',
           traderBehavior: 'grid_directional',

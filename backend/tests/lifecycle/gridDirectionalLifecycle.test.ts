@@ -1,5 +1,5 @@
 /**
- * No-SL max-2 directional grid lifecycle tests.
+ * Hold-to-exhaustion two-sided grid lifecycle tests.
  */
 import { GridDirectionalTrader } from '../../src/modules/trader/grid/GridDirectionalTrader';
 import { SimulationExecutionProvider } from '../../src/modules/execution/SimulationExecutionProvider';
@@ -7,7 +7,7 @@ import type { TraderConfig, SymbolInfo } from '../../src/types';
 import type { AccountLedger } from '../../src/modules/calc/AccountLedger';
 import Decimal from 'decimal.js';
 
-jest.setTimeout(90000);
+jest.setTimeout(120000);
 
 const symbolInfo: SymbolInfo = {
   symbol: 'BTCUSDT',
@@ -26,9 +26,9 @@ const symbolInfo: SymbolInfo = {
 
 const baseConfig: TraderConfig = {
   maxTraders: 1,
-  initialCapital: '500',
-  positionSize: '500',
-  leverage: 5,
+  initialCapital: '1000',
+  positionSize: '1000',
+  leverage: 10,
   marginMode: 'ISOLATED',
   traderLifetimeHours: 24,
   takeProfitPercent: '0.10',
@@ -41,6 +41,7 @@ const baseConfig: TraderConfig = {
   gridDistancePercent: '5',
   traderTakeProfitPercent: '999',
   traderMaxLifetimeHours: 12,
+  trendDetectionEnabled: false,
   refreshInterval: 60000,
   retryLimit: 5,
   feeRate: '0.0005',
@@ -107,12 +108,12 @@ function mockLedger(): AccountLedger {
   let balance = new Decimal(2000);
   return {
     getAllocation: async () => ({
-      totalEquity: new Decimal(500),
-      traderEquity: new Decimal(500),
-      positionAllocation: new Decimal(500),
-      positionNotional: new Decimal(2500),
+      totalEquity: new Decimal(1000),
+      traderEquity: new Decimal(1000),
+      positionAllocation: new Decimal(1000),
+      positionNotional: new Decimal(10000),
       maxTraders: 1,
-      leverage: 5,
+      leverage: 10,
     }),
     getBalance: () => balance,
     recordFee: async (fee: Decimal) => { balance = balance.minus(fee); },
@@ -122,7 +123,7 @@ function mockLedger(): AccountLedger {
   } as any;
 }
 
-describe('No-SL max-2 GridDirectionalTrader', () => {
+describe('Hold-to-exhaustion GridDirectionalTrader', () => {
   let provider: SimulationExecutionProvider;
   let db: ReturnType<typeof mockDb>;
 
@@ -151,236 +152,99 @@ describe('No-SL max-2 GridDirectionalTrader', () => {
     return trader;
   }
 
-  async function tick(price: string, trader: GridDirectionalTrader, ms = 500): Promise<void> {
+  async function tick(price: string, trader: GridDirectionalTrader, ms = 600): Promise<void> {
     provider.onPriceUpdate('BTCUSDT', price);
     trader.onPriceUpdate(price);
     await wait(ms);
   }
 
-  async function tickThroughTp(trader: GridDirectionalTrader, posNumber?: number): Promise<void> {
-    const positions = trader.toSummary().currentPositions
-      ?? (trader.toSummary().currentPosition != null ? [trader.toSummary().currentPosition!] : []);
-    const pos = posNumber != null
-      ? positions.find((p) => p.number === posNumber) ?? positions[0]
-      : positions[0];
-    expect(pos).toBeTruthy();
-    const tp = parseFloat(pos!.tpPrice);
-    const past = pos!.side === 'LONG' ? (tp + 0.05).toFixed(2) : (tp - 0.05).toFixed(2);
-    await tick(past, trader, 900);
-    await wait(300);
-  }
-
-  it('TEST 1: no SL order is created', async () => {
+  it('no TP or SL orders are created', async () => {
     const trader = await boot();
-    await tick('105', trader, 700);
+    await tick('105', trader, 800);
     const types = [...db._orders.values()].map((o: any) => o.type);
-    expect(types).toContain('TAKE_PROFIT_MARKET');
-    expect(types.some((t: string) => t === 'STOP_MARKET' && String(t).includes('SL'))).toBe(false);
-    // No STOP_MARKET exit at start — only entry STOP_MARKET/MARKET + TAKE_PROFIT_MARKET
-    const stopMarkets = [...db._orders.values()].filter((o: any) => o.type === 'STOP_MARKET');
-    for (const o of stopMarkets) {
-      expect(o.stopPrice).not.toBe('100.00'); // would be SL at start
-    }
-    const tpOnlyExits = [...db._orders.values()].filter((o: any) =>
-      String(o.clientOrderId).includes('-tp') || o.type === 'TAKE_PROFIT_MARKET' || o.type === 'TAKE_PROFIT',
-    );
-    expect(tpOnlyExits.length).toBeGreaterThanOrEqual(1);
-    const slIds = [...db._orders.values()].filter((o: any) => String(o.clientOrderId).includes('-sl'));
-    expect(slIds).toHaveLength(0);
-    trader.destroy();
-  });
-
-  it('TEST 2–3: LONG stays open when price falls through start to 95', async () => {
-    const trader = await boot();
-    await tick('105', trader, 700);
-    expect(trader.getOpenLegCount()).toBe(1);
-    await tick('100', trader, 600);
-    expect(trader.getOpenLegCount()).toBe(1);
+    expect(types.some((t: string) => t.includes('TAKE_PROFIT'))).toBe(false);
+    expect([...db._orders.values()].some((o: any) => String(o.clientOrderId).includes('-tp'))).toBe(false);
+    expect([...db._orders.values()].some((o: any) => String(o.clientOrderId).includes('-sl'))).toBe(false);
     expect(trader.getStatus()).toBe('ACTIVE');
-    await tick('95', trader, 700);
-    // LONG still open; SHORT L1 may also open (max 2)
-    const s = trader.toSummary();
-    const longs = (s.currentPositions ?? []).filter((p) => p.side === 'LONG');
-    expect(longs.length).toBe(1);
-    expect(trader.getOpenLegCount()).toBeLessThanOrEqual(2);
-    expect(trader.getStatus()).toBe('ACTIVE');
-    trader.destroy();
-  });
-
-  it('TEST 4–5: TP completes level permanently; no reopen at 105', async () => {
-    const trader = await boot();
-    await tick('105', trader, 700);
-    await tickThroughTp(trader);
-    let s = trader.toSummary();
-    expect(s.grid!.levels.find((l) => l.direction === 'LONG' && l.level === 1)?.status).toBe('TP_HIT');
-    await tick('105', trader, 700);
-    s = trader.toSummary();
-    expect(s.grid!.levels.find((l) => l.direction === 'LONG' && l.level === 1)?.status).toBe('TP_HIT');
-    const l1Active = (s.currentPositions ?? []).some((p) => p.side === 'LONG' && p.number === 1);
-    expect(l1Active).toBe(false);
-    trader.destroy();
-  });
-
-  it('TEST 6–8: one per side; same-side stack blocked; LONG+SHORT allowed', async () => {
-    const trader = await boot();
-    // Gap through L1 and L2 — only one LONG may open (per-side)
-    await tick('112', trader, 1000);
-    await wait(400);
-    expect(trader.getOpenLegCount()).toBe(1);
-    expect(trader.toSummary().grid!.longOpen).toBe(1);
-    expect(trader.toSummary().grid!.shortOpen).toBe(0);
-
-    // Drop through start — LONG stays open (no SL); SHORT may open
-    await tick('95', trader, 900);
-    await wait(400);
-    const s = trader.toSummary();
-    expect(s.grid!.longOpen).toBe(1);
-    expect(s.grid!.shortOpen).toBe(1);
-    expect(trader.getOpenLegCount()).toBe(2);
-
-    // Still cannot open a second LONG
-    await tick('112', trader, 800);
-    await wait(300);
-    expect(trader.toSummary().grid!.longOpen).toBe(1);
-    expect(trader.getOpenLegCount()).toBeLessThanOrEqual(2);
-
-    trader.destroy();
-  });
-
-  it('TEST 9–11: L1 margin ≈ 5% of capital', async () => {
-    const trader = await boot();
-    await tick('105', trader, 700);
-    const s = trader.toSummary();
-    const margin = parseFloat(s.currentPosition!.stepAmount);
-    expect(margin).toBeGreaterThan(20);
-    expect(margin).toBeLessThan(35);
-    expect(s.grid!.maxPerSide).toBe(1);
-    expect(s.grid!.longOpen).toBe(1);
-    expect(s.grid!.shortOpen).toBe(0);
-    trader.destroy();
-  });
-
-  it('§47: L4 stays open when price returns to start (no SL)', async () => {
-    const trader = await boot();
-    await tick('105', trader, 700);
-    await tickThroughTp(trader); // L1 TP → L2
-    await tickThroughTp(trader); // L2 TP → L3
-    await tickThroughTp(trader); // L3 TP → L4
-    let s = trader.toSummary();
-    expect(s.currentPosition?.number).toBe(4);
-    const capitalBefore = parseFloat(s.grid!.currentCapital!);
-    // Small early TPs — capital should still move (fees/net), not reset
-    expect(capitalBefore).not.toBe(500);
-
-    await tick('115', trader, 600);
-    await tick('110', trader, 600);
-    await tick('105', trader, 600);
-    await tick('100', trader, 700);
-    s = trader.toSummary();
-    expect(trader.getStatus()).toBe('ACTIVE');
-    const l4 = s.grid!.levels.find((l) => l.direction === 'LONG' && l.level === 4);
-    expect(l4?.status).toBe('ACTIVE');
-    expect(l4?.status).not.toBe('SL_HIT');
     expect(trader.getOpenLegCount()).toBeGreaterThanOrEqual(1);
-    trader.destroy();
-  }, 120000);
-
-  it('L1 weight is smallest; L10 is largest', async () => {
-    const trader = await boot();
-    const g = trader.toSummary().grid!;
-    const l1 = g.levels.find((l) => l.direction === 'LONG' && l.level === 1)!;
-    const l10 = g.levels.find((l) => l.direction === 'LONG' && l.level === 10)!;
-    expect(l1.weight).toBe(1);
-    expect(l10.weight).toBe(10);
+    // Position stays open — no close from price move alone
+    await tick('120', trader, 800);
+    expect(trader.getStatus()).toBe('ACTIVE');
     trader.destroy();
   });
 
-  describe('TRADER_TP restored', () => {
-    it('exposes frozen TP target from initial capital', async () => {
-      const trader = await boot({ ...baseConfig, traderTakeProfitPercent: '10' });
-      const g = trader.toSummary().grid!;
-      expect(parseFloat(g.traderTpTarget!)).toBeCloseTo(50, 4);
-      expect(g.takeProfitPercent).toBe('10');
-      await tick('105', trader, 700);
-      // Capital may change after entry fees; target stays on initial $500
-      expect(parseFloat(trader.toSummary().grid!.traderTpTarget!)).toBeCloseTo(50, 4);
-      expect(trader.getStatus()).toBe('ACTIVE');
-      trader.destroy();
-    });
+  it('side pools and multi-open: multiple LONGs can be active', async () => {
+    const trader = await boot();
+    await tick('105', trader, 700);
+    await tick('110', trader, 700);
+    await tick('115', trader, 700);
+    const g = trader.toSummary().grid!;
+    expect(parseFloat(g.longSideCapital!)).toBeCloseTo(500, 4);
+    expect(parseFloat(g.shortSideCapital!)).toBeCloseTo(500, 4);
+    expect(g.longActive ?? g.longFilled).toBeGreaterThanOrEqual(2);
+    expect(trader.getOpenLegCount()).toBeGreaterThanOrEqual(2);
+    expect(trader.getStatus()).toBe('ACTIVE');
+    trader.destroy();
+  });
 
-    it('destroys trader when combined net PnL reaches TRADER_TP', async () => {
-      let completedEvents = 0;
-      const trader = await boot({ ...baseConfig, traderTakeProfitPercent: '1' });
-      trader.on('traderEvent', (e: any) => {
-        if (e?.type === 'COMPLETED') completedEvents += 1;
-      });
-      await tick('105', trader, 700);
-      expect(trader.toSummary().grid!.traderTpReached).toBe(false);
-      await tickThroughTp(trader);
-      await wait(1200);
-      expect(trader.getStatus()).toBe('COMPLETED');
-      expect(trader.toSummary().grid!.exitReason).toBe('TRADER_TP');
-      expect(completedEvents).toBe(1);
+  it('does NOT destroy on large unrealized PnL (no trader TP)', async () => {
+    const trader = await boot({
+      ...baseConfig,
+      gridDistancePercent: '8', // L2 at 116 — keep only L1 open below that
     });
+    await tick('108', trader, 700);
+    await tick('114', trader, 700);
+    expect(trader.getOpenLegCount()).toBe(1);
+    expect(trader.getStatus()).toBe('ACTIVE');
+    expect(trader.toSummary().grid!.exitReason).toBeNull();
+    expect(parseFloat(trader.toSummary().unrealizedPnl)).toBeGreaterThan(1);
+    trader.destroy();
+  });
 
-    it('cancels pending entries and closes open legs on TRADER_TP', async () => {
-      const trader = await boot({ ...baseConfig, traderTakeProfitPercent: '10' });
-      await tick('105', trader, 700);
-      await tick('95', trader, 900);
-      await wait(400);
-      expect(trader.getOpenLegCount()).toBe(2);
-      expect(trader.getStatus()).toBe('ACTIVE');
-      // Combined path: exit closes BOTH open legs and cancels remaining PENDING
-      await (trader as any).beginExit('TRADER_TP');
-      await wait(500);
-      expect(trader.getStatus()).toBe('COMPLETED');
-      expect(trader.toSummary().grid!.exitReason).toBe('TRADER_TP');
-      expect(trader.getOpenLegCount()).toBe(0);
-      const pending = trader.toSummary().grid!.levels.filter((l) => l.status === 'PENDING');
-      expect(pending.length).toBe(0);
+  it('GRID_EXHAUSTED when all LONG levels ACTIVE', async () => {
+    const trader = await boot({
+      ...baseConfig,
+      gridLevelsPerSide: 3,
+      gridDistancePercent: '5',
     });
+    // Activate L1, L2, L3
+    await tick('105', trader, 800);
+    await tick('110', trader, 800);
+    await tick('115', trader, 1000);
+    await wait(800);
+    expect(trader.getStatus()).toBe('COMPLETED');
+    expect(trader.toSummary().grid!.exitReason).toBe('GRID_EXHAUSTED');
+    expect(trader.getOpenLegCount()).toBe(0);
+  });
 
-    it('stays ACTIVE when net PnL is below trader TP target', async () => {
-      const trader = await boot({ ...baseConfig, traderTakeProfitPercent: '10' });
-      await tick('105', trader, 700);
-      await tickThroughTp(trader);
-      await wait(400);
-      // L1 net ≈ few dollars; 10% of $500 = $50 — must remain ACTIVE
-      expect(trader.getStatus()).toBe('ACTIVE');
-      expect(trader.toSummary().grid!.traderTpReached).toBe(false);
-      expect(parseFloat(trader.toSummary().grid!.traderTpCurrentPnl!)).toBeLessThan(50);
-      trader.destroy();
+  it('MAX_LIFETIME destroys trader', async () => {
+    const trader = await boot({
+      ...baseConfig,
+      traderMaxLifetimeHours: 0.0001, // ~0.36s
     });
-
-    it('only one exit workflow when TRADER_TP and GRID_EXHAUSTED race', async () => {
-      const trader = await boot({ ...baseConfig, traderTakeProfitPercent: '999' });
-      await tick('105', trader, 500);
-      let completed = 0;
-      trader.on('traderEvent', (e: any) => {
-        if (e?.type === 'COMPLETED') completed += 1;
-      });
-      const p1 = (trader as any).beginExit('TRADER_TP');
-      const p2 = (trader as any).beginExit('GRID_EXHAUSTED');
-      const p3 = (trader as any).beginExit('MAX_LIFETIME');
-      await Promise.all([p1, p2, p3]);
-      expect(trader.toSummary().grid!.exitReason).toBe('TRADER_TP');
-      expect(completed).toBe(1);
-      expect(trader.getStatus()).toBe('COMPLETED');
-    });
-
-    it('resume during EXITING does not duplicate COMPLETED', async () => {
-      const trader = await boot({ ...baseConfig, traderTakeProfitPercent: '1' });
-      let completed = 0;
-      trader.on('traderEvent', (e: any) => {
-        if (e?.type === 'COMPLETED') completed += 1;
-      });
-      await tick('105', trader, 700);
-      await tickThroughTp(trader);
+    await tick('101', trader, 200);
+    let status = trader.getStatus();
+    for (let i = 0; i < 30 && status !== 'COMPLETED'; i++) {
       await wait(200);
-      await trader.resumeCompleting();
-      await wait(1000);
-      expect(completed).toBe(1);
-      expect(trader.toSummary().grid!.exitReason).toBe('TRADER_TP');
+      trader.onPriceUpdate('101');
+      status = trader.getStatus();
+    }
+    expect(status).toBe('COMPLETED');
+    expect(trader.toSummary().grid!.exitReason).toBe('MAX_LIFETIME');
+  });
+
+  it('exactly one COMPLETED event on exit race', async () => {
+    const trader = await boot();
+    let completed = 0;
+    trader.on('traderEvent', (e: any) => {
+      if (e?.type === 'COMPLETED') completed += 1;
     });
+    await tick('105', trader, 500);
+    await Promise.all([
+      (trader as any).beginExit('GRID_EXHAUSTED'),
+      (trader as any).beginExit('MAX_LIFETIME'),
+    ]);
+    expect(completed).toBe(1);
+    expect(trader.toSummary().grid!.exitReason).toBe('GRID_EXHAUSTED');
   });
 });
