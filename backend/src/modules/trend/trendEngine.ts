@@ -50,6 +50,26 @@ export interface CategorySignal {
   detail: string;
 }
 
+export type RejectionReasonCode =
+  | 'INSUFFICIENT_DATA'
+  | 'HTF_CONFLICT'
+  | 'NO_DIRECTION'
+  | 'HTF_ALIGNMENT_INSUFFICIENT'
+  | 'SIDEWAYS_MARKET'
+  | 'CHOPPY_MARKET'
+  | 'WEAK_TREND'
+  | 'FAILED_BREAKOUT'
+  | 'WEAK_MARKET_STRUCTURE'
+  | 'WEAK_TREND_STRENGTH'
+  | 'WEAK_MOMENTUM'
+  | 'CORE_SIGNALS_INSUFFICIENT'
+  | 'EXTREME_REVERSAL_RISK'
+  | 'INSUFFICIENT_TREND_ROOM'
+  | 'DI_NOT_DOMINANT'
+  | 'LOW_CONFIDENCE'
+  | 'API_ERROR'
+  | 'OTHER';
+
 export interface TrendConfirmation {
   symbol: string;
   timestamp: number;
@@ -91,8 +111,18 @@ export interface TrendConfirmation {
     mtfAligned: number;
     mtfTotal: number;
     weightedBias: number;
+    h4Bias: string;
+    h1Bias: string;
+    m15Bias: string;
+    m5Bias: string;
+    h4Adx: number;
+    h1Adx: number;
   };
   rejectionReasons: string[];
+  rejectionCodes: RejectionReasonCode[];
+  coreSignalsPassed: number;
+  supportingSignalsPassed: number;
+  eligible: boolean;
   evaluatedAt: number;
   /** Compatibility with existing trader gate / UI. */
   confirmed: boolean;
@@ -141,23 +171,27 @@ export interface TrendEngineConfig {
 }
 
 export const DEFAULT_TREND_ENGINE_CONFIG: TrendEngineConfig = {
-  minConfidence: 78,
-  minAdx: 24,
-  strongAdx: 30,
-  minEfficiency: 0.48,
+  // Moderate relaxation: smart + selective + realistic frequency (not paralyzed)
+  minConfidence: 72,
+  minAdx: 22,
+  strongAdx: 28,
+  /** Acceptable ER floor for scoring; chop hard-reject uses ~0.30 separately. */
+  minEfficiency: 0.45,
   minTrendRoomAtr: 1.0,
   hardBlockRoomAtr: 0.5,
   maxReversalRisk: 75,
-  minDiSeparation: 3,
+  minDiSeparation: 1,
   minMtfAgree: 2,
-  minCoreConfirmed: 3,
+  /** Prefer all 4 CORE; soft confirms make this reachable. */
+  minCoreConfirmed: 4,
   adxPeriod: 14,
   erPeriod: 20,
   volumeAvgPeriod: 20,
   minRelativeVolume: 1.1,
-  weakVolumeRatio: 0.5,
-  rsiBullMin: 52,
-  rsiBearMax: 48,
+  /** Below this → volume penalty (not hard reject). Neutral ≈ 1.0x. */
+  weakVolumeRatio: 0.7,
+  rsiBullMin: 50,
+  rsiBearMax: 50,
   rsiExhaustionHigh: 75,
   rsiExhaustionLow: 25,
   weights: { '4h': 0.35, '1h': 0.3, '15m': 0.25, '5m': 0.1 },
@@ -203,6 +237,7 @@ function noTradeResult(
   reasons: string[],
   cfg: TrendEngineConfig,
   partial?: Partial<TrendConfirmation>,
+  codes: RejectionReasonCode[] = ['OTHER'],
 ): TrendConfirmation {
   const now = Date.now();
   const base: TrendConfirmation = {
@@ -246,8 +281,18 @@ function noTradeResult(
       mtfAligned: 0,
       mtfTotal: 4,
       weightedBias: 0,
+      h4Bias: 'NONE',
+      h1Bias: 'NONE',
+      m15Bias: 'NONE',
+      m5Bias: 'NONE',
+      h4Adx: 0,
+      h1Adx: 0,
     },
     rejectionReasons: reasons,
+    rejectionCodes: codes,
+    coreSignalsPassed: 0,
+    supportingSignalsPassed: 0,
+    eligible: false,
     evaluatedAt: now,
     confirmed: false,
     strength: 'NONE',
@@ -258,7 +303,16 @@ function noTradeResult(
     signalsFlat: [],
     ...partial,
   };
-  return { ...base, ...partial, decision: 'NO_TRADE', confirmed: false, direction: partial?.direction ?? 'NONE' };
+  return {
+    ...base,
+    ...partial,
+    decision: 'NO_TRADE',
+    confirmed: false,
+    eligible: false,
+    direction: partial?.direction ?? 'NONE',
+    rejectionCodes: partial?.rejectionCodes ?? codes,
+    rejectionReasons: partial?.rejectionReasons ?? reasons,
+  };
 }
 
 function analyzeTf(candlesIn: Candle[], cfg: TrendEngineConfig): TfSnapshot | null {
@@ -311,12 +365,26 @@ function analyzeTf(candlesIn: Candle[], cfg: TrendEngineConfig): TfSnapshot | nu
   const extensionAtr = Math.abs(price - ema20) / atr;
 
   let bias: StructureBias = 'NONE';
-  const diBull = adxDi.plusDi - adxDi.minusDi >= cfg.minDiSeparation;
-  const diBear = adxDi.minusDi - adxDi.plusDi >= cfg.minDiSeparation;
-  if (structure === 'BULLISH' && (emaStackBull || diBull)) bias = 'BULLISH';
-  else if (structure === 'BEARISH' && (emaStackBear || diBear)) bias = 'BEARISH';
-  else if (emaStackBull && diBull && ema20Slope > 0.05) bias = 'BULLISH';
-  else if (emaStackBear && diBear && ema20Slope < -0.05) bias = 'BEARISH';
+  const diBull = adxDi.plusDi > adxDi.minusDi;
+  const diBear = adxDi.minusDi > adxDi.plusDi;
+  const diSep = Math.abs(adxDi.plusDi - adxDi.minusDi);
+  const priceAboveEma = price > ema20 && ema20 >= ema50;
+  const priceBelowEma = price < ema20 && ema20 <= ema50;
+  // Realistic bias: do NOT require full EMA20>50>100>200 stack (unreachable for many alts).
+  // Prefer structure, then EMA20/50 + DI, then DI+ROC.
+  if (structure === 'BULLISH' && (diBull || priceAboveEma || emaStackBull)) {
+    bias = 'BULLISH';
+  } else if (structure === 'BEARISH' && (diBear || priceBelowEma || emaStackBear)) {
+    bias = 'BEARISH';
+  } else if ((emaStackBull || priceAboveEma) && diBull && (ema20Slope > 0 || roc > 0)) {
+    bias = 'BULLISH';
+  } else if ((emaStackBear || priceBelowEma) && diBear && (ema20Slope < 0 || roc < 0)) {
+    bias = 'BEARISH';
+  } else if (diBull && diSep >= cfg.minDiSeparation && roc > 0 && price > ema20) {
+    bias = 'BULLISH';
+  } else if (diBear && diSep >= cfg.minDiSeparation && roc < 0 && price < ema20) {
+    bias = 'BEARISH';
+  }
 
   return {
     bias,
@@ -373,11 +441,15 @@ export function evaluateTrendConfirmation(
   for (const tf of tfs) {
     const raw = candlesByTf[tf];
     if (!raw || raw.length === 0) {
-      return noTradeResult(symbol, 'INSUFFICIENT_DATA', [`Missing ${tf} candles`], cfg);
+      return noTradeResult(symbol, 'INSUFFICIENT_DATA', [`Missing ${tf} candles`], cfg, undefined, [
+        'INSUFFICIENT_DATA',
+      ]);
     }
     const snap = analyzeTf(raw, cfg);
     if (!snap) {
-      return noTradeResult(symbol, 'INSUFFICIENT_DATA', [`Insufficient closed ${tf} data`], cfg);
+      return noTradeResult(symbol, 'INSUFFICIENT_DATA', [`Insufficient closed ${tf} data`], cfg, undefined, [
+        'INSUFFICIENT_DATA',
+      ]);
     }
     snaps[tf] = snap;
   }
@@ -396,8 +468,14 @@ export function evaluateTrendConfirmation(
         efficiencyRatio: primary.er,
         distanceToResistanceATR: primary.toResAtr,
         distanceToSupportATR: primary.toSupAtr,
+        h4Bias: h4.bias,
+        h1Bias: primary.bias,
+        m15Bias: m15.bias,
+        m5Bias: m5.bias,
+        h4Adx: h4.adx,
+        h1Adx: primary.adx,
       },
-    });
+    }, ['HTF_CONFLICT']);
   }
 
   // Weighted MTF bias — 5m is supporting only (cannot set/veto primary direction alone)
@@ -416,7 +494,6 @@ export function evaluateTrendConfirmation(
       htfAgreeBear += 1;
     }
   }
-  // 5m contributes lightly to score only
   if (m5.bias === 'BULLISH') weighted += cfg.weights['5m'] * 0.5;
   else if (m5.bias === 'BEARISH') weighted -= cfg.weights['5m'] * 0.5;
 
@@ -442,58 +519,94 @@ export function evaluateTrendConfirmation(
     proposed = 'BEARISH';
   }
 
+  const baseMetricsPartial = {
+    adx: primary.adx,
+    plusDi: primary.plusDi,
+    minusDi: primary.minusDi,
+    efficiencyRatio: primary.er,
+    atrPercent: primary.atrPercent,
+    relativeVolume: primary.relativeVolume,
+    mtfAligned,
+    weightedBias: weighted,
+    distanceToResistanceATR: primary.toResAtr,
+    distanceToSupportATR: primary.toSupAtr,
+    h4Bias: h4.bias,
+    h1Bias: primary.bias,
+    m15Bias: m15.bias,
+    m5Bias: m5.bias,
+    h4Adx: h4.adx,
+    h1Adx: primary.adx,
+  };
+
   // Prefer 15m agreement; count HTF trio. Do not require 5m.
-  const needHtf = cfg.minMtfAgree;
+  // When 4H+1H agree, require only 2/3 HTF (15m may be neutral).
+  const needHtf = h4h1Agree && h4.bias !== 'NONE' && primary.bias !== 'NONE'
+    ? Math.min(cfg.minMtfAgree, 2)
+    : cfg.minMtfAgree;
   if (proposed === 'NONE' || mtfAligned < needHtf || !h4h1Agree) {
     const reasonsEarly: string[] = [];
-    if (!h4h1Agree) reasonsEarly.push('4H/1H not aligned (required for TRADE)');
-    if (proposed === 'NONE') reasonsEarly.push(`Weighted bias ${weighted.toFixed(2)} insufficient`);
+    const codes: RejectionReasonCode[] = [];
+    if (!h4h1Agree) {
+      reasonsEarly.push('4H/1H not aligned (required for TRADE)');
+      codes.push('NO_DIRECTION');
+    }
+    if (proposed === 'NONE') {
+      reasonsEarly.push(`Weighted bias ${weighted.toFixed(2)} insufficient`);
+      codes.push('NO_DIRECTION');
+    }
     if (mtfAligned < needHtf) {
       reasonsEarly.push(`HTF agreement ${mtfAligned}/3 (4h/1h/15m) below minimum ${needHtf}`);
+      codes.push('HTF_ALIGNMENT_INSUFFICIENT');
     }
     return noTradeResult(
       symbol,
       mtfAligned === 0 ? 'RANGE' : 'UNCERTAIN',
       reasonsEarly,
       cfg,
-      {
-        metrics: {
-          ...noTradeResult(symbol, 'UNCERTAIN', [], cfg).metrics,
-          adx: primary.adx,
-          efficiencyRatio: primary.er,
-          mtfAligned,
-          weightedBias: weighted,
-          distanceToResistanceATR: primary.toResAtr,
-          distanceToSupportATR: primary.toSupAtr,
-        },
-      },
+      { metrics: { ...noTradeResult(symbol, 'UNCERTAIN', [], cfg).metrics, ...baseMetricsPartial } },
+      codes.length ? codes : ['NO_DIRECTION'],
     );
   }
 
-  // Stage 1 — regime (allow DEVELOPING_STRONG when ADX rising in mid band)
-  const regimeAdx = Math.min(primary.adx, h4.adx > 0 ? h4.adx : primary.adx);
-  const regimeEr = Math.min(primary.er, m15.er);
+  // Stage 1 — regime: PRIMARY (1H) ADX drives classification.
+  // Efficiency is SUPPORTING — only extreme chop hard-classifies as CHOP.
+  // 4H ADX is contextual soft evidence — do NOT require min(1H,4H).
+  const regimeAdx = primary.adx;
+  const regimeEr = primary.er;
   const adxRising = primary.adxSlope > 0;
+  const h4Supportive =
+    h4.bias === 'NONE'
+    || h4.bias === proposed
+    || h4.adx >= cfg.minAdx * 0.65;
   let regime: MarketRegime = 'UNCERTAIN';
 
-  if (
-    (proposed === 'BULLISH' && (primary.falseBull || m15.falseBull)) ||
-    (proposed === 'BEARISH' && (primary.falseBear || m15.falseBear))
-  ) {
+  // Failed breakout: hard only when PRIMARY shows false break (15m alone is supporting penalty)
+  const primaryFailedBreak =
+    (proposed === 'BULLISH' && primary.falseBull)
+    || (proposed === 'BEARISH' && primary.falseBear);
+
+  // Extreme chop / dead ADX only — ER must not gate developing trends
+  const extremeChop = regimeEr < 0.30;
+  const deadAdx = regimeAdx < 12 && !adxRising;
+
+  if (primaryFailedBreak) {
     regime = 'BREAKOUT';
-  } else if (regimeAdx < 16 || regimeEr < 0.25) {
-    regime = regimeEr < 0.25 ? 'CHOP' : 'RANGE';
-  } else if (regimeAdx < cfg.minAdx || regimeEr < cfg.minEfficiency * 0.75) {
+  } else if (deadAdx || extremeChop) {
+    regime = extremeChop ? 'CHOP' : 'RANGE';
+  } else if (regimeAdx < cfg.minAdx - 3 && !adxRising) {
+    // Far below developing floor and falling → weak
     regime = 'WEAK_TREND';
-  } else if (primary.adx >= cfg.strongAdx && regimeEr >= cfg.minEfficiency) {
+  } else if (primary.adx >= cfg.strongAdx && h4Supportive) {
     regime = 'STRONG_TREND';
   } else if (
     primary.adx >= cfg.minAdx
-    && (adxRising || primary.adx >= cfg.strongAdx - 2)
-    && regimeEr >= cfg.minEfficiency * 0.9
+    && (adxRising || primary.adx >= cfg.strongAdx - 3)
   ) {
     regime = 'DEVELOPING_STRONG_TREND';
-  } else if (primary.adx >= cfg.minAdx && regimeEr >= cfg.minEfficiency) {
+  } else if (primary.adx >= cfg.minAdx - 3 && adxRising && h4Supportive) {
+    // Early developing: ADX approaching floor and rising (e.g. 19→22→25)
+    regime = 'DEVELOPING_STRONG_TREND';
+  } else if (primary.adx >= cfg.minAdx) {
     regime = 'DEVELOPING_STRONG_TREND';
   } else {
     regime = 'WEAK_TREND';
@@ -504,61 +617,73 @@ export function evaluateTrendConfirmation(
     || (regime === 'DEVELOPING_STRONG_TREND' && cfg.allowDevelopingStrong);
 
   if (!regimeAllowed) {
+    const mapped: RejectionReasonCode =
+      regime === 'RANGE' ? 'SIDEWAYS_MARKET'
+        : regime === 'CHOP' ? 'CHOPPY_MARKET'
+          : regime === 'BREAKOUT' ? 'FAILED_BREAKOUT'
+            : 'WEAK_TREND';
     return noTradeResult(symbol, regime, [
-      `Regime=${regime} (ADX≈${regimeAdx.toFixed(1)}, ER≈${regimeEr.toFixed(2)}) — not tradeable`,
+      `Regime=${regime} (1H ADX≈${regimeAdx.toFixed(1)}, 4H ADX≈${h4.adx.toFixed(1)}, ER≈${regimeEr.toFixed(2)}) — not tradeable`,
     ], cfg, {
-      metrics: {
-        ...noTradeResult(symbol, regime, [], cfg).metrics,
-        adx: primary.adx,
-        plusDi: primary.plusDi,
-        minusDi: primary.minusDi,
-        efficiencyRatio: primary.er,
-        atrPercent: primary.atrPercent,
-        relativeVolume: primary.relativeVolume,
-        mtfAligned,
-        weightedBias: weighted,
-        distanceToResistanceATR: primary.toResAtr,
-        distanceToSupportATR: primary.toSupAtr,
-      },
-    });
+      metrics: { ...noTradeResult(symbol, regime, [], cfg).metrics, ...baseMetricsPartial },
+      strength: regime === 'WEAK_TREND' ? 'MODERATE' : 'NONE',
+    }, [mapped]);
   }
 
   // Hard rejects only (supporting signals use penalties later)
   const reasons: string[] = [];
+  const codes: RejectionReasonCode[] = [];
   const diSep = Math.abs(primary.plusDi - primary.minusDi);
   if (proposed === 'BULLISH' && primary.plusDi <= primary.minusDi) {
     reasons.push('+DI not dominant');
+    codes.push('DI_NOT_DOMINANT');
   }
   if (proposed === 'BEARISH' && primary.minusDi <= primary.plusDi) {
     reasons.push('-DI not dominant');
+    codes.push('DI_NOT_DOMINANT');
   }
-  if (proposed === 'BULLISH' && (primary.falseBull || m15.falseBull)) {
-    reasons.push('Recent false bullish breakout');
-  }
-  if (proposed === 'BEARISH' && (primary.falseBear || m15.falseBear)) {
-    reasons.push('Recent false bearish breakout');
+  if (primaryFailedBreak) {
+    reasons.push('Recent false breakout on primary TF');
+    codes.push('FAILED_BREAKOUT');
   }
   // Immediate S/R block only (hard); soft room handled via penalty
   if (proposed === 'BULLISH' && primary.toResAtr < cfg.hardBlockRoomAtr) {
     reasons.push(`Major resistance only ${primary.toResAtr.toFixed(2)} ATR away (< ${cfg.hardBlockRoomAtr})`);
+    codes.push('INSUFFICIENT_TREND_ROOM');
   }
   if (proposed === 'BEARISH' && primary.toSupAtr < cfg.hardBlockRoomAtr) {
     reasons.push(`Major support only ${primary.toSupAtr.toFixed(2)} ATR away (< ${cfg.hardBlockRoomAtr})`);
+    codes.push('INSUFFICIENT_TREND_ROOM');
   }
 
-  // Categories
+  // Categories — CORE must be reachable without perfect supporting indicators
   const marketStructure: CategorySignal = (() => {
-    const ok =
+    const strong =
       (proposed === 'BULLISH' && primary.structure === 'BULLISH' && h4.structure !== 'BEARISH') ||
       (proposed === 'BEARISH' && primary.structure === 'BEARISH' && h4.structure !== 'BULLISH');
+    // MODERATE + IMPROVING: EMA20/50 + DI + slope (no full EMA200 stack required)
+    const moderateImproving =
+      !strong &&
+      ((proposed === 'BULLISH'
+        && primary.plusDi > primary.minusDi
+        && primary.ema20 >= primary.ema50
+        && (primary.ema20Slope > 0 || primary.structure === 'BULLISH' || primary.roc > 0))
+      || (proposed === 'BEARISH'
+        && primary.minusDi > primary.plusDi
+        && primary.ema20 <= primary.ema50
+        && (primary.ema20Slope < 0 || primary.structure === 'BEARISH' || primary.roc < 0)));
     const softOk =
-      !ok &&
-      ((proposed === 'BULLISH' && primary.emaStackBull && primary.plusDi > primary.minusDi) ||
-        (proposed === 'BEARISH' && primary.emaStackBear && primary.minusDi > primary.plusDi));
+      !strong &&
+      !moderateImproving &&
+      ((proposed === 'BULLISH' && primary.plusDi > primary.minusDi && primary.price > primary.ema20)
+        || (proposed === 'BEARISH' && primary.minusDi > primary.plusDi && primary.price < primary.ema20));
+    const confirmed = strong || moderateImproving || softOk;
     return {
-      confirmed: ok || softOk,
-      score: ok ? 92 : softOk ? 72 : primary.structure === proposed ? 50 : 18,
-      detail: `1H structure=${primary.structure}, 4H=${h4.structure}${softOk ? ' (EMA+DI soft)' : ''}`,
+      confirmed,
+      score: strong ? 92 : moderateImproving ? 78 : softOk ? 62 : primary.structure === proposed ? 45 : 18,
+      detail: `1H structure=${primary.structure}, 4H=${h4.structure}${
+        strong ? '' : moderateImproving ? ' (MODERATE+IMPROVING)' : softOk ? ' (soft DI+price)' : ''
+      }`,
     };
   })();
 
@@ -569,9 +694,10 @@ export function evaluateTrendConfirmation(
     const partial =
       (proposed === 'BULLISH' && primary.ema20 > primary.ema50 && primary.ema20Slope > 0) ||
       (proposed === 'BEARISH' && primary.ema20 < primary.ema50 && primary.ema20Slope < 0);
+    // Supporting only — never required for TRADE
     return {
       confirmed: ok || partial,
-      score: ok ? 88 : partial ? 65 : 28,
+      score: ok ? 88 : partial ? 68 : 35,
       detail: `stack=${primary.emaStackBull ? 'bull' : primary.emaStackBear ? 'bear' : 'mixed'} slope=${primary.ema20Slope.toFixed(2)}`,
     };
   })();
@@ -579,14 +705,18 @@ export function evaluateTrendConfirmation(
   const trendStrength: CategorySignal = (() => {
     const rising = primary.adxSlope > 0;
     const strongEnough = primary.adx >= cfg.strongAdx;
-    const developingOk = primary.adx >= cfg.minAdx && (rising || primary.adx >= cfg.strongAdx - 3);
-    const diOk = diSep >= cfg.minDiSeparation || (diSep >= 1 && primary.adx >= cfg.strongAdx);
-    const ok = developingOk && diOk && (
-      (proposed === 'BULLISH' && primary.plusDi > primary.minusDi) ||
-      (proposed === 'BEARISH' && primary.minusDi > primary.plusDi)
+    const developingOk =
+      primary.adx >= cfg.minAdx
+      || (primary.adx >= cfg.minAdx - 3 && rising);
+    const diOk =
+      (proposed === 'BULLISH' && primary.plusDi > primary.minusDi)
+      || (proposed === 'BEARISH' && primary.minusDi > primary.plusDi);
+    const ok = developingOk && diOk;
+    let score = Math.min(
+      100,
+      (primary.adx / 40) * 60 + (rising ? 25 : strongEnough ? 14 : 6) + Math.min(15, diSep * 1.5),
     );
-    let score = Math.min(100, (primary.adx / 40) * 65 + (rising ? 22 : strongEnough ? 12 : 0) + Math.min(12, diSep));
-    if (!rising && !strongEnough) score *= 0.85;
+    if (!rising && !strongEnough) score *= 0.92;
     return {
       confirmed: ok,
       score,
@@ -605,36 +735,51 @@ export function evaluateTrendConfirmation(
       if (primary.roc < 0) votes++;
       if (primary.macdHist < 0) votes++;
     }
-    const exhausted =
-      (proposed === 'BULLISH' && primary.rsi >= cfg.rsiExhaustionHigh) ||
-      (proposed === 'BEARISH' && primary.rsi <= cfg.rsiExhaustionLow);
-    // Moderate momentum OK: 1–2 votes can confirm if structure/strength strong later
+    const rsiExt =
+      proposed === 'BULLISH'
+        ? primary.rsi
+        : 100 - primary.rsi;
+    // 65–75 normal strong-trend; 75–80 moderate penalty; >80 strong penalty
+    const exhaustedHard = rsiExt >= 80;
+    const exhaustedMod = rsiExt >= cfg.rsiExhaustionHigh && rsiExt < 80;
     const ok = votes >= 1;
+    let score = Math.min(100, votes * 30 + 15);
+    if (exhaustedHard) score = Math.max(30, score - 25);
+    else if (exhaustedMod) score = Math.max(40, score - 12);
     return {
       confirmed: ok,
-      score: exhausted ? Math.max(35, votes * 22) : Math.min(100, votes * 32 + 10),
-      detail: `votes=${votes}/3 RSI=${primary.rsi.toFixed(0)} ROC=${primary.roc.toFixed(2)} MACDh=${primary.macdHist.toFixed(4)}${exhausted ? ' EXHAUSTION_PENALTY' : ''}`,
+      score,
+      detail: `votes=${votes}/3 RSI=${primary.rsi.toFixed(0)} ROC=${primary.roc.toFixed(2)} MACDh=${primary.macdHist.toFixed(4)}${
+        exhaustedHard ? ' RSI_EXTREME' : exhaustedMod ? ' RSI_HIGH' : ''
+      }`,
     };
   })();
 
   const volume: CategorySignal = (() => {
     const rv = primary.relativeVolume;
+    // 1.0x = neutral (confirmed); ≥1.1 boost; <0.7 penalty score only
     const boost = rv >= cfg.minRelativeVolume;
     const weak = rv < cfg.weakVolumeRatio;
+    const neutral = !boost && !weak;
     return {
-      confirmed: !weak,
-      score: weak ? 15 : boost ? Math.min(100, rv * 50) : Math.min(70, 40 + rv * 25),
+      confirmed: true, // supporting — never hard-fail
+      score: weak ? 25 : boost ? Math.min(100, 55 + rv * 30) : neutral ? 55 : 45,
       detail: `relVol 1H=${rv.toFixed(2)}x 15m=${m15.relativeVolume.toFixed(2)}x${weak ? ' WEAK' : boost ? ' BOOST' : ' NEUTRAL'}`,
     };
   })();
 
   const efficiencyCat: CategorySignal = (() => {
-    const ok = primary.er >= cfg.minEfficiency;
-    const moderate = primary.er >= cfg.minEfficiency * 0.75;
+    // <0.35 strong neg · 0.35–0.45 weak · 0.45–0.55 ok · 0.55+ strong
+    const er = primary.er;
+    let score = 40;
+    if (er < 0.35) score = 15;
+    else if (er < 0.45) score = 40;
+    else if (er < 0.55) score = 65;
+    else score = Math.min(100, 70 + (er - 0.55) * 80);
     return {
-      confirmed: ok || moderate,
-      score: Math.min(100, primary.er * 130),
-      detail: `ER 1H=${primary.er.toFixed(2)} 15m=${m15.er.toFixed(2)}`,
+      confirmed: true, // supporting — never hard-fail (extreme chop already regime-gated)
+      score,
+      detail: `ER 1H=${er.toFixed(2)} 15m=${m15.er.toFixed(2)}`,
     };
   })();
 
@@ -648,26 +793,33 @@ export function evaluateTrendConfirmation(
   })();
 
   const multiTimeframe: CategorySignal = {
-    confirmed: h4h1Agree && mtfAligned >= cfg.minMtfAgree,
+    // 4H+1H required; 15m preferred; 5m never required
+    confirmed: h4h1Agree && mtfAligned >= needHtf,
     score: Math.min(
       100,
-      (h4h1Agree ? 40 : 0)
-        + mtfAligned * 18
-        + (m15.bias === proposed ? 15 : 0)
-        + (m5.bias === proposed ? 8 : m5.bias === 'NONE' ? 5 : 0)
-        + Math.abs(weighted) * 25,
+      (h4h1Agree ? 42 : 0)
+        + mtfAligned * 16
+        + (m15.bias === proposed ? 18 : m15.bias === 'NONE' ? 8 : 0)
+        + (m5.bias === proposed ? 8 : m5.bias === 'NONE' ? 6 : 0)
+        + Math.abs(weighted) * 20,
     ),
-    detail: `4H/1H aligned · HTF ${mtfAligned}/3 · 5m=${m5.bias} · w=${weighted.toFixed(2)}`,
+    detail: `4H/1H aligned · HTF ${mtfAligned}/3 (need ${needHtf}) · 5m=${m5.bias} · w=${weighted.toFixed(2)}`,
   };
 
   const breakout: CategorySignal = (() => {
-    const falseOk =
-      (proposed === 'BULLISH' && !primary.falseBull && !m15.falseBull) ||
-      (proposed === 'BEARISH' && !primary.falseBear && !m15.falseBear);
+    // Primary false break = fail; 15m-only false break = soft penalty (supporting)
+    const primaryOk = !primaryFailedBreak;
+    const m15False =
+      (proposed === 'BULLISH' && m15.falseBull)
+      || (proposed === 'BEARISH' && m15.falseBear);
     return {
-      confirmed: falseOk,
-      score: falseOk ? 80 : 12,
-      detail: falseOk ? 'No recent false breakout' : 'False breakout detected',
+      confirmed: primaryOk,
+      score: !primaryOk ? 12 : m15False ? 55 : 80,
+      detail: !primaryOk
+        ? 'Primary false breakout'
+        : m15False
+          ? '15m false-break soft penalty'
+          : 'No recent false breakout',
     };
   })();
 
@@ -708,15 +860,15 @@ export function evaluateTrendConfirmation(
     };
   })();
 
-  // Reversal / exhaustion risk (proportional)
+  // Reversal / exhaustion risk (proportional) — only >75 hard-rejects
   let reversalRisk = 0;
   if (primary.adxSlope < -2) reversalRisk += 18;
   else if (primary.adxSlope < 0) reversalRisk += 6;
-  if (
-    (proposed === 'BULLISH' && primary.rsi >= cfg.rsiExhaustionHigh) ||
-    (proposed === 'BEARISH' && primary.rsi <= cfg.rsiExhaustionLow)
-  ) {
-    reversalRisk += 18; // penalty, not auto-reject
+  {
+    const rsiExt = proposed === 'BULLISH' ? primary.rsi : 100 - primary.rsi;
+    if (rsiExt >= 80) reversalRisk += 22;
+    else if (rsiExt >= 75) reversalRisk += 12;
+    // 65–75: normal strong-trend — no reversal add
   }
   if (primary.extensionAtr > 4) reversalRisk += 22;
   else if (primary.extensionAtr > 3) reversalRisk += 14;
@@ -756,44 +908,68 @@ export function evaluateTrendConfirmation(
 
   if (reversalRisk >= cfg.maxReversalRisk) {
     reasons.push(`Reversal risk ${reversalRisk}/100 ≥ ${cfg.maxReversalRisk}`);
+    codes.push('EXTREME_REVERSAL_RISK');
     regime = 'REVERSAL_RISK';
   }
 
-  // CORE vs SUPPORTING
+  // CORE vs SUPPORTING — eligibility from CORE; supporting only score
   const core = [marketStructure, multiTimeframe, trendStrength, momentum];
+  const supporting = [volume, efficiencyCat, breakout, trendPersistence, marketContext, volatility, emaStructure];
   const coreConfirmed = core.filter((c) => c.confirmed).length;
+  const supportingConfirmed = supporting.filter((c) => c.confirmed).length;
   if (coreConfirmed < cfg.minCoreConfirmed) {
     reasons.push(`Only ${coreConfirmed}/4 CORE signals confirmed (need ${cfg.minCoreConfirmed})`);
+    codes.push('CORE_SIGNALS_INSUFFICIENT');
   }
-  // Structure remains important: reject clear structure failure
   if (!marketStructure.confirmed) {
     reasons.push('Market structure failed (CORE)');
+    codes.push('WEAK_MARKET_STRUCTURE');
   }
-  // False breakout stays hard via breakout.confirmed
-  if (!breakout.confirmed) {
+  if (!trendStrength.confirmed) {
+    reasons.push('Trend strength below developing (CORE)');
+    codes.push('WEAK_TREND_STRENGTH');
+  }
+  if (!momentum.confirmed) {
+    reasons.push('Directional momentum not confirmed (CORE)');
+    codes.push('WEAK_MOMENTUM');
+  }
+  if (!multiTimeframe.confirmed) {
+    reasons.push('Higher-timeframe alignment insufficient (CORE)');
+    codes.push('HTF_ALIGNMENT_INSUFFICIENT');
+  }
+  // False breakout hard only when primary failed (already in reasons)
+  if (!breakout.confirmed && primaryFailedBreak) {
     reasons.push('False breakout (hard reject)');
+    if (!codes.includes('FAILED_BREAKOUT')) codes.push('FAILED_BREAKOUT');
   }
 
-  // Confidence model (user weights)
-  // Structure 25, MTF 20, Strength 15, Momentum 15, Volume 8, Efficiency 7, Breakout/Persistence 5, Context 5
-  const persistenceBreakoutScore = (breakout.score * 0.5 + trendPersistence.score * 0.5);
+  // Confidence (§17): Structure 25 · MTF 20 · Strength 15 · Momentum 15 · EMA 10 · Vol 5 · ER 5 · Context/Persist 5
+  const contextPersistScore = (marketContext.score * 0.5 + trendPersistence.score * 0.5);
   let confidence =
     marketStructure.score * 0.25
     + multiTimeframe.score * 0.2
     + trendStrength.score * 0.15
     + momentum.score * 0.15
-    + volume.score * 0.08
-    + efficiencyCat.score * 0.07
-    + persistenceBreakoutScore * 0.05
-    + marketContext.score * 0.05;
+    + emaStructure.score * 0.1
+    + volume.score * 0.05
+    + efficiencyCat.score * 0.05
+    + contextPersistScore * 0.05;
 
-  // Penalties (proportional)
-  confidence -= reversalRisk * 0.15;
-  // Extension hurts less when the move is efficient (clean trend, not chop extension)
-  const extPenaltyScale = primary.er >= cfg.minEfficiency ? 0.03 : 0.08;
+  // Penalties (proportional) — supporting never hard-veto alone
+  if (reversalRisk >= 65) confidence -= reversalRisk * 0.18;
+  else if (reversalRisk >= 50) confidence -= reversalRisk * 0.12;
+  else confidence -= reversalRisk * 0.08;
+
+  const extPenaltyScale = primary.er >= 0.45 ? 0.03 : 0.07;
   confidence -= extensionRisk * extPenaltyScale;
-  if (roomAtr < cfg.minTrendRoomAtr) confidence -= supportResistanceRisk * 0.2;
-  if (primary.relativeVolume < cfg.weakVolumeRatio) confidence -= 8;
+  if (roomAtr < cfg.minTrendRoomAtr) confidence -= supportResistanceRisk * 0.18;
+  if (roomAtr < cfg.hardBlockRoomAtr * 1.2 && roomAtr >= cfg.hardBlockRoomAtr) {
+    confidence -= 6; // 0.5–~0.6 ATR: strong penalty already partly via SR risk
+  }
+  if (primary.relativeVolume < cfg.weakVolumeRatio) confidence -= 5;
+  if (primary.er < 0.35) confidence -= 8;
+  else if (primary.er < 0.45) confidence -= 3;
+  if (breakout.score < 60) confidence -= 4;
   if (market?.relativeStrength != null) {
     const rsBoost =
       proposed === 'BULLISH'
@@ -801,13 +977,17 @@ export function evaluateTrendConfirmation(
         : Math.max(-4, Math.min(6, -market.relativeStrength * 80));
     confidence += rsBoost;
   }
-  // Mild EMA contribution already in structure soft path; slight boost if full stack
   if (emaStructure.confirmed && emaStructure.score >= 80) confidence += 2;
+  // Small quality bonus when all CORE pass under a tradeable regime
+  if (coreConfirmed >= cfg.minCoreConfirmed && isTradeableRegime(regime)) {
+    confidence += regime === 'STRONG_TREND' ? 3 : 2;
+  }
 
   confidence = Math.max(0, Math.min(100, Math.round(confidence)));
 
   if (confidence < cfg.minConfidence) {
     reasons.push(`Confidence ${confidence} < minimum ${cfg.minConfidence}`);
+    codes.push('LOW_CONFIDENCE');
   }
 
   const categories = [
@@ -824,56 +1004,79 @@ export function evaluateTrendConfirmation(
     marketContext,
   ];
 
+  const fullMetrics = {
+    adx: primary.adx,
+    plusDi: primary.plusDi,
+    minusDi: primary.minusDi,
+    atrPercent: primary.atrPercent,
+    efficiencyRatio: primary.er,
+    relativeVolume: primary.relativeVolume,
+    momentum: primary.roc,
+    trendAge: primary.extensionAtr > 3 ? 'EXHAUSTED' : primary.extensionAtr > 1.5 ? 'MATURE' : 'DEVELOPING',
+    distanceToResistanceATR: primary.toResAtr,
+    distanceToSupportATR: primary.toSupAtr,
+    mtfAligned,
+    mtfTotal: 4,
+    weightedBias: weighted,
+    h4Bias: h4.bias,
+    h1Bias: primary.bias,
+    m15Bias: m15.bias,
+    m5Bias: m5.bias,
+    h4Adx: h4.adx,
+    h1Adx: primary.adx,
+  };
+
+  const signalsObj = {
+    marketStructure,
+    multiTimeframe,
+    emaStructure,
+    trendStrength,
+    momentum,
+    volume,
+    volatility,
+    efficiency: efficiencyCat,
+    breakout,
+    trendPersistence,
+    marketContext,
+  };
+
+  const riskObj = {
+    reversalRisk,
+    exhaustionRisk,
+    supportResistanceRisk,
+    extensionRisk,
+  };
+
   if (regime === 'REVERSAL_RISK' || reasons.length > 0) {
+    // Keep classified regime for diagnostics (do NOT wipe STRONG→UNCERTAIN).
     return noTradeResult(
       symbol,
-      isTradeableRegime(regime) ? 'UNCERTAIN' : regime,
+      regime,
       reasons,
       cfg,
       {
         direction: proposed,
         confidenceScore: confidence,
-        signals: {
-          marketStructure,
-          multiTimeframe,
-          emaStructure,
-          trendStrength,
-          momentum,
-          volume,
-          volatility,
-          efficiency: efficiencyCat,
-          breakout,
-          trendPersistence,
-          marketContext,
-        },
-        risk: {
-          reversalRisk,
-          exhaustionRisk,
-          supportResistanceRisk,
-          extensionRisk,
-        },
-        metrics: {
-          adx: primary.adx,
-          plusDi: primary.plusDi,
-          minusDi: primary.minusDi,
-          atrPercent: primary.atrPercent,
-          efficiencyRatio: primary.er,
-          relativeVolume: primary.relativeVolume,
-          momentum: primary.roc,
-          trendAge: primary.extensionAtr > 3 ? 'EXHAUSTED' : primary.extensionAtr > 1.5 ? 'MATURE' : 'DEVELOPING',
-          distanceToResistanceATR: primary.toResAtr,
-          distanceToSupportATR: primary.toSupAtr,
-          mtfAligned,
-          mtfTotal: 4,
-          weightedBias: weighted,
-        },
-        strength: confidence >= 60 ? 'MODERATE' : confidence >= 40 ? 'WEAK' : 'NONE',
+        signals: signalsObj,
+        risk: riskObj,
+        metrics: fullMetrics,
+        rejectionCodes: [...new Set(codes)],
+        coreSignalsPassed: coreConfirmed,
+        supportingSignalsPassed: supportingConfirmed,
+        strength: isTradeableRegime(regime)
+          ? (confidence >= 60 ? 'MODERATE' : 'WEAK')
+          : confidence >= 60
+            ? 'MODERATE'
+            : confidence >= 40
+              ? 'WEAK'
+              : 'NONE',
         score: confidence,
         maxScore: 100,
         confidence: confidence / 100,
         reasons,
         signalsFlat: categories.map((c) => c.detail),
       },
+      [...new Set(codes)],
     );
   }
 
@@ -889,41 +1092,14 @@ export function evaluateTrendConfirmation(
     regime: finalRegime,
     confidenceScore: confidence,
     minimumRequiredScore: cfg.minConfidence,
-    signals: {
-      marketStructure,
-      multiTimeframe,
-      emaStructure,
-      trendStrength,
-      momentum,
-      volume,
-      volatility,
-      efficiency: efficiencyCat,
-      breakout,
-      trendPersistence,
-      marketContext,
-    },
-    risk: {
-      reversalRisk,
-      exhaustionRisk,
-      supportResistanceRisk,
-      extensionRisk,
-    },
-    metrics: {
-      adx: primary.adx,
-      plusDi: primary.plusDi,
-      minusDi: primary.minusDi,
-      atrPercent: primary.atrPercent,
-      efficiencyRatio: primary.er,
-      relativeVolume: primary.relativeVolume,
-      momentum: primary.roc,
-      trendAge: primary.extensionAtr > 3 ? 'EXHAUSTED' : primary.extensionAtr > 1.5 ? 'MATURE' : 'DEVELOPING',
-      distanceToResistanceATR: primary.toResAtr,
-      distanceToSupportATR: primary.toSupAtr,
-      mtfAligned,
-      mtfTotal: 4,
-      weightedBias: weighted,
-    },
+    signals: signalsObj,
+    risk: riskObj,
+    metrics: fullMetrics,
     rejectionReasons: [],
+    rejectionCodes: [],
+    coreSignalsPassed: coreConfirmed,
+    supportingSignalsPassed: supportingConfirmed,
+    eligible: true,
     evaluatedAt: now,
     confirmed: true,
     strength: 'STRONG',

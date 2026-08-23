@@ -1,23 +1,24 @@
-# Balanced Selective Trend Engine
+# Balanced → Moderate Relaxation Selective Trend Engine
 
-**Date:** 2026-08-22 (relaxed)
+**Date:** 2026-08-23 (moderate)
 
-## Why zero traders before
-Required nearly all categories + confidence ≥85 + ADX/ER/volume hard gates + 3/4 MTF including 5m pressure. Supporting failures vetoed CORE-strong setups.
+## Philosophy
+CORE decides eligibility. Supporting adjusts confidence. Prefer 75–80 with imperfect supporting over waiting for rare 90+.
 
-## Balanced defaults
-| Param | Old | New |
-|-------|-----|-----|
-| minConfidence | 85 | **78** |
-| minAdx | 25 | **24** (developing); strongAdx **30** |
-| minEfficiency | 0.35 critical | **0.48** supporting |
-| maxReversalRisk | 55 | **75** |
-| minTrendRoomAtr | 1.2 hard | **1.0** soft; hard block **0.5** |
-| minMtfAgree | 3/4 | **2/3** (4h/1h/15m); 5m non-veto |
-| categories | 5/11 critical | **3/4 CORE** |
+## Thresholds
+| Param | Prior balanced | Moderate now |
+|-------|----------------|--------------|
+| minConfidence | 78 | **72** |
+| minAdx | 24 | **22** |
+| strongAdx | 30 | **28** |
+| minEfficiency | 0.48 (semi-gated) | **0.45 scoring**; chop hard &lt;0.30 |
+| weakVolume | 0.5 | **0.7** (penalty only) |
+| minCoreConfirmed | 3 | **4** (with softer confirms) |
+| maxReversalRisk | 75 | **75** |
+| hard room | 0.5 ATR | **0.5 ATR** |
 
-## Still hard-reject
-Insufficient data, API error, 4H↔1H conflict, chop/range, false breakout, reversal ≥75, S/R &lt;0.5 ATR, structure CORE fail, stale.
+## CORE
+Structure · MTF (4H/1H) · Trend strength (developing+) · Momentum (1/3 votes)
 
-## Tradeable regimes
-`STRONG_TREND` and `DEVELOPING_STRONG_TREND`
+## SUPPORTING (score only)
+Volume · Efficiency · EMA stack · Persistence · Context · Breakout quality

@@ -38,6 +38,7 @@ export {
   type TrendDecision,
   type MarketRegime,
   type TfKey,
+  type RejectionReasonCode,
 } from './trendEngine';
 
 export {

@@ -102,6 +102,16 @@ export interface TrendDetectionView {
   atrPercent: number;
   trendAge: string;
   reasons: string[];
+  rejectionCodes?: string[];
+  coreSignalsPassed?: number;
+  supportingSignalsPassed?: number;
+  eligible?: boolean;
+  h4Bias?: string;
+  h1Bias?: string;
+  m15Bias?: string;
+  m5Bias?: string;
+  h4Adx?: number;
+  h1Adx?: number;
 }
 
 const EMPTY_MULTI: MultiTrendSignals = {
@@ -175,6 +185,10 @@ export function emptyTrendView(
     atrPercent: 0,
     trendAge: 'UNKNOWN',
     reasons: status === 'ERROR' ? ['API/data error'] : ['Insufficient evidence'],
+    rejectionCodes: status === 'ERROR' ? ['API_ERROR'] : ['INSUFFICIENT_DATA'],
+    coreSignalsPassed: 0,
+    supportingSignalsPassed: 0,
+    eligible: false,
   };
 }
 
@@ -258,6 +272,16 @@ function confirmationToView(
     atrPercent: c.metrics.atrPercent,
     trendAge: c.metrics.trendAge,
     reasons: c.rejectionReasons.length ? c.rejectionReasons : c.reasons,
+    rejectionCodes: c.rejectionCodes,
+    coreSignalsPassed: c.coreSignalsPassed,
+    supportingSignalsPassed: c.supportingSignalsPassed,
+    eligible: c.eligible,
+    h4Bias: c.metrics.h4Bias,
+    h1Bias: c.metrics.h1Bias,
+    m15Bias: c.metrics.m15Bias,
+    m5Bias: c.metrics.m5Bias,
+    h4Adx: c.metrics.h4Adx,
+    h1Adx: c.metrics.h1Adx,
   };
 }
 

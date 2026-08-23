@@ -21,7 +21,7 @@ import { calcTotalPnl } from '../calc/allocation';
 import { createContextLogger } from '../logger';
 import { withRetry } from '../utils/retry';
 import { TrendDetector, DEFAULT_TREND_DETECTOR_CONFIG, type TrendDetectionView } from '../trend';
-import { rankStrongCandidates, summarizeScan } from './candidateScan';
+import { rankStrongCandidates, summarizeScan, topCandidatesByConfidence } from './candidateScan';
 import type { PrismaClient } from '@prisma/client';
 
 const log = createContextLogger('TraderManager');
@@ -648,8 +648,10 @@ export class TraderManager extends EventEmitter {
       await this.broadcastSummary(true);
 
       const summary = summarizeScan(trendResults);
+      const topDiag = topCandidatesByConfidence(this.trendCandidates, 10);
       log.info('[LIFECYCLE] TOP_GAINER_TREND_SCAN', {
         candidates: symbols.length,
+        analyzed: summary.analyzed,
         strong: summary.strong,
         developingStrong: summary.developingStrong,
         moderate: summary.moderate,
@@ -657,10 +659,18 @@ export class TraderManager extends EventEmitter {
         noTrade: summary.noTrade,
         eligible: summary.eligible,
         errors: summary.errors,
+        rejectionHistogram: summary.rejectionHistogram,
         availableSlots,
         durationMs: Date.now() - scanStarted,
         occupied: occupied.size,
         maxTraders: this.traderConfig.maxTraders,
+      });
+      log.info('[LIFECYCLE] TREND_TOP_CANDIDATES', {
+        top: topDiag.map((t) =>
+          `${t.symbol} conf=${t.confidence} dir=${t.direction} regime=${t.regime} ` +
+          `eligible=${t.eligible} reason=${t.reason} core=${t.corePassed} ` +
+          `adx=${t.adx.toFixed(1)} h4=${t.h4Bias} h1=${t.h1Bias}`
+        ),
       });
 
       if (availableSlots <= 0) {
@@ -681,7 +691,7 @@ export class TraderManager extends EventEmitter {
       log.info('[LIFECYCLE] TREND_SELECTION', {
         strongEligible: ranked.length,
         selected: toCreate.map((c) => c.symbol),
-        scores: toCreate.map((c) => `${c.symbol}:${c.score}/${c.maxScore}`),
+        scores: toCreate.map((c) => `${c.symbol}:${c.confidenceScore}/${c.requiredScore}:${c.regime}`),
       });
 
       if (toCreate.length === 0) {
@@ -691,6 +701,9 @@ export class TraderManager extends EventEmitter {
           strong: summary.strong,
           developingStrong: summary.developingStrong,
           eligible: summary.eligible,
+          rejectionHistogram: summary.rejectionHistogram,
+          bestConfidence: topDiag[0]?.confidence ?? 0,
+          bestReason: topDiag[0]?.reason ?? 'n/a',
         });
         return;
       }

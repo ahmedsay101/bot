@@ -1,6 +1,6 @@
 /**
- * Balanced selective trend engine fixtures.
- * HIGH QUALITY + REASONABLE FREQUENCY — not zero-trader paralysis.
+ * Moderate-relaxation selective trend engine fixtures.
+ * Smart + selective + realistic frequency — not paralyzed, not careless.
  */
 import {
   evaluateTrendConfirmation,
@@ -89,13 +89,12 @@ function choppy(count = 220): Candle[] {
     const close = price * (1 + dir * 0.02);
     const high = Math.max(open, close) * 1.015;
     const low = Math.min(open, close) * 0.985;
-    out.push(makeCandle(i, open, high, low, close, 2000));
+    out.push(makeCandle(i, open, high, low, close, 1800 + (i % 7) * 40));
     price = close * (i % 5 === 0 ? 0.99 : 1.005);
   }
   return out;
 }
 
-/** Milder developing bullish — still directional, not exhausted. */
 function developingBullish(count = 180): Candle[] {
   const out: Candle[] = [];
   let price = 100;
@@ -112,49 +111,138 @@ function developingBullish(count = 180): Candle[] {
   return out;
 }
 
+function developingBearish(count = 200): Candle[] {
+  const out: Candle[] = [];
+  let price = 400;
+  for (let i = 0; i < count; i++) {
+    const pullback = i % 12 === 11;
+    const open = price;
+    const close = pullback ? price * 1.003 : price * 0.9955;
+    const high = Math.max(open, close) * 1.0015;
+    const low = Math.min(open, close) * 0.9985;
+    const volume = i > count - 25 ? 2000 : 1100;
+    out.push(makeCandle(i, open, high, low, close, volume));
+    price = close;
+  }
+  return out;
+}
+
+function strongBullishFlatVolume(count = 220): Candle[] {
+  const out: Candle[] = [];
+  let price = 100;
+  for (let i = 0; i < count; i++) {
+    const pullback = i % 10 === 9 || i % 10 === 8;
+    const open = price;
+    const close = pullback ? price * 0.995 : price * 1.006;
+    out.push(makeCandle(i, open, Math.max(open, close) * 1.002, Math.min(open, close) * 0.998, close, 1000));
+    price = close;
+  }
+  return out;
+}
+
+function risingStrengthBullish(count = 160): Candle[] {
+  const out: Candle[] = [];
+  let price = 100;
+  for (let i = 0; i < count; i++) {
+    const accel = i < 90 ? 1.0022 : 1.0042;
+    const pullback = i % 14 === 13;
+    const open = price;
+    const close = pullback ? price * 0.9988 : price * accel;
+    out.push(makeCandle(i, open, Math.max(open, close) * 1.001, Math.min(open, close) * 0.999, close, 1100));
+    price = close;
+  }
+  return out;
+}
+
 function allTf(series: Candle[]) {
   return { '5m': series, '15m': series, '1h': series, '4h': series };
 }
 
 const PROD_CFG: TrendEngineConfig = { ...DEFAULT_TREND_ENGINE_CONFIG };
 
-describe('balanced selective trend engine', () => {
-  it('strong bullish → TRADE', () => {
+describe('moderate-relaxation selective trend engine', () => {
+  it('strong bullish → STRONG/DEVELOPING + eligible', () => {
     const r = evaluateTrendConfirmation('BTCUSDT', allTf(strongBullish()), PROD_CFG);
     expect(r.decision).toBe('TRADE');
     expect(r.direction).toBe('BULLISH');
+    expect(r.eligible).toBe(true);
     expect(['STRONG_TREND', 'DEVELOPING_STRONG_TREND']).toContain(r.regime);
     expect(r.confidenceScore).toBeGreaterThanOrEqual(PROD_CFG.minConfidence);
   });
 
-  it('strong bearish → TRADE', () => {
+  it('strong bearish → eligible', () => {
     const r = evaluateTrendConfirmation('ETHUSDT', allTf(strongBearish()), PROD_CFG);
     expect(r.decision).toBe('TRADE');
     expect(r.direction).toBe('BEARISH');
+    expect(r.eligible).toBe(true);
   });
 
-  it('developing bullish can qualify under default thresholds', () => {
+  it('developing bullish → eligible', () => {
     const r = evaluateTrendConfirmation('DEVUSDT', allTf(developingBullish()), PROD_CFG);
-    // May be TRADE or NO_TRADE depending on ADX — if TRADE must be developing/strong
-    if (r.decision === 'TRADE') {
-      expect(['STRONG_TREND', 'DEVELOPING_STRONG_TREND']).toContain(r.regime);
-      expect(r.confidenceScore).toBeGreaterThanOrEqual(78);
-    } else {
-      expect(r.rejectionReasons.length).toBeGreaterThan(0);
-    }
+    expect(r.decision).toBe('TRADE');
+    expect(r.direction).toBe('BULLISH');
+    expect(['STRONG_TREND', 'DEVELOPING_STRONG_TREND']).toContain(r.regime);
+    expect(r.confidenceScore).toBeGreaterThanOrEqual(72);
   });
 
-  it('sideways → NO_TRADE', () => {
-    const r = evaluateTrendConfirmation('ADAUSDT', allTf(sideways()), PROD_CFG);
-    expect(r.decision).toBe('NO_TRADE');
+  it('developing bearish → eligible', () => {
+    const r = evaluateTrendConfirmation('DEVB', allTf(developingBearish()), PROD_CFG);
+    expect(r.decision).toBe('TRADE');
+    expect(r.direction).toBe('BEARISH');
+    expect(r.eligible).toBe(true);
   });
 
-  it('choppy → NO_TRADE', () => {
-    const r = evaluateTrendConfirmation('DOGEUSDT', allTf(choppy()), PROD_CFG);
-    expect(r.decision).toBe('NO_TRADE');
+  it('5m neutral but 4H/1H/15M aligned → eligible', () => {
+    const bull = strongBullish();
+    const r = evaluateTrendConfirmation(
+      'NEUT5',
+      { '5m': sideways(), '15m': bull, '1h': bull, '4h': bull },
+      PROD_CFG,
+    );
+    expect(r.decision).toBe('TRADE');
+    expect(r.direction).toBe('BULLISH');
   });
 
-  it('conflicting 4H/1H → NO_TRADE', () => {
+  it('5m countertrend does not veto HTF bullish', () => {
+    const bull = strongBullish();
+    const r = evaluateTrendConfirmation(
+      'ALTUSDT',
+      { '5m': strongBearish(), '15m': bull, '1h': bull, '4h': bull },
+      PROD_CFG,
+    );
+    expect(r.decision).toBe('TRADE');
+    expect(r.direction).toBe('BULLISH');
+  });
+
+  it('average (~1x) volume still eligible when CORE strong', () => {
+    const r = evaluateTrendConfirmation('AVGVOL', allTf(strongBullishFlatVolume()), PROD_CFG);
+    expect(r.decision).toBe('TRADE');
+    expect(r.metrics.relativeVolume).toBeLessThan(1.15);
+  });
+
+  it('efficiency ~0.50 band is acceptable (not auto-reject)', () => {
+    expect(0.5).toBeGreaterThanOrEqual(DEFAULT_TREND_ENGINE_CONFIG.minEfficiency);
+    const closes = sideways(50).map((c) => Number(c.close));
+    expect(efficiencyRatio(closes, 20)).toBeLessThan(0.35);
+    const r = evaluateTrendConfirmation('ER', allTf(strongBullish()), PROD_CFG);
+    expect(r.metrics.efficiencyRatio).toBeGreaterThanOrEqual(0.45);
+    expect(r.decision).toBe('TRADE');
+  });
+
+  it('rising-strength / developing ADX path can qualify', () => {
+    const r = evaluateTrendConfirmation('RISE', allTf(risingStrengthBullish()), PROD_CFG);
+    expect(r.decision).toBe('TRADE');
+    expect(['STRONG_TREND', 'DEVELOPING_STRONG_TREND']).toContain(r.regime);
+    expect(r.metrics.adx).toBeGreaterThanOrEqual(PROD_CFG.minAdx - 3);
+  });
+
+  it('RSI elevated (strong trend) does not auto-reject', () => {
+    const r = evaluateTrendConfirmation('RSI', allTf(strongBullish()), PROD_CFG);
+    expect(r.decision).toBe('TRADE');
+    expect(r.signals.momentum.detail).toMatch(/RSI=\d+/);
+  });
+
+  it('conflicting 4H/1H → NO_TRADE HTF_CONFLICT', () => {
     const r = evaluateTrendConfirmation(
       'SOLUSDT',
       {
@@ -166,53 +254,18 @@ describe('balanced selective trend engine', () => {
       PROD_CFG,
     );
     expect(r.decision).toBe('NO_TRADE');
-    expect(r.rejectionReasons.join(' ')).toMatch(/disagree|not aligned/i);
+    expect(r.rejectionCodes).toContain('HTF_CONFLICT');
   });
 
-  it('5m temporary countertrend does not veto HTF bullish', () => {
-    const bull = strongBullish();
-    const r = evaluateTrendConfirmation(
-      'ALTUSDT',
-      {
-        '5m': strongBearish(),
-        '15m': bull,
-        '1h': bull,
-        '4h': bull,
-      },
-      PROD_CFG,
-    );
-    expect(r.decision).toBe('TRADE');
-    expect(r.direction).toBe('BULLISH');
-  });
-
-  it('insufficient data → NO_TRADE', () => {
-    const r = evaluateTrendConfirmation('X', allTf(strongBullish(20)), PROD_CFG);
+  it('sideways → NO_TRADE', () => {
+    const r = evaluateTrendConfirmation('ADAUSDT', allTf(sideways()), PROD_CFG);
     expect(r.decision).toBe('NO_TRADE');
-    expect(r.regime).toBe('INSUFFICIENT_DATA');
+    expect(r.eligible).toBe(false);
   });
 
-  it('incomplete open candle is ignored', () => {
-    const base = strongBullish(220);
-    const withOpen = [...base, makeCandle(999, 999, 1000, 998, 999.5, 5000, false)];
-    const a = evaluateTrendConfirmation('A', allTf(base), PROD_CFG);
-    const b = evaluateTrendConfirmation('A', allTf(withOpen), PROD_CFG);
-    expect(a.decision).toBe(b.decision);
-  });
-
-  it('default thresholds are balanced (not paralyzed)', () => {
-    expect(DEFAULT_TREND_ENGINE_CONFIG.minConfidence).toBe(78);
-    expect(DEFAULT_TREND_ENGINE_CONFIG.minAdx).toBe(24);
-    expect(DEFAULT_TREND_ENGINE_CONFIG.minEfficiency).toBe(0.48);
-    expect(DEFAULT_TREND_ENGINE_CONFIG.maxReversalRisk).toBe(75);
-    expect(DEFAULT_TREND_ENGINE_CONFIG.minMtfAgree).toBe(2);
-    expect(DEFAULT_TREND_ENGINE_CONFIG.minCoreConfirmed).toBe(3);
-    expect(DEFAULT_TREND_ENGINE_CONFIG.allowDevelopingStrong).toBe(true);
-  });
-
-  it('efficiency ~0.5 is above chop floor', () => {
-    expect(0.5).toBeGreaterThanOrEqual(DEFAULT_TREND_ENGINE_CONFIG.minEfficiency);
-    const closes = sideways(50).map((c) => Number(c.close));
-    expect(efficiencyRatio(closes, 20)).toBeLessThan(0.35);
+  it('choppy → NO_TRADE', () => {
+    const r = evaluateTrendConfirmation('DOGEUSDT', allTf(choppy()), PROD_CFG);
+    expect(r.decision).toBe('NO_TRADE');
   });
 
   it('extreme reversal / tiny room still rejects', () => {
@@ -231,6 +284,50 @@ describe('balanced selective trend engine', () => {
     };
     const r = evaluateTrendConfirmation('EXT', allTf(base), strict);
     expect(r.decision).toBe('NO_TRADE');
+  });
+
+  it('insufficient data → NO_TRADE', () => {
+    const r = evaluateTrendConfirmation('X', allTf(strongBullish(20)), PROD_CFG);
+    expect(r.decision).toBe('NO_TRADE');
+    expect(r.regime).toBe('INSUFFICIENT_DATA');
+    expect(r.rejectionCodes).toContain('INSUFFICIENT_DATA');
+  });
+
+  it('preserves tradeable regime on LOW_CONFIDENCE', () => {
+    const strict: TrendEngineConfig = { ...PROD_CFG, minConfidence: 99 };
+    const r = evaluateTrendConfirmation('NEAR', allTf(strongBullish()), strict);
+    expect(r.decision).toBe('NO_TRADE');
+    expect(r.rejectionCodes).toContain('LOW_CONFIDENCE');
+    expect(['STRONG_TREND', 'DEVELOPING_STRONG_TREND']).toContain(r.regime);
+  });
+
+  it('incomplete open candle is ignored', () => {
+    const base = strongBullish(220);
+    const withOpen = [...base, makeCandle(999, 999, 1000, 998, 999.5, 5000, false)];
+    const a = evaluateTrendConfirmation('A', allTf(base), PROD_CFG);
+    const b = evaluateTrendConfirmation('A', allTf(withOpen), PROD_CFG);
+    expect(a.decision).toBe(b.decision);
+  });
+
+  it('default thresholds match moderate relaxation', () => {
+    expect(DEFAULT_TREND_ENGINE_CONFIG.minConfidence).toBe(72);
+    expect(DEFAULT_TREND_ENGINE_CONFIG.minAdx).toBe(22);
+    expect(DEFAULT_TREND_ENGINE_CONFIG.strongAdx).toBe(28);
+    expect(DEFAULT_TREND_ENGINE_CONFIG.minEfficiency).toBe(0.45);
+    expect(DEFAULT_TREND_ENGINE_CONFIG.maxReversalRisk).toBe(75);
+    expect(DEFAULT_TREND_ENGINE_CONFIG.minMtfAgree).toBe(2);
+    expect(DEFAULT_TREND_ENGINE_CONFIG.minCoreConfirmed).toBe(4);
+    expect(DEFAULT_TREND_ENGINE_CONFIG.weakVolumeRatio).toBe(0.7);
+    expect(DEFAULT_TREND_ENGINE_CONFIG.allowDevelopingStrong).toBe(true);
+  });
+
+  it('diagnostics expose core/supporting and rejection codes', () => {
+    const ok = evaluateTrendConfirmation('D1', allTf(strongBullish()), PROD_CFG);
+    expect(ok.coreSignalsPassed).toBeGreaterThanOrEqual(3);
+    expect(ok.metrics.h4Bias).toBeDefined();
+    const bad = evaluateTrendConfirmation('D2', allTf(sideways()), PROD_CFG);
+    expect(bad.rejectionCodes.length).toBeGreaterThan(0);
+    expect(bad.eligible).toBe(false);
   });
 });
 

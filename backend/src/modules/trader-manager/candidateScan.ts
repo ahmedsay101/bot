@@ -58,7 +58,6 @@ export function rankStrongCandidates(
   }
 
   eligible.sort((a, b) => {
-    // Prefer STRONG_TREND slightly over DEVELOPING when confidence ties
     const regimeRank = (r: string) => (r === 'STRONG_TREND' ? 2 : r === 'DEVELOPING_STRONG_TREND' ? 1 : 0);
     if (b.confidenceScore !== a.confidenceScore) return b.confidenceScore - a.confidenceScore;
     if (regimeRank(b.regime) !== regimeRank(a.regime)) return regimeRank(b.regime) - regimeRank(a.regime);
@@ -82,6 +81,7 @@ export function summarizeScan(results: TrendDetectionView[]): {
   errors: number;
   noTrade: number;
   eligible: number;
+  rejectionHistogram: Record<string, number>;
 } {
   let strong = 0;
   let developingStrong = 0;
@@ -92,6 +92,7 @@ export function summarizeScan(results: TrendDetectionView[]): {
   let errors = 0;
   let noTrade = 0;
   let eligible = 0;
+  const rejectionHistogram: Record<string, number> = {};
   for (const r of results) {
     if (r.status === 'ERROR') errors++;
     if (r.decision === 'TRADE') {
@@ -99,6 +100,12 @@ export function summarizeScan(results: TrendDetectionView[]): {
       eligible++;
     } else {
       noTrade++;
+      const codes = r.rejectionCodes?.length
+        ? r.rejectionCodes
+        : (r.rejectionReasons?.length ? ['OTHER'] : ['OTHER']);
+      for (const c of codes) {
+        rejectionHistogram[c] = (rejectionHistogram[c] ?? 0) + 1;
+      }
     }
     if (r.regime === 'STRONG_TREND') strong++;
     else if (r.regime === 'DEVELOPING_STRONG_TREND') developingStrong++;
@@ -117,5 +124,41 @@ export function summarizeScan(results: TrendDetectionView[]): {
     errors,
     noTrade,
     eligible,
+    rejectionHistogram,
   };
+}
+
+/** Top N candidates by confidence for production diagnostics (eligible or not). */
+export function topCandidatesByConfidence(
+  results: TrendDetectionView[],
+  limit = 10,
+): Array<{
+  symbol: string;
+  confidence: number;
+  direction: string;
+  regime: string;
+  decision: string;
+  eligible: boolean;
+  reason: string;
+  corePassed: number;
+  adx: number;
+  h4Bias: string;
+  h1Bias: string;
+}> {
+  return [...results]
+    .sort((a, b) => b.confidenceScore - a.confidenceScore)
+    .slice(0, limit)
+    .map((r) => ({
+      symbol: r.symbol,
+      confidence: r.confidenceScore,
+      direction: r.direction,
+      regime: r.regime,
+      decision: r.decision,
+      eligible: r.decision === 'TRADE' && r.confirmed,
+      reason: (r.rejectionCodes?.[0] ?? r.rejectionReasons?.[0] ?? r.reasons?.[0] ?? (r.decision === 'TRADE' ? 'OK' : 'NO_TRADE')),
+      corePassed: r.coreSignalsPassed ?? 0,
+      adx: r.adx,
+      h4Bias: r.h4Bias ?? '?',
+      h1Bias: r.h1Bias ?? '?',
+    }));
 }
