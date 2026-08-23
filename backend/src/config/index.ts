@@ -49,6 +49,8 @@ interface AppConfig {
     gridLevelsPerSide: number;
     /** Percent points, e.g. '5' = 5%. */
     gridDistancePercent: string;
+    /** true = triangular scaling; false = equal margin across all levels. */
+    gridCapitalScalingEnabled: boolean;
     /** Percent points, e.g. '10' = 10%. */
     traderTakeProfitPercent: string;
     traderMaxLifetimeHours: number;
@@ -123,6 +125,8 @@ const schema = Joi.object({
   SWITCH_POSITION_ON_TAKE_PROFIT: Joi.boolean().default(false),
   GRID_LEVELS_PER_SIDE: Joi.number().integer().min(1).max(100).default(10),
   GRID_DISTANCE_PERCENT: Joi.string().default('2'),
+  /** true = triangular side-pool scaling; false = equal margin across all levels (both sides). */
+  GRID_CAPITAL_SCALING_ENABLED: Joi.boolean().default(true),
   TRADER_TAKE_PROFIT_PERCENT: Joi.string().default('10'),
   TRADER_MAX_LIFETIME_HOURS: Joi.number().min(0.001).max(720).default(12),
   TREND_DETECTION_ENABLED: Joi.boolean().default(true),
@@ -216,6 +220,7 @@ function loadConfig(): AppConfig {
       traderBehavior: 'grid_directional',
       gridLevelsPerSide: env.GRID_LEVELS_PER_SIDE as number,
       gridDistancePercent: env.GRID_DISTANCE_PERCENT as string,
+      gridCapitalScalingEnabled: env.GRID_CAPITAL_SCALING_ENABLED as boolean,
       traderTakeProfitPercent: env.TRADER_TAKE_PROFIT_PERCENT as string,
       traderMaxLifetimeHours: env.TRADER_MAX_LIFETIME_HOURS as number,
       trendDetectionEnabled: env.TREND_DETECTION_ENABLED as boolean,

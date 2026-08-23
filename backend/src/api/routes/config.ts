@@ -22,6 +22,7 @@ export function createConfigRouter(db: PrismaClient, traderManager?: TraderManag
           traderBehavior: 'grid_directional',
           gridLevelsPerSide: runtime.gridLevelsPerSide,
           gridDistancePercent: runtime.gridDistancePercent,
+          gridCapitalScalingEnabled: runtime.gridCapitalScalingEnabled,
           traderTakeProfitPercent: runtime.traderTakeProfitPercent,
           traderMaxLifetimeHours: runtime.traderMaxLifetimeHours,
           feeRate: runtime.feeRate,
@@ -44,7 +45,7 @@ export function createConfigRouter(db: PrismaClient, traderManager?: TraderManag
     const allowed = [
       'maxTraders', 'initialCapital', 'positionSize', 'leverage',
       'marginMode', 'traderLifetimeHours',
-      'gridLevelsPerSide', 'gridDistancePercent',
+      'gridLevelsPerSide', 'gridDistancePercent', 'gridCapitalScalingEnabled',
       'traderTakeProfitPercent', 'traderMaxLifetimeHours',
       'refreshInterval', 'retryLimit', 'feeRate',
       'makerFeeRate', 'takerFeeRate',

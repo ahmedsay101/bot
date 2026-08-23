@@ -293,11 +293,10 @@ export interface GridLevelView {
   notional: string;
   leverage?: number;
   quantity: string;
-  /** PENDING | ACTIVE | CANCELLED */
+  /** PENDING | ACTIVE | TP_HIT | SL_HIT | CANCELLED */
   status: string;
   entryPrice: string | null;
   unrealizedPnl: string | null;
-  /** Deprecated — hold-to-exhaustion has no per-level TP/SL */
   tpPrice?: string | null;
   slPrice?: string | null;
   weight?: number;
@@ -310,7 +309,6 @@ export interface GridTraderView {
   levelsPerSide: number;
   distancePercent: string;
   takeProfitPercent: string;
-  /** ACTIVE level counts (same as longActive / shortActive). */
   longFilled: number;
   shortFilled: number;
   levels: GridLevelView[];
@@ -326,23 +324,42 @@ export interface GridTraderView {
   longOpen?: number;
   shortOpen?: number;
   capitalHistory?: Array<{ at: string; capital: string; event: string; netPnl?: string }>;
-  /** 50/50 side capital pools */
   longSideCapital?: string;
   shortSideCapital?: string;
   longSideUsed?: string;
   shortSideUsed?: string;
   longActive?: number;
   shortActive?: number;
-  /** Final LONG trigger (not a destruction threshold). */
   lastLongLevel?: string | null;
-  /** Final SHORT trigger (not a destruction threshold). */
   lastShortLevel?: string | null;
-  /** Destroy when mark > this (lastLong × (1 + spacing%)). */
+  /** Informational last-level ± spacing (not a destroy trigger). */
   upperDestroyPrice?: string | null;
-  /** Destroy when mark < this (lastShort × (1 - spacing%)). */
   lowerDestroyPrice?: string | null;
+  capitalScalingEnabled?: boolean;
+  /** Scaled OFF: current trader capital for 100% active allocation (not ÷ levels). */
+  capitalPerLevel?: string | null;
+  activePositionMargin?: string | null;
+  activePositionNotional?: string | null;
+  maxActivePositions?: number;
+  totalLevels?: number;
+  levelsPending?: number;
+  levelsActive?: number;
+  levelsTp?: number;
+  levelsSl?: number;
+  levelsDead?: number;
+  levelsTradable?: number;
+  lifetimeRemaining?: number;
+  destroyConditions?: {
+    lifetimeExpired: boolean;
+    allPositionsTp: boolean;
+    remainingMs: number;
+  };
+  destroyConditions?: {
+    lifetimeExpired: boolean;
+    allPositionsTp: boolean;
+    remainingMs: number;
+  };
   trend?: GridTrendView;
-  /** Deprecated — no trader TP exit in hold-to-exhaustion */
   traderTpTarget?: string;
   traderTpCurrentPnl?: string;
   traderTpProgress?: string;

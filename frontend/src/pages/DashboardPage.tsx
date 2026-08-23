@@ -218,6 +218,8 @@ function buildPriceLadder(grid: GridTraderView, markPrice: string): LadderRow[] 
 function statusLabel(s: string): string {
   if (s === 'PENDING') return 'PENDING';
   if (s === 'ACTIVE') return 'ACTIVE';
+  if (s === 'TP_HIT') return '✓ TP / DEAD';
+  if (s === 'SL_HIT') return '✕ SL / DEAD';
   if (s === 'CANCELLED' || s === 'CANCELED') return 'CANCELLED';
   if (s === 'TRIGGERED') return 'LIMIT LIVE';
   if (s === 'FILLED') return 'FILLED';
@@ -301,6 +303,7 @@ function GridLadder({ grid, markPrice }: { grid: GridTraderView; markPrice: stri
           const l = row.level;
           const accent = l.direction === 'LONG' ? LONG : SHORT;
           const active = l.status === 'ACTIVE';
+          const dead = l.status === 'TP_HIT' || l.status === 'SL_HIT';
           const cancelled = l.status === 'CANCELLED' || l.status === 'CANCELED';
           return (
             <Box
@@ -312,10 +315,10 @@ function GridLadder({ grid, markPrice }: { grid: GridTraderView; markPrice: stri
                 py: 0.55,
                 px: 1,
                 borderRadius: 1.25,
-                bgcolor: active ? `${accent}22` : 'transparent',
+                bgcolor: active ? `${accent}22` : dead ? 'rgba(255,255,255,0.03)' : 'transparent',
                 border: '1px solid',
-                borderColor: active ? accent : BORDER,
-                opacity: cancelled ? 0.45 : 1,
+                borderColor: active ? accent : dead ? (l.status === 'TP_HIT' ? LONG : SHORT) : BORDER,
+                opacity: cancelled ? 0.45 : dead ? 0.72 : 1,
               }}
             >
               <Box sx={{ width: 3, alignSelf: 'stretch', borderRadius: 99, bgcolor: accent, flexShrink: 0 }} />
@@ -327,9 +330,11 @@ function GridLadder({ grid, markPrice }: { grid: GridTraderView; markPrice: stri
                 <Typography variant="caption" color="text.secondary" display="block" sx={{ fontSize: 10 }}>
                   Entry {l.entryPrice != null ? `$${px(l.entryPrice)}` : '—'}
                   {' · '}
-                  Margin {money(l.allocatedMargin)}
+                  TP {l.tpPrice != null && l.tpPrice !== '' ? `$${px(l.tpPrice)}` : '—'}
                   {' · '}
-                  Notional {money(l.notional)}
+                  SL {l.slPrice != null && l.slPrice !== '' ? `$${px(l.slPrice)}` : '—'}
+                  {' · '}
+                  {dead ? 'Hist margin' : 'Margin'} {money(l.allocatedMargin)}
                   {' · '}
                   {statusLabel(l.status)}
                 </Typography>
@@ -515,10 +520,54 @@ function GridTraderCard({
               <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1, mb: 1.25 }}>
                 <Stat label="Start" value={`$${px(grid.startPrice)}`} color={START} />
                 <Stat label="Mark" value={`$${px(trader.markPrice)}`} color={MARK} />
-                <Stat label="Allocation" value={money(grid.initialCapital ?? trader.capital?.traderAllocatedAmount)} />
+                <Stat
+                  label="Capital scaling"
+                  value={grid.capitalScalingEnabled === false ? 'DISABLED' : 'ENABLED'}
+                />
+                {grid.capitalScalingEnabled === false ? (
+                  <>
+                    <Stat label="Active allocation" value="100%" />
+                    <Stat
+                      label="Active position margin"
+                      value={money(grid.activePositionMargin ?? grid.currentCapital ?? grid.capitalPerLevel)}
+                    />
+                    <Stat
+                      label="Pending levels"
+                      value={`${grid.levelsPending ?? 0} (no capital reserved)`}
+                    />
+                  </>
+                ) : (
+                  <Stat label="Capital mode" value="triangular" />
+                )}
+                <Stat
+                  label="Active positions"
+                  value={`${grid.activeOpenCount ?? 0} / ${grid.maxActivePositions ?? (grid.capitalScalingEnabled === false ? 1 : n * 2)}`}
+                />
+                <Stat label="Grid levels" value={String(grid.totalLevels ?? grid.levelsPerSide * 2)} />
+                <Stat
+                  label="Pending / Active"
+                  value={`${grid.levelsPending ?? 0} / ${grid.levelsActive ?? 0}`}
+                />
+                <Stat
+                  label="TP / SL (dead)"
+                  value={`${grid.levelsTp ?? 0} / ${grid.levelsSl ?? 0}`}
+                />
+                <Stat
+                  label="Dead / Tradable"
+                  value={`${grid.levelsDead ?? (grid.levelsTp ?? 0) + (grid.levelsSl ?? 0)} / ${grid.levelsTradable ?? (grid.levelsPending ?? 0) + (grid.levelsActive ?? 0)}`}
+                />
+                {grid.capitalScalingEnabled !== false && (
+                  <>
+                    <Stat label="LONG pool" value={money(grid.longSideCapital)} color={LONG} />
+                    <Stat label="SHORT pool" value={money(grid.shortSideCapital)} color={SHORT} />
+                  </>
+                )}
+                <Stat label="Current capital" value={money(grid.currentCapital)} />
+                <Stat label="Allocated" value={money(grid.initialCapital ?? trader.capital?.traderAllocatedAmount)} />
                 <Stat label="Leverage" value={`${trader.leverage}x`} color={MARK} />
-                <Stat label="LONG pool" value={money(grid.longSideCapital)} color={LONG} />
-                <Stat label="SHORT pool" value={money(grid.shortSideCapital)} color={SHORT} />
+                {grid.capitalScalingEnabled === false && grid.activePositionNotional != null && (
+                  <Stat label="Active notional" value={money(grid.activePositionNotional)} />
+                )}
                 <Stat
                   label="LONG used"
                   value={`${money(grid.longSideUsed)} / ${money(grid.longSideCapital)}`}
@@ -558,18 +607,19 @@ function GridTraderCard({
 
             <Box sx={{ p: 1.5, borderRadius: 2, border: `1px solid ${BORDER}`, bgcolor: 'rgba(0,0,0,0.2)' }}>
               <Typography variant="caption" fontWeight={800} color="text.secondary" sx={{ letterSpacing: 0.6 }}>
-                EXIT CONDITIONS
+                DESTROY CONDITIONS
               </Typography>
               <Typography variant="body2" sx={{ fontSize: 13, mt: 1, color: 'text.secondary' }}>
-                After a side is fully ACTIVE, destroy only when price passes the final level by one grid spacing ({grid.distancePercent}%).
+                Trader is destroyed only for MAX_LIFETIME or when every grid level has hit TP (SL does not count).
               </Typography>
               <Stack spacing={0.75} sx={{ mt: 1.25 }}>
                 <Typography variant="body2" sx={{ fontSize: 13 }}>
-                  1. Max lifetime ({formatDuration(stats.remainingMs)} left)
+                  {grid.destroyConditions?.lifetimeExpired ? '✗' : '✓'} Lifetime
+                  {' '}({formatDuration(stats.remainingMs)} left)
                 </Typography>
                 <Typography variant="body2" sx={{ fontSize: 13 }}>
-                  2. Grid exhaustion buffer (side {n}/{n} ACTIVE, then beyond last level)
-                  {' '}(L {longActive}/{n} · S {shortActive}/{n})
+                  {grid.destroyConditions?.allPositionsTp ? '✓' : '✗'} All positions TP
+                  {' '}({grid.levelsTp ?? 0}/{grid.totalLevels ?? n * 2} TP · {grid.levelsSl ?? 0} SL)
                 </Typography>
               </Stack>
               {(grid.lastLongLevel != null || grid.lastShortLevel != null) && (
@@ -579,22 +629,19 @@ function GridTraderCard({
                     <Typography variant="body2" fontFamily="monospace" fontWeight={700}>
                       ${grid.lastLongLevel != null ? parseFloat(grid.lastLongLevel).toFixed(2) : '—'}
                     </Typography>
-                    <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.5 }}>Destroy above</Typography>
-                    <Typography variant="body2" fontFamily="monospace" fontWeight={700} sx={{ color: LONG }}>
-                      ${grid.upperDestroyPrice != null ? parseFloat(grid.upperDestroyPrice).toFixed(2) : '—'}
-                    </Typography>
                   </Box>
                   <Box>
                     <Typography variant="caption" color="text.secondary" display="block">SHORT last level</Typography>
                     <Typography variant="body2" fontFamily="monospace" fontWeight={700}>
                       ${grid.lastShortLevel != null ? parseFloat(grid.lastShortLevel).toFixed(2) : '—'}
                     </Typography>
-                    <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.5 }}>Destroy below</Typography>
-                    <Typography variant="body2" fontFamily="monospace" fontWeight={700} sx={{ color: SHORT }}>
-                      ${grid.lowerDestroyPrice != null ? parseFloat(grid.lowerDestroyPrice).toFixed(2) : '—'}
-                    </Typography>
                   </Box>
                 </Box>
+              )}
+              {grid.exitReason != null && (
+                <Typography variant="body2" sx={{ mt: 1, fontWeight: 800, color: SHORT }}>
+                  Destroyed: {grid.exitReason}
+                </Typography>
               )}
               <Divider sx={{ my: 1.25, borderColor: BORDER }} />
               <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1 }}>

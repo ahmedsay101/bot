@@ -254,7 +254,7 @@ export class TraderManager extends EventEmitter {
     const keys = [
       'maxTraders', 'initialCapital', 'positionSize', 'leverage', 'marginMode',
       'traderLifetimeHours',
-      'gridLevelsPerSide', 'gridDistancePercent',
+      'gridLevelsPerSide', 'gridDistancePercent', 'gridCapitalScalingEnabled',
       'traderTakeProfitPercent', 'traderMaxLifetimeHours',
       'refreshInterval', 'retryLimit', 'feeRate', 'makerFeeRate', 'takerFeeRate', 'slippage',
     ] as const;

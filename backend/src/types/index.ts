@@ -123,8 +123,13 @@ export interface TraderConfig {
   traderBehavior: TraderBehavior;
   /** Grid levels above and below start price (default 10). */
   gridLevelsPerSide: number;
-  /** Distance between grid levels in percent points (e.g. '5' = 5%). */
+  /** Distance between grid levels in percent points (e.g. '5' = 5%). Also used for per-level TP/SL. */
   gridDistancePercent: string;
+  /**
+   * When true (default): triangular capital scaling within each side pool.
+   * When false: trader capital ÷ (longLevels + shortLevels) equally per level.
+   */
+  gridCapitalScalingEnabled?: boolean;
   /** Grid directional take-profit in percent points (e.g. '10' = 10%). */
   traderTakeProfitPercent: string;
   /** Max lifetime for grid directional traders in hours (default 12). */
@@ -322,21 +327,15 @@ export interface GridTraderView {
   gridDistanceAbs?: string;
   /** currentCapital + unrealized (presentation equity) */
   equity?: string;
-  /** Always 1 — at most one open position per side. */
   maxPerSide?: number;
-  /** Structural max = 1 LONG + 1 SHORT. */
   maxOpenPositions?: number;
   activeOpenCount?: number;
   longOpen?: number;
   shortOpen?: number;
   capitalHistory?: Array<{ at: string; capital: string; event: string; netPnl?: string }>;
-  /** Absolute net-PnL target = initialCapital × takeProfitPercent / 100 (frozen). */
   traderTpTarget?: string;
-  /** Combined realized + open net PnL (fees included). */
   traderTpCurrentPnl?: string;
-  /** Progress toward trader TP (0–100). */
   traderTpProgress?: string;
-  /** Whether combined net PnL has reached traderTpTarget. */
   traderTpReached?: boolean;
   longSideCapital?: string;
   shortSideCapital?: string;
@@ -344,14 +343,38 @@ export interface GridTraderView {
   shortSideUsed?: string;
   longActive?: number;
   shortActive?: number;
-  /** Final LONG trigger price (not the destroy threshold). */
   lastLongLevel?: string | null;
-  /** Final SHORT trigger price (not the destroy threshold). */
   lastShortLevel?: string | null;
-  /** Destroy when mark > this = lastLong × (1 + spacing%). */
+  /** Informational last-level ± spacing (not a destroy trigger). */
   upperDestroyPrice?: string | null;
-  /** Destroy when mark < this = lastShort × (1 - spacing%). */
   lowerDestroyPrice?: string | null;
+  /** true = triangular side-pool scaling; false = 100% current capital, max 1 active. */
+  capitalScalingEnabled?: boolean;
+  /**
+   * Scaled OFF only: current trader capital (100% for active position).
+   * Do not interpret as capital÷levels.
+   */
+  capitalPerLevel?: string | null;
+  activePositionMargin?: string | null;
+  activePositionNotional?: string | null;
+  maxActivePositions?: number;
+  totalLevels?: number;
+  levelsPending?: number;
+  levelsActive?: number;
+  levelsTp?: number;
+  levelsSl?: number;
+  /** TP_HIT + SL_HIT — permanently closed levels still shown on the grid. */
+  levelsDead?: number;
+  /** PENDING + ACTIVE — still tradable. */
+  levelsTradable?: number;
+  /** Milliseconds until MAX_LIFETIME (0 if expired/unknown). */
+  lifetimeRemaining?: number;
+  /** Destroy conditions: MAX_LIFETIME | ALL_GRID_POSITIONS_TP only. */
+  destroyConditions?: {
+    lifetimeExpired: boolean;
+    allPositionsTp: boolean;
+    remainingMs: number;
+  };
   trend?: {
     symbol: string;
     direction: string;

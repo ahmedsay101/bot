@@ -1,5 +1,5 @@
 /**
- * Hold-to-exhaustion grid unit tests — side pools + L/triangular(N).
+ * Grid capital: MODE A triangular scaling vs MODE B 100% current capital.
  */
 import Decimal from 'decimal.js';
 import {
@@ -12,10 +12,11 @@ import {
   sizeLevelPosition,
   triangularWeight,
   sideCapitalFromTrader,
+  calcLevelTpSlPrices,
+  allGridLevelsHitTp,
+  totalGridLevels,
   getUpperGridExhaustionPrice,
   getLowerGridExhaustionPrice,
-  isPricePastUpperExhaustion,
-  isPricePastLowerExhaustion,
 } from '../../src/modules/trader/grid/gridCalc';
 import type { SymbolInfo } from '../../src/types';
 
@@ -34,7 +35,7 @@ const info: SymbolInfo = {
   status: 'TRADING',
 };
 
-describe('gridCalc — side pools + triangular normalization', () => {
+describe('gridCalc — MODE A scaled (triangular) capital — UNCHANGED', () => {
   it('triangularWeight(10) = 55', () => {
     expect(triangularWeight(10)).toBe(55);
   });
@@ -44,20 +45,20 @@ describe('gridCalc — side pools + triangular normalization', () => {
   });
 
   it('fractions L1=1/55 … L10=10/55', () => {
-    expect(levelAllocationFraction(1, 10).toFixed(8)).toBe((1 / 55).toFixed(8));
-    expect(levelAllocationFraction(10, 10).toFixed(8)).toBe((10 / 55).toFixed(8));
+    expect(levelAllocationFraction(1, 10, true).toFixed(8)).toBe((1 / 55).toFixed(8));
+    expect(levelAllocationFraction(10, 10, true).toFixed(8)).toBe((10 / 55).toFixed(8));
   });
 
   it('sum of side margins = side capital ($500)', () => {
     const side = new Decimal(500);
     let sum = new Decimal(0);
     for (let L = 1; L <= 10; L++) {
-      sum = sum.plus(calculatePositionAllocation(side, L, 10));
+      sum = sum.plus(calculatePositionAllocation(side, L, 10, true));
     }
     expect(sum.toFixed(6)).toBe('500.000000');
   });
 
-  it('buildGridPlan: both sides sum to trader allocation', () => {
+  it('buildGridPlan scaled: both sides sum to trader allocation', () => {
     const plan = buildGridPlan({
       startPrice: '100',
       traderAllocation: '1000',
@@ -65,9 +66,10 @@ describe('gridCalc — side pools + triangular normalization', () => {
       levelsPerSide: 10,
       distancePercent: 5,
       symbolInfo: info,
+      capitalScalingEnabled: true,
     });
-    expect(plan.longSideCapital).toBe('500.00000000');
-    expect(plan.shortSideCapital).toBe('500.00000000');
+    expect(plan.capitalScalingEnabled).toBe(true);
+    expect(plan.maxActivePositions).toBe(20);
     let longSum = new Decimal(0);
     let shortSum = new Decimal(0);
     for (const l of plan.levels) {
@@ -79,74 +81,87 @@ describe('gridCalc — side pools + triangular normalization', () => {
     expect(shortSum.toFixed(4)).toBe('500.0000');
     const l1 = plan.levels.find((l) => l.direction === 'LONG' && l.level === 1)!;
     const l10 = plan.levels.find((l) => l.direction === 'LONG' && l.level === 10)!;
-    expect(l1.weight).toBe(1);
-    expect(l10.weight).toBe(10);
     expect(parseFloat(l1.theoreticalMargin)).toBeLessThan(parseFloat(l10.theoreticalMargin));
-    expect(l1.tpPrice).toBe('');
   });
 
-  it('leverage applied once: $100 margin → $1000 notional at 10x', () => {
+  it('leverage after margin: $100 → $1000 notional at 10x', () => {
     const sized = sizeLevelPosition({
-      sideCapital: '550', // L10 = 10/55 * 550 = 100
+      sideCapital: '550',
       level: 10,
       levelsPerSide: 10,
       leverage: 10,
       entryPrice: '100',
       symbolInfo: info,
+      capitalScalingEnabled: true,
     });
     expect(parseFloat(sized.allocatedMargin)).toBeCloseTo(100, 0);
     expect(parseFloat(sized.notional)).toBeCloseTo(1000, 0);
   });
-
-  it('grid triggers unchanged', () => {
-    expect(calcGridTriggerPrice('100', 1, 'LONG', 5).toFixed(2)).toBe('105.00');
-    expect(calcGridTriggerPrice('100', 1, 'SHORT', 5).toFixed(2)).toBe('95.00');
-    expect(calcGridDistanceAbs('100', 5).toFixed(2)).toBe('5.00');
-  });
-
-  it('ascending weights', () => {
-    expect(levelWeight(1, 10)).toBe(1);
-    expect(levelWeight(10, 10)).toBe(10);
-  });
 });
 
-describe('grid exhaustion buffer (one spacing beyond final level)', () => {
-  it('1%: last long 110 → destroy above 111.10; last short 90 → destroy below 89.10', () => {
-    expect(getUpperGridExhaustionPrice('110', '1').toFixed(2)).toBe('111.10');
-    expect(getLowerGridExhaustionPrice('90', '1').toFixed(2)).toBe('89.10');
+describe('gridCalc — MODE B scaling OFF (100% current capital)', () => {
+  it('margin = currentTraderCapital, NOT capital÷levels', () => {
+    const sized = sizeLevelPosition({
+      currentTraderCapital: '1000',
+      level: 1,
+      levelsPerSide: 10,
+      leverage: 10,
+      entryPrice: '100',
+      symbolInfo: info,
+      capitalScalingEnabled: false,
+    });
+    expect(parseFloat(sized.allocatedMargin)).toBeCloseTo(1000, 0);
+    expect(parseFloat(sized.notional)).toBeCloseTo(10000, 0);
+    expect(sized.allocationPct).toBe('1.00000000');
   });
 
-  it('2% and 5% scale with configured spacing (not hardcoded)', () => {
-    expect(getUpperGridExhaustionPrice('110', '2').toFixed(2)).toBe('112.20');
-    expect(getLowerGridExhaustionPrice('90', '2').toFixed(2)).toBe('88.20');
-    expect(getUpperGridExhaustionPrice('110', '5').toFixed(2)).toBe('115.50');
-    expect(getLowerGridExhaustionPrice('90', '5').toFixed(2)).toBe('85.50');
+  it('level number does not change margin when OFF', () => {
+    const a = sizeLevelPosition({
+      currentTraderCapital: '1000',
+      level: 1,
+      levelsPerSide: 10,
+      leverage: 10,
+      entryPrice: '100',
+      symbolInfo: info,
+      capitalScalingEnabled: false,
+    });
+    const b = sizeLevelPosition({
+      currentTraderCapital: '1000',
+      level: 10,
+      levelsPerSide: 10,
+      leverage: 10,
+      entryPrice: '100',
+      symbolInfo: info,
+      capitalScalingEnabled: false,
+    });
+    expect(a.allocatedMargin).toBe(b.allocatedMargin);
   });
 
-  it('strict boundary: exact threshold keeps trader alive', () => {
-    expect(isPricePastUpperExhaustion('111.10', '110', '1')).toBe(false);
-    expect(isPricePastUpperExhaustion('111.11', '110', '1')).toBe(true);
-    expect(isPricePastUpperExhaustion('110', '110', '1')).toBe(false);
-    expect(isPricePastUpperExhaustion('110.50', '110', '1')).toBe(false);
-    expect(isPricePastLowerExhaustion('89.10', '90', '1')).toBe(false);
-    expect(isPricePastLowerExhaustion('89.09', '90', '1')).toBe(true);
-    expect(isPricePastLowerExhaustion('90', '90', '1')).toBe(false);
-    expect(isPricePastLowerExhaustion('89.50', '90', '1')).toBe(false);
+  it('grid size does not affect OFF margin', () => {
+    const a = sizeLevelPosition({
+      currentTraderCapital: '500',
+      level: 1,
+      levelsPerSide: 3,
+      leverage: 10,
+      entryPrice: '100',
+      symbolInfo: info,
+      capitalScalingEnabled: false,
+    });
+    const b = sizeLevelPosition({
+      currentTraderCapital: '500',
+      level: 1,
+      levelsPerSide: 10,
+      leverage: 10,
+      entryPrice: '100',
+      symbolInfo: info,
+      capitalScalingEnabled: false,
+    });
+    expect(parseFloat(a.allocatedMargin)).toBeCloseTo(500, 0);
+    expect(parseFloat(b.allocatedMargin)).toBeCloseTo(500, 0);
+    expect(parseFloat(a.notional)).toBeCloseTo(5000, 0);
   });
 
-  it('buffer equals exactly one configured spacing percent of last level', () => {
-    for (const pct of ['1', '2', '5']) {
-      const lastLong = new Decimal('110');
-      const lastShort = new Decimal('90');
-      const up = getUpperGridExhaustionPrice(lastLong, pct);
-      const lo = getLowerGridExhaustionPrice(lastShort, pct);
-      const d = new Decimal(pct).div(100);
-      expect(up.toFixed(8)).toBe(lastLong.mul(new Decimal(1).plus(d)).toFixed(8));
-      expect(lo.toFixed(8)).toBe(lastShort.mul(new Decimal(1).minus(d)).toFixed(8));
-    }
-  });
-
-  it('does not invent extra grid levels in buildGridPlan', () => {
+  it('buildGridPlan OFF: theoretical = full capital; maxActive=1', () => {
     const plan = buildGridPlan({
       startPrice: '100',
       traderAllocation: '1000',
@@ -154,12 +169,55 @@ describe('grid exhaustion buffer (one spacing beyond final level)', () => {
       levelsPerSide: 10,
       distancePercent: 1,
       symbolInfo: info,
+      capitalScalingEnabled: false,
     });
-    expect(plan.levels).toHaveLength(20);
-    const lastLong = plan.levels.find((l) => l.direction === 'LONG' && l.level === 10)!;
-    expect(parseFloat(lastLong.triggerPrice)).toBeCloseTo(110, 2);
-    expect(getUpperGridExhaustionPrice(lastLong.triggerPrice, plan.distancePercent).toFixed(2)).toBe(
-      getUpperGridExhaustionPrice(lastLong.triggerPrice, '1').toFixed(2),
-    );
+    expect(plan.capitalScalingEnabled).toBe(false);
+    expect(plan.maxActivePositions).toBe(1);
+    expect(plan.capitalPerLevel).toBe('1000.00000000');
+    for (const l of plan.levels) {
+      expect(l.theoreticalMargin).toBe('1000.00000000');
+      expect(l.allocationPct).toBe('1.00000000');
+    }
+  });
+
+  it('calculatePositionAllocation OFF returns full pool', () => {
+    expect(calculatePositionAllocation('1000', 5, 10, false).toFixed(2)).toBe('1000.00');
+  });
+});
+
+describe('gridCalc — TP/SL from spacing %', () => {
+  it('LONG 1%', () => {
+    const { tpPrice, slPrice } = calcLevelTpSlPrices('100', 'LONG', '1', info);
+    expect(parseFloat(tpPrice)).toBeCloseTo(101, 2);
+    expect(parseFloat(slPrice)).toBeCloseTo(99, 2);
+  });
+
+  it('SHORT 1%', () => {
+    const { tpPrice, slPrice } = calcLevelTpSlPrices('100', 'SHORT', '1', info);
+    expect(parseFloat(tpPrice)).toBeCloseTo(99, 2);
+    expect(parseFloat(slPrice)).toBeCloseTo(101, 2);
+  });
+
+  it('2% and 5%', () => {
+    expect(parseFloat(calcLevelTpSlPrices('100', 'LONG', '2', info).tpPrice)).toBeCloseTo(102, 2);
+    expect(parseFloat(calcLevelTpSlPrices('100', 'LONG', '5', info).slPrice)).toBeCloseTo(95, 2);
+  });
+});
+
+describe('allGridLevelsHitTp', () => {
+  it('SL does not count as TP', () => {
+    expect(allGridLevelsHitTp(['TP_HIT', 'TP_HIT'])).toBe(true);
+    expect(allGridLevelsHitTp(['TP_HIT', 'SL_HIT'])).toBe(false);
+  });
+});
+
+describe('misc', () => {
+  it('triggers', () => {
+    expect(calcGridTriggerPrice('100', 1, 'LONG', 5).toFixed(2)).toBe('105.00');
+    expect(calcGridDistanceAbs('100', 5).toFixed(2)).toBe('5.00');
+    expect(levelWeight(1, 10, true)).toBe(1);
+    expect(totalGridLevels(10)).toBe(20);
+    expect(getUpperGridExhaustionPrice('110', '1').toFixed(2)).toBe('111.10');
+    expect(getLowerGridExhaustionPrice('90', '1').toFixed(2)).toBe('89.10');
   });
 });

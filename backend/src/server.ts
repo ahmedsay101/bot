@@ -100,6 +100,7 @@ async function bootstrap(): Promise<void> {
     traderBehavior: 'grid_directional' as const,
     gridLevelsPerSide: config.trading.gridLevelsPerSide,
     gridDistancePercent: config.trading.gridDistancePercent,
+    gridCapitalScalingEnabled: config.trading.gridCapitalScalingEnabled,
     traderTakeProfitPercent: config.trading.traderTakeProfitPercent,
     traderMaxLifetimeHours: config.trading.traderMaxLifetimeHours,
     trendDetectionEnabled: config.trading.trendDetectionEnabled,
