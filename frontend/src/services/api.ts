@@ -296,7 +296,9 @@ export interface GridLevelView {
   /** PENDING | ACTIVE | TP_HIT | SL_HIT | CANCELLED */
   status: string;
   entryPrice: string | null;
+  exitPrice?: string | null;
   unrealizedPnl: string | null;
+  realizedPnl?: string | null;
   tpPrice?: string | null;
   slPrice?: string | null;
   weight?: number;

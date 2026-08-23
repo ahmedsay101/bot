@@ -99,6 +99,9 @@ interface LevelState {
   tpPrice: string | null;
   slPrice: string | null;
   completionReason: string | null;
+  /** Frozen net PnL after TP/SL — never recalculated from mark. */
+  realizedNetPnl: string | null;
+  exitPrice: string | null;
   dbId?: string;
 }
 
@@ -152,6 +155,8 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
   private activePositions = new Map<string, ActivePosition>();
   private activating = false;
   private handledFillIds = new Set<string>();
+  /** Levels whose financial close has been finalized (idempotent). */
+  private finalizedLevelKeys = new Set<string>();
   private exiting = false;
   private isDestroyed = false;
   private isPaused = false;
@@ -198,7 +203,7 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
   getOpenLegCount(): number {
     let n = 0;
     for (const a of this.activePositions.values()) {
-      if (a.filled) n += 1;
+      if (a.filled && !a.closing && !this.finalizedLevelKeys.has(a.key)) n += 1;
     }
     return n;
   }
@@ -208,13 +213,15 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
   getId(): string { return this.id; }
   getSymbol(): string { return this.symbol; }
   getRealizedPnl(): string { return this.realizedPnl.toFixed(8); }
-  getUnrealizedPnl(): string { return this.unrealizedPnl.toFixed(8); }
+  getUnrealizedPnl(): string {
+    this.recomputeUnrealized();
+    return this.unrealizedPnl.toFixed(8);
+  }
 
     getOpenNotional(): string | null {
-    if (this.activePositions.size === 0) return null;
     let sum = new Decimal(0);
     for (const a of this.activePositions.values()) {
-      if (!a.filled) continue;
+      if (!a.filled || a.closing || this.finalizedLevelKeys.has(a.key)) continue;
       sum = sum.plus(a.actualNotional);
     }
     return sum.isZero() ? null : sum.toFixed(8);
@@ -288,6 +295,8 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
         tpPrice: row.tpPrice,
         slPrice: row.slPrice,
         completionReason: null,
+        realizedNetPnl: null,
+        exitPrice: null,
       });
     }
     this.refreshGridDistanceAbs();
@@ -410,16 +419,22 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
         tpPrice: row.tpPrice != null ? String(row.tpPrice) : plan.tpPrice,
         slPrice: row.slPrice != null ? String(row.slPrice) : plan.slPrice ?? null,
         completionReason: row.completionReason != null ? String(row.completionReason) : null,
+        realizedNetPnl: null,
+        exitPrice: row.exitPrice != null ? String(row.exitPrice) : null,
         dbId: row.id != null ? String(row.id) : undefined,
       });
+      if (isLevelTerminal(status)) {
+        this.finalizedLevelKeys.add(key);
+      }
     }
 
     // Lock spacing from the ladder (never trust a drifted config %)
     this.refreshGridDistanceAbs();
 
-    // Rebuild activePositions from ACTIVE levels
+    // Rebuild activePositions from ACTIVE levels only (never from TP_HIT/SL_HIT)
     for (const level of this.levels.values()) {
       if (level.status !== 'ACTIVE') continue;
+      if (this.finalizedLevelKeys.has(levelKey(level.plan.direction, level.plan.level))) continue;
       if (level.entryPrice == null || level.filledQuantity == null || level.filledQuantity === '0') continue;
       const key = levelKey(level.plan.direction, level.plan.level);
       const actualNotional = calcActualNotional(level.entryPrice, level.filledQuantity);
@@ -591,8 +606,15 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
 
     for (const active of [...this.activePositions.values()]) {
       if (!active.filled || active.closing) continue;
+      if (this.finalizedLevelKeys.has(active.key)) {
+        this.activePositions.delete(active.key);
+        continue;
+      }
       const level = this.levels.get(active.key);
-      if (level == null || isLevelTerminal(level.status)) continue;
+      if (level == null || isLevelTerminal(level.status)) {
+        this.activePositions.delete(active.key);
+        continue;
+      }
 
       const tp = level.tpPrice ?? level.plan.tpPrice;
       const sl = level.slPrice ?? level.plan.slPrice;
@@ -786,7 +808,7 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
 
     let openNet = new Decimal(0);
     for (const a of this.activePositions.values()) {
-      if (!a.filled) continue;
+      if (!a.filled || a.closing || this.finalizedLevelKeys.has(a.key)) continue;
       const gross = calcPositionUnrealizedPnl(a.direction, a.entryPrice, this.markPrice, a.quantity);
       const estExit = estimateOpenExitFee(this.markPrice, a.quantity, rates);
       openNet = openNet.plus(gross.minus(a.entryFee).minus(estExit));
@@ -805,7 +827,7 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
 
     const currentPositions: CurrentPositionView[] = [];
     for (const a of this.activePositions.values()) {
-      if (!a.filled) continue;
+      if (!a.filled || a.closing || this.finalizedLevelKeys.has(a.key)) continue;
       const gross = calcPositionUnrealizedPnl(a.direction, a.entryPrice, this.markPrice, a.quantity);
       const estExit = estimateOpenExitFee(this.markPrice, a.quantity, rates);
       const netU = gross.minus(a.entryFee).minus(estExit);
@@ -841,8 +863,10 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
       .map((l) => {
         const key = levelKey(l.plan.direction, l.plan.level);
         const active = this.activePositions.get(key);
+        const terminal = isLevelTerminal(l.status);
         let uPnl: string | null = null;
-        if (active != null && active.filled) {
+        // CLOSED levels never mark-to-market — unrealized is always 0/null
+        if (!terminal && active != null && active.filled && !active.closing) {
           uPnl = calcPositionUnrealizedPnl(
             active.direction,
             active.entryPrice,
@@ -855,18 +879,20 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
           direction: l.plan.direction,
           triggerPrice: l.plan.triggerPrice,
           limitPrice: l.plan.limitPrice,
-          allocatedMargin: active != null ? active.allocatedMargin : l.plan.allocatedMargin,
-          notional: active != null ? active.actualNotional : l.plan.notional,
+          allocatedMargin: active != null && !terminal ? active.allocatedMargin : l.plan.allocatedMargin,
+          notional: active != null && !terminal ? active.actualNotional : l.plan.notional,
           leverage: this.traderConfig.leverage,
-          quantity: active != null ? active.quantity : l.plan.quantity,
+          quantity: active != null && !terminal ? active.quantity : l.plan.quantity,
           status: l.status,
           entryPrice: l.entryPrice,
-          unrealizedPnl: uPnl,
-        tpPrice: l.tpPrice ?? l.plan.tpPrice,
-        slPrice: l.slPrice ?? l.plan.slPrice,
-        weight: l.plan.weight,
-        allocationPct: l.plan.allocationPct,
-        completionReason: l.completionReason,
+          exitPrice: l.exitPrice,
+          unrealizedPnl: terminal ? '0' : uPnl,
+          realizedPnl: l.realizedNetPnl,
+          tpPrice: l.tpPrice ?? l.plan.tpPrice,
+          slPrice: l.slPrice ?? l.plan.slPrice,
+          weight: l.plan.weight,
+          allocationPct: l.plan.allocationPct,
+          completionReason: l.completionReason,
         };
       });
 
@@ -954,9 +980,15 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
         capitalHistory: this.capitalHistory,
         maxPerSide: this.levelsPerSide,
         maxOpenPositions: this.capitalScalingEnabled ? this.levelsPerSide * 2 : 1,
-        activeOpenCount: [...this.activePositions.values()].filter((a) => a.filled).length,
-        longOpen: [...this.activePositions.values()].filter((a) => a.filled && a.direction === 'LONG').length,
-        shortOpen: [...this.activePositions.values()].filter((a) => a.filled && a.direction === 'SHORT').length,
+        activeOpenCount: [...this.activePositions.values()].filter(
+          (a) => a.filled && !a.closing && !this.finalizedLevelKeys.has(a.key),
+        ).length,
+        longOpen: [...this.activePositions.values()].filter(
+          (a) => a.filled && !a.closing && a.direction === 'LONG' && !this.finalizedLevelKeys.has(a.key),
+        ).length,
+        shortOpen: [...this.activePositions.values()].filter(
+          (a) => a.filled && !a.closing && a.direction === 'SHORT' && !this.finalizedLevelKeys.has(a.key),
+        ).length,
         longSideCapital: longPool.toFixed(8),
         shortSideCapital: shortPool.toFixed(8),
         longSideUsed: longUsed.toFixed(8),
@@ -1142,9 +1174,13 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
 
   /** Entry ordered or filled — blocks another activation when scaling is OFF. */
   private hasInFlightOrActivePosition(): boolean {
-    if (this.activePositions.size > 0) return true;
+    if ([...this.activePositions.values()].some((a) => !a.closing && !this.finalizedLevelKeys.has(a.key))) {
+      return true;
+    }
     for (const l of this.levels.values()) {
-      if (l.status === 'ACTIVE') return true;
+      if (l.status === 'ACTIVE' && !this.finalizedLevelKeys.has(levelKey(l.plan.direction, l.plan.level))) {
+        return true;
+      }
       if (l.status === 'PENDING' && l.clientOrderId != null) return true;
     }
     return false;
@@ -1543,20 +1579,42 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
     kind: 'TP' | 'SL',
   ): Promise<void> {
     if (this.exiting || this.isDestroyed) return;
-    const active = this.activePositions.get(key);
     const level = this.levels.get(key);
-    if (active == null || level == null || !active.filled || active.closing) return;
-    if (isLevelTerminal(level.status)) return;
+    if (level == null) return;
+
+    // Idempotent: financial close runs at most once per level
+    if (this.finalizedLevelKeys.has(key)) {
+      this.activePositions.delete(key);
+      this.recomputeUnrealized();
+      return;
+    }
+    if (isLevelTerminal(level.status) && !this.activePositions.has(key)) {
+      this.finalizedLevelKeys.add(key);
+      return;
+    }
+
+    const active = this.activePositions.get(key);
+    if (active == null || !active.filled) return;
 
     const fillKey = `${update.clientOrderId}:${kind}`;
     if (this.handledFillIds.has(fillKey)) return;
     this.handledFillIds.add(fillKey);
 
-    active.closing = true;
-    const exitPrice = update.avgFillPrice ?? (kind === 'TP' ? level.tpPrice : level.slPrice) ?? this.markPrice;
+    // Snapshot then remove from live MTM immediately (before any await)
+    const entryPrice = active.entryPrice;
     const qty = update.filledQuantity || active.quantity;
+    const entryFee = active.entryFee;
+    const direction = active.direction;
+    const levelNum = active.level;
+    const exitPrice = update.avgFillPrice
+      ?? (kind === 'TP' ? level.tpPrice : level.slPrice)
+      ?? this.markPrice;
 
-    // Cancel the sibling protective order
+    active.closing = true;
+    this.finalizedLevelKeys.add(key);
+    this.activePositions.delete(key);
+    this.recomputeUnrealized();
+
     const siblingId = kind === 'TP' ? active.slClientOrderId : active.tpClientOrderId;
     if (siblingId != null) {
       try {
@@ -1576,13 +1634,14 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
       rates: feeRatesFromConfig(this.traderConfig),
       liquidity: 'TAKER',
     });
-    const gross = calcGrossPnl(active.direction, active.entryPrice, exitPrice, qty);
-    const net = gross.minus(active.entryFee).minus(exitFee);
+    const gross = calcGrossPnl(direction, entryPrice, exitPrice, qty);
+    const net = gross.minus(entryFee).minus(exitFee);
+
     this.grossRealizedPnl = this.grossRealizedPnl.plus(gross);
     this.totalFees = this.totalFees.plus(exitFee);
+    // Entry fee already booked into realizedPnl at fill time
     this.realizedPnl = this.realizedPnl.plus(gross.minus(exitFee));
     this.currentCapital = Decimal.max(0, this.currentCapital.plus(net));
-    await this.accountLedger.recordRealized(gross, exitFee);
 
     this.positionsClosed += 1;
     if (kind === 'TP') this.takeProfits += 1;
@@ -1590,62 +1649,76 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
 
     level.status = kind === 'TP' ? 'TP_HIT' : 'SL_HIT';
     level.completionReason = kind === 'TP' ? 'TP' : 'SL';
-    await this.persistLevel(level);
+    level.exitPrice = exitPrice;
+    level.realizedNetPnl = net.toFixed(8);
+    level.fees = entryFee.plus(exitFee).toFixed(8);
 
     this.capitalHistory.push({
       at: new Date().toISOString(),
       capital: this.currentCapital.toFixed(8),
-      event: kind === 'TP' ? `TP_L${active.level}_${active.direction}` : `SL_L${active.level}_${active.direction}`,
+      event: kind === 'TP' ? `TP_L${levelNum}_${direction}` : `SL_L${levelNum}_${direction}`,
       netPnl: net.toFixed(8),
     });
 
-    await this.db.position.updateMany({
-      where: { traderId: this.id, hedgeLevel: active.level, side: active.direction, isOpen: true },
-      data: {
-        isOpen: false,
-        closedAt: new Date(),
-        exitPrice,
-        realizedPnl: net.toFixed(8),
-      } as any,
-    });
+    try {
+      await this.accountLedger.recordRealized(gross, exitFee);
+      await this.persistLevel(level);
+      await this.db.position.updateMany({
+        where: { traderId: this.id, hedgeLevel: levelNum, side: direction, isOpen: true },
+        data: {
+          isOpen: false,
+          closedAt: new Date(),
+          exitPrice,
+          realizedPnl: net.toFixed(8),
+        } as any,
+      });
+      await this.db.trader.update({
+        where: { id: this.id },
+        data: {
+          realizedPnl: this.realizedPnl.toFixed(8),
+          unrealizedPnl: this.unrealizedPnl.toFixed(8),
+          totalFees: this.totalFees.toFixed(8),
+          currentCapital: this.currentCapital.toFixed(8),
+          positionsClosed: this.positionsClosed,
+          timelineJson: JSON.stringify(this.capitalHistory),
+        } as any,
+      });
+    } catch (err) {
+      log.error('[LIFECYCLE] CLOSE_PERSIST_FAILED (in-memory close kept)', {
+        traderId: this.id,
+        key,
+        kind,
+        error: String(err),
+      });
+    }
 
-    await this.db.trader.update({
-      where: { id: this.id },
-      data: {
-        realizedPnl: this.realizedPnl.toFixed(8),
-        totalFees: this.totalFees.toFixed(8),
-        currentCapital: this.currentCapital.toFixed(8),
-        positionsClosed: this.positionsClosed,
-        timelineJson: JSON.stringify(this.capitalHistory),
-      } as any,
-    });
-
-    this.activePositions.delete(key);
     log.info('[LIFECYCLE] GRID_LEVEL_CLOSED', {
       traderId: this.id,
       key,
       kind,
       exitPrice,
       net: net.toFixed(8),
+      unrealizedAfter: this.unrealizedPnl.toFixed(8),
       levelsTp: this.countByStatus('TP_HIT'),
       levelsSl: this.countByStatus('SL_HIT'),
     });
 
-    this.recomputeUnrealized();
     this.emitSnapshot();
 
     if (kind === 'TP' && this.allPositionsHitTp()) {
       await this.beginExit('ALL_GRID_POSITIONS_TP');
       return;
     }
-    // SL never destroys the trader — allow next entry opportunity with UPDATED capital
     await this.tryActivateNextLevel();
   }
 
   private recomputeUnrealized(): void {
     let sum = new Decimal(0);
     for (const a of this.activePositions.values()) {
-      if (!a.filled) continue;
+      // closing / unfilled never contribute to live unrealized
+      if (!a.filled || a.closing) continue;
+      const key = a.key;
+      if (this.finalizedLevelKeys.has(key)) continue;
       sum = sum.plus(
         calcPositionUnrealizedPnl(a.direction, a.entryPrice, this.markPrice, a.quantity),
       );

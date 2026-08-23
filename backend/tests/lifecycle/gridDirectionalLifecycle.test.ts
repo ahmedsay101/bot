@@ -587,7 +587,6 @@ describe('GridDirectionalTrader lifecycle', () => {
     });
     await tick('99', trader, 900); // SHORT L1
     expect(trader.getOpenLegCount()).toBe(1);
-    // Gap: past SHORT SL and through LONG 1–3
     await tick('104', trader, 1500);
     await wait(500);
     const g = trader.toSummary().grid!;
@@ -599,8 +598,37 @@ describe('GridDirectionalTrader lifecycle', () => {
     const pendingCrossed = g.levels.filter(
       (l) => l.direction === 'LONG' && l.status === 'PENDING' && parseFloat(l.triggerPrice) <= 104,
     );
-    // With max-1, not all crossed longs become ACTIVE
     expect(pendingCrossed.length + activeLongs.length).toBeGreaterThanOrEqual(1);
+    trader.destroy();
+  });
+
+  it('REGRESSION: after TP, closed PnL never changes when mark moves', async () => {
+    const trader = await boot({
+      ...baseConfig,
+      gridLevelsPerSide: 1,
+      gridDistancePercent: '5',
+      gridCapitalScalingEnabled: false,
+    });
+    await tick('105', trader, 900);
+    await tick('110.30', trader, 1200);
+    await wait(600);
+    const afterClose = trader.toSummary();
+    const closed = afterClose.grid!.levels.find((l) => l.direction === 'LONG' && l.level === 1)!;
+    expect(closed.status).toBe('TP_HIT');
+    // With 1 level/side and mark above start, SHORT is not eligible — no open positions
+    expect(afterClose.grid!.activeOpenCount ?? 0).toBe(0);
+    const frozenRealized = parseFloat(afterClose.realizedPnl);
+    expect(parseFloat(afterClose.unrealizedPnl)).toBe(0);
+    for (const p of ['120', '200', '106', '150']) {
+      await tick(p, trader, 400);
+      const s = trader.toSummary();
+      expect(parseFloat(s.realizedPnl)).toBeCloseTo(frozenRealized, 4);
+      expect(s.grid!.activeOpenCount ?? 0).toBe(0);
+      expect(parseFloat(s.unrealizedPnl)).toBe(0);
+      const lvl = s.grid!.levels.find((l) => l.direction === 'LONG' && l.level === 1)!;
+      expect(lvl.status).toBe('TP_HIT');
+      expect(lvl.unrealizedPnl).toBe('0');
+    }
     trader.destroy();
   });
 });

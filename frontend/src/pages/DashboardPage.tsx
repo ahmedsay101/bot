@@ -336,7 +336,9 @@ function GridLadder({ grid, markPrice }: { grid: GridTraderView; markPrice: stri
                   {' · '}
                   {dead ? 'Hist margin' : 'Margin'} {money(l.allocatedMargin)}
                   {' · '}
-                  {statusLabel(l.status)}
+                  {dead
+                    ? `${statusLabel(l.status)} · Realized ${pnl(l.realizedPnl ?? '0')}`
+                    : statusLabel(l.status)}
                 </Typography>
               </Box>
               <Typography fontFamily="monospace" fontWeight={700} sx={{ fontSize: 12, color: accent }}>

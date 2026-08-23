@@ -304,7 +304,11 @@ export interface GridLevelView {
   quantity: string;
   status: string;
   entryPrice: string | null;
+  exitPrice?: string | null;
+  /** Only for OPEN levels; closed levels are always "0". */
   unrealizedPnl: string | null;
+  /** Frozen net PnL after TP/SL. */
+  realizedPnl?: string | null;
   tpPrice?: string | null;
   slPrice?: string | null;
   weight?: number;
