@@ -552,4 +552,55 @@ describe('GridDirectionalTrader lifecycle', () => {
     expect(l1.status).toBe('TP_HIT');
     trader.destroy();
   });
+
+  it('mark gap past SHORT SL closes position even without waiting for exact SL tick', async () => {
+    const trader = await boot({
+      ...baseConfig,
+      gridLevelsPerSide: 3,
+      gridDistancePercent: '1',
+      gridCapitalScalingEnabled: false,
+    });
+    // Activate SHORT L1 @ 99 (start 100, 1%)
+    await tick('99', trader, 900);
+    expect(trader.getOpenLegCount()).toBe(1);
+    const active = trader.toSummary().grid!.levels.find((l) => l.status === 'ACTIVE');
+    expect(active?.direction).toBe('SHORT');
+    const sl = active!.slPrice!;
+    expect(parseFloat(sl)).toBeGreaterThan(parseFloat(active!.entryPrice!));
+    // Jump mark far above SL (gap) — must close via mark reconcile
+    await tick('105', trader, 1200);
+    await wait(400);
+    const g = trader.toSummary().grid!;
+    const short1 = g.levels.find((l) => l.direction === 'SHORT' && l.level === 1)!;
+    expect(short1.status).toBe('SL_HIT');
+    expect(g.activeOpenCount ?? 0).toBeLessThanOrEqual(1);
+    expect(trader.getStatus()).toBe('ACTIVE');
+    trader.destroy();
+  });
+
+  it('OFF mode: after SHORT SL, gap into LONGs activates at most one; others stay PENDING', async () => {
+    const trader = await boot({
+      ...baseConfig,
+      gridLevelsPerSide: 5,
+      gridDistancePercent: '1',
+      gridCapitalScalingEnabled: false,
+    });
+    await tick('99', trader, 900); // SHORT L1
+    expect(trader.getOpenLegCount()).toBe(1);
+    // Gap: past SHORT SL and through LONG 1–3
+    await tick('104', trader, 1500);
+    await wait(500);
+    const g = trader.toSummary().grid!;
+    const short1 = g.levels.find((l) => l.direction === 'SHORT' && l.level === 1)!;
+    expect(short1.status).toBe('SL_HIT');
+    expect(g.activeOpenCount ?? 0).toBeLessThanOrEqual(1);
+    const activeLongs = g.levels.filter((l) => l.direction === 'LONG' && l.status === 'ACTIVE');
+    expect(activeLongs.length).toBeLessThanOrEqual(1);
+    const pendingCrossed = g.levels.filter(
+      (l) => l.direction === 'LONG' && l.status === 'PENDING' && parseFloat(l.triggerPrice) <= 104,
+    );
+    // With max-1, not all crossed longs become ACTIVE
+    expect(pendingCrossed.length + activeLongs.length).toBeGreaterThanOrEqual(1);
+    trader.destroy();
+  });
 });

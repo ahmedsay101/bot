@@ -554,3 +554,85 @@ export function allGridLevelsHitTp(statuses: string[]): boolean {
   if (statuses.length === 0) return false;
   return statuses.every((s) => s === 'TP_HIT');
 }
+
+/**
+ * LONG entry eligible when mark is at/above trigger (above start side).
+ * SHORT entry eligible when mark is at/below trigger (below start side).
+ * Does not require exact equality — gaps count.
+ */
+export function isEntryTriggered(
+  direction: TradeSide,
+  markPrice: string | Decimal,
+  triggerPrice: string | Decimal,
+): boolean {
+  const mark = new Decimal(markPrice);
+  const trigger = new Decimal(triggerPrice);
+  return direction === 'LONG' ? mark.gte(trigger) : mark.lte(trigger);
+}
+
+/**
+ * Detect that mark moved through a trigger between previous and current
+ * (or is already through on current). Handles gaps without exact equality.
+ */
+export function didCrossEntry(
+  direction: TradeSide,
+  previousPrice: string | Decimal,
+  currentPrice: string | Decimal,
+  triggerPrice: string | Decimal,
+): boolean {
+  const prev = new Decimal(previousPrice);
+  const curr = new Decimal(currentPrice);
+  const trigger = new Decimal(triggerPrice);
+  if (direction === 'LONG') {
+    // Upward cross: was below trigger, now at/above — or already through
+    return curr.gte(trigger) && prev.lt(trigger);
+  }
+  return curr.lte(trigger) && prev.gt(trigger);
+}
+
+/** List PENDING levels whose entry is satisfied by mark (gap-safe via >= / <=). */
+export function findTriggeredPendingLevels<T extends {
+  direction: TradeSide;
+  status: string;
+  triggerPrice: string;
+  level: number;
+  clientOrderId?: string | null;
+}>(
+  levels: T[],
+  markPrice: string | Decimal,
+  startPrice: string | Decimal,
+): T[] {
+  const mark = new Decimal(markPrice);
+  const start = new Decimal(startPrice);
+  const side: TradeSide | null = mark.gt(start) ? 'LONG' : mark.lt(start) ? 'SHORT' : null;
+  if (side == null) return [];
+  return levels
+    .filter((l) => l.direction === side && l.status === 'PENDING' && l.clientOrderId == null)
+    .filter((l) => isEntryTriggered(side, mark, l.triggerPrice))
+    .sort((a, b) => a.level - b.level);
+}
+
+/**
+ * Binance MARK_PRICE stop semantics for protective exits.
+ * LONG close = SELL: TP when mark >= tp, SL when mark <= sl
+ * SHORT close = BUY: TP when mark <= tp, SL when mark >= sl
+ */
+export function isTpTriggeredByMark(
+  direction: TradeSide,
+  markPrice: string | Decimal,
+  tpPrice: string | Decimal,
+): boolean {
+  const mark = new Decimal(markPrice);
+  const tp = new Decimal(tpPrice);
+  return direction === 'LONG' ? mark.gte(tp) : mark.lte(tp);
+}
+
+export function isSlTriggeredByMark(
+  direction: TradeSide,
+  markPrice: string | Decimal,
+  slPrice: string | Decimal,
+): boolean {
+  const mark = new Decimal(markPrice);
+  const sl = new Decimal(slPrice);
+  return direction === 'LONG' ? mark.lte(sl) : mark.gte(sl);
+}

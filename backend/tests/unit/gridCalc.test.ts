@@ -17,6 +17,11 @@ import {
   totalGridLevels,
   getUpperGridExhaustionPrice,
   getLowerGridExhaustionPrice,
+  isEntryTriggered,
+  didCrossEntry,
+  findTriggeredPendingLevels,
+  isTpTriggeredByMark,
+  isSlTriggeredByMark,
 } from '../../src/modules/trader/grid/gridCalc';
 import type { SymbolInfo } from '../../src/types';
 
@@ -219,5 +224,45 @@ describe('misc', () => {
     expect(totalGridLevels(10)).toBe(20);
     expect(getUpperGridExhaustionPrice('110', '1').toFixed(2)).toBe('111.10');
     expect(getLowerGridExhaustionPrice('90', '1').toFixed(2)).toBe('89.10');
+  });
+});
+
+describe('gridCalc — entry / TP / SL crossing (gap-safe)', () => {
+  it('LONG entry: gap from below to above without exact hit', () => {
+    expect(isEntryTriggered('LONG', '0.0645', '0.06379')).toBe(true);
+    expect(didCrossEntry('LONG', '0.0635', '0.0645', '0.06379')).toBe(true);
+    expect(didCrossEntry('LONG', '0.0645', '0.0650', '0.06379')).toBe(false); // already above
+  });
+
+  it('detects multiple LONG levels crossed in one jump', () => {
+    const levels = [
+      { direction: 'LONG' as const, status: 'PENDING', triggerPrice: '0.063790', level: 1 },
+      { direction: 'LONG' as const, status: 'PENDING', triggerPrice: '0.064420', level: 2 },
+      { direction: 'LONG' as const, status: 'PENDING', triggerPrice: '0.065050', level: 3 },
+      { direction: 'LONG' as const, status: 'PENDING', triggerPrice: '0.065690', level: 4 },
+    ];
+    const hit = findTriggeredPendingLevels(levels, '0.065500', '0.063160');
+    expect(hit.map((l) => l.level)).toEqual([1, 2, 3]);
+  });
+
+  it('detects multiple SHORT levels crossed downward', () => {
+    const levels = [
+      { direction: 'SHORT' as const, status: 'PENDING', triggerPrice: '98', level: 1 },
+      { direction: 'SHORT' as const, status: 'PENDING', triggerPrice: '95', level: 2 },
+      { direction: 'SHORT' as const, status: 'PENDING', triggerPrice: '92', level: 3 },
+    ];
+    const hit = findTriggeredPendingLevels(levels, '90', '100');
+    expect(hit.map((l) => l.level)).toEqual([1, 2, 3]);
+  });
+
+  it('LONG TP/SL by mark without exact equality', () => {
+    expect(isTpTriggeredByMark('LONG', '110.5', '110')).toBe(true);
+    expect(isSlTriggeredByMark('LONG', '89', '90')).toBe(true);
+  });
+
+  it('SHORT TP/SL by mark — SL above entry when mark jumps past', () => {
+    expect(isTpTriggeredByMark('SHORT', '90', '95')).toBe(true);
+    expect(isSlTriggeredByMark('SHORT', '0.065500', '0.063100')).toBe(true);
+    expect(isSlTriggeredByMark('SHORT', '0.062900', '0.063100')).toBe(false);
   });
 });

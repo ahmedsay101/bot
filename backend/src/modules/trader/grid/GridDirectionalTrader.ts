@@ -38,6 +38,9 @@ import {
   calcLevelTpSlPrices,
   allGridLevelsHitTp,
   totalGridLevels,
+  isTpTriggeredByMark,
+  isSlTriggeredByMark,
+  isEntryTriggered,
   type GridLevelPlan,
 } from './gridCalc';
 import {
@@ -132,6 +135,8 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
   private endsAt: Date | null = null;
   private lifetimeTimer: ReturnType<typeof setTimeout> | null = null;
   private markPrice = '0';
+  /** Previous mark used for gap/cross diagnostics (entry still uses current >= / <=). */
+  private previousMarkPrice: string | null = null;
   private symbolInfo: SymbolInfo | null = null;
   private initialCapital = new Decimal(0);
   private currentCapital = new Decimal(0);
@@ -440,6 +445,28 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
       });
     }
 
+    // Bind open TP/SL order ids from restored order views (avoid duplicate protectives)
+    const orderViews = Array.isArray(state.orderViews)
+      ? (state.orderViews as Array<{
+        clientOrderId: string;
+        type: string;
+        status: string;
+        hedgeLevel: number;
+        role?: string;
+        side?: string;
+      }>)
+      : [];
+    const openTypes = new Set(['PENDING', 'NEW', 'TRIGGERED', 'PARTIALLY_FILLED']);
+    for (const active of this.activePositions.values()) {
+      const related = orderViews.filter(
+        (o) => o.hedgeLevel === active.level && openTypes.has(o.status),
+      );
+      const tp = related.find((o) => o.type === 'TAKE_PROFIT_MARKET' || o.type === 'TAKE_PROFIT');
+      const sl = related.find((o) => o.type === 'STOP_MARKET' || o.type === 'STOP' || o.type === 'STOP_LIMIT');
+      if (tp != null) active.tpClientOrderId = tp.clientOrderId;
+      if (sl != null) active.slClientOrderId = sl.clientOrderId;
+    }
+
     // Fallback: restore single active from trader currentSide fields if no ACTIVE levels rebuilt
     if (this.activePositions.size === 0) {
       const side = state.currentSide != null ? String(state.currentSide) as TradeSide : null;
@@ -501,6 +528,32 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
       shortOpen: this.countSideActive('SHORT'),
     });
     this.logGridExhaustionBounds();
+    // CRITICAL: restore rebuilds ACTIVE from DB but protective order client IDs are null
+    // unless sim book was rehydrated — re-attach TP/SL so mark ticks can close them.
+    void this.ensureProtectiveOrdersForActive();
+  }
+
+  /** After restore (or lost orders), ensure every filled ACTIVE has live TP+SL. */
+  private async ensureProtectiveOrdersForActive(): Promise<void> {
+    if (this.symbolInfo == null || this.exiting || this.isDestroyed) return;
+    for (const active of this.activePositions.values()) {
+      if (!active.filled || active.closing) continue;
+      const level = this.levels.get(active.key);
+      if (level == null || isLevelTerminal(level.status)) continue;
+      const tp = level.tpPrice ?? level.plan.tpPrice;
+      const sl = level.slPrice ?? level.plan.slPrice;
+      if (tp == null || tp === '' || sl == null || sl === '') continue;
+      if (active.tpClientOrderId != null && active.slClientOrderId != null) continue;
+      log.warn('[LIFECYCLE] REATTACH_PROTECTIVES', {
+        traderId: this.id,
+        key: active.key,
+        tp,
+        sl,
+        hadTp: active.tpClientOrderId != null,
+        hadSl: active.slClientOrderId != null,
+      });
+      await this.placeProtectiveOrders(active, tp, sl);
+    }
   }
 
   async resumeCompleting(): Promise<void> {
@@ -510,6 +563,8 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
 
   onPriceUpdate(price: string): void {
     if (this.isDestroyed || this.isPaused) return;
+    const previous = this.previousMarkPrice ?? this.markPrice;
+    this.previousMarkPrice = this.markPrice;
     this.markPrice = price;
     this.recomputeUnrealized();
     this.emitSnapshot();
@@ -518,8 +573,142 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
       void this.beginExit('MAX_LIFETIME');
       return;
     }
-    // Price leaving the grid does NOT destroy the trader.
-    void this.tryActivateNextLevel();
+    // Mark-based TP/SL safety net (gaps + missing sim protective orders)
+    void this.reconcileProtectiveByMark(previous, price).then(() => {
+      this.logGridEvaluation(previous, price);
+      // Price leaving the grid does NOT destroy the trader.
+      void this.tryActivateNextLevel();
+    });
+  }
+
+  /**
+   * Close ACTIVE positions whose TP/SL has been crossed by mark — does not require
+   * exact equality. Prefer SL when both are through (adverse gap).
+   * Idempotent with real order fills via terminal status + handledFillIds.
+   */
+  private async reconcileProtectiveByMark(previousPrice: string, currentPrice: string): Promise<void> {
+    if (this.exiting || this.isDestroyed || this.status !== 'ACTIVE') return;
+
+    for (const active of [...this.activePositions.values()]) {
+      if (!active.filled || active.closing) continue;
+      const level = this.levels.get(active.key);
+      if (level == null || isLevelTerminal(level.status)) continue;
+
+      const tp = level.tpPrice ?? level.plan.tpPrice;
+      const sl = level.slPrice ?? level.plan.slPrice;
+      if (tp == null || tp === '' || sl == null || sl === '') continue;
+
+      const slHit = isSlTriggeredByMark(active.direction, currentPrice, sl);
+      const tpHit = isTpTriggeredByMark(active.direction, currentPrice, tp);
+
+      log.debug('[LIFECYCLE] POSITION_CHECK', {
+        traderId: this.id,
+        symbol: this.symbol,
+        levelId: active.key,
+        side: active.direction,
+        entry: active.entryPrice,
+        tp,
+        sl,
+        previousPrice,
+        currentPrice,
+        tpCrossed: tpHit,
+        slCrossed: slHit,
+        positionStatus: level.status,
+      });
+
+      if (!slHit && !tpHit) continue;
+
+      // Prefer SL on dual cross (price gapped through both)
+      const kind: 'TP' | 'SL' = slHit ? 'SL' : 'TP';
+      const exitPx = kind === 'SL' ? sl : tp;
+
+      log.warn('[LIFECYCLE] MARK_PROTECTIVE_RECONCILE', {
+        traderId: this.id,
+        key: active.key,
+        kind,
+        entry: active.entryPrice,
+        tp,
+        sl,
+        previousPrice,
+        currentPrice,
+        expected: kind === 'SL' ? 'SL_TRIGGERED' : 'TP_TRIGGERED',
+        actual: 'ACTIVE',
+      });
+
+      // Cancel any resting protectives so sim does not double-fill
+      for (const oid of [active.tpClientOrderId, active.slClientOrderId]) {
+        if (oid == null) continue;
+        try {
+          await this.executionProvider.cancelOrder({
+            symbol: this.symbol,
+            clientOrderId: oid,
+          } as any);
+        } catch { /* best-effort */ }
+      }
+
+      const synthId = `mark-${kind.toLowerCase()}-${active.key}-${Date.now()}`;
+      await this.handleProtectiveFill(active.key, {
+        clientOrderId: synthId,
+        exchangeOrderId: synthId,
+        symbol: this.symbol,
+        status: 'FILLED',
+        filledQuantity: active.quantity,
+        avgFillPrice: currentPrice,
+        fee: null,
+        feeCurrency: null,
+        timestamp: Date.now(),
+      }, kind);
+
+      // Use stop price as economic exit when mark jumped far past (optional: keep mark)
+      void exitPx;
+    }
+  }
+
+  /** Structured diagnostics for crossed-but-still-PENDING levels. */
+  private logGridEvaluation(previousPrice: string, currentPrice: string): void {
+    if (this.startPrice == null) return;
+    const mark = new Decimal(currentPrice);
+    const start = new Decimal(this.startPrice);
+    const blocked = !this.capitalScalingEnabled && this.hasInFlightOrActivePosition();
+    const lines: Array<Record<string, unknown>> = [];
+
+    for (const l of this.levels.values()) {
+      if (l.plan.direction === 'LONG' && !mark.gt(start)) continue;
+      if (l.plan.direction === 'SHORT' && !mark.lt(start)) continue;
+      const crossed = isEntryTriggered(l.plan.direction, currentPrice, l.plan.triggerPrice);
+      if (!crossed && l.status !== 'ACTIVE') continue;
+      const eligible = l.status === 'PENDING' && l.clientOrderId == null && !blocked
+        && (this.capitalScalingEnabled || !this.hasInFlightOrActivePosition());
+      let reasonNotActivated: string | null = null;
+      if (l.status === 'PENDING' && crossed) {
+        if (blocked) reasonNotActivated = 'max_one_active_position';
+        else if (l.clientOrderId != null) reasonNotActivated = 'entry_order_in_flight';
+        else reasonNotActivated = eligible ? null : 'not_selected_yet';
+      }
+      lines.push({
+        levelId: levelKey(l.plan.direction, l.plan.level),
+        side: l.plan.direction,
+        entryPrice: l.plan.triggerPrice,
+        previousPrice,
+        currentPrice,
+        crossed,
+        eligible: Boolean(eligible && crossed),
+        currentState: l.status,
+        reasonNotActivated,
+      });
+    }
+
+    if (lines.length === 0) return;
+    log.info('[LIFECYCLE] GRID_EVALUATION', {
+      traderId: this.id,
+      symbol: this.symbol,
+      previousPrice,
+      currentPrice,
+      startPrice: this.startPrice,
+      capitalScalingEnabled: this.capitalScalingEnabled,
+      activePositionCount: this.activePositions.size,
+      levels: lines,
+    });
   }
 
   async onOrderUpdate(update: OrderUpdate): Promise<void> {
@@ -930,13 +1119,13 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
         if (mark.gt(start)) {
           const longs = [...this.levels.values()]
             .filter((l) => l.plan.direction === 'LONG' && l.status === 'PENDING' && l.clientOrderId == null)
-            .filter((l) => mark.gte(l.plan.triggerPrice))
+            .filter((l) => isEntryTriggered('LONG', mark, l.plan.triggerPrice))
             .sort((a, b) => a.plan.level - b.plan.level);
           candidate = longs[0] ?? null;
         } else if (mark.lt(start)) {
           const shorts = [...this.levels.values()]
             .filter((l) => l.plan.direction === 'SHORT' && l.status === 'PENDING' && l.clientOrderId == null)
-            .filter((l) => mark.lte(l.plan.triggerPrice))
+            .filter((l) => isEntryTriggered('SHORT', mark, l.plan.triggerPrice))
             .sort((a, b) => a.plan.level - b.plan.level);
           candidate = shorts[0] ?? null;
         }

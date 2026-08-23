@@ -430,6 +430,67 @@ export class TraderManager extends EventEmitter {
           currentPositionNumber: dbTrader.currentPositionNumber,
         });
 
+        // Rebuild sim conditional book so TP/SL continue to fire after restart
+        const sim = this.executionProvider as {
+          isSimulation?: boolean;
+          rehydrate?: (p: {
+            positions: Array<{
+              symbol: string;
+              side: 'LONG' | 'SHORT';
+              entryPrice: string;
+              quantity: string;
+              leverage?: number;
+            }>;
+            orders: Array<{
+              clientOrderId: string;
+              traderId: string;
+              symbol: string;
+              side: 'BUY' | 'SELL';
+              type: import('../../types').OrderType;
+              role: import('../../types').HedgeRole;
+              hedgeLevel: number;
+              quantity: string;
+              filledQuantity?: string;
+              price?: string | null;
+              stopPrice?: string | null;
+              status: OrderStatus;
+              positionSide?: 'LONG' | 'SHORT' | 'BOTH';
+            }>;
+          }) => void;
+          getSymbolInfo?: (s: string) => Promise<unknown>;
+        };
+        if (sim.isSimulation && typeof sim.rehydrate === 'function') {
+          try {
+            await sim.getSymbolInfo?.(dbTrader.symbol);
+          } catch { /* non-fatal */ }
+          sim.rehydrate({
+            positions: openPositions.map((p) => ({
+              symbol: dbTrader.symbol,
+              side: p.side as 'LONG' | 'SHORT',
+              entryPrice: p.entryPrice,
+              quantity: p.quantity,
+              leverage: p.leverage,
+            })),
+            orders: orders
+              .filter((o) => OPEN_ORDER_STATUSES.includes(o.status as OrderStatus))
+              .map((o) => ({
+                clientOrderId: o.clientOrderId,
+                traderId: dbTrader.id,
+                symbol: dbTrader.symbol,
+                side: inferOrderSide(o),
+                type: o.type as import('../../types').OrderType,
+                role: o.role as import('../../types').HedgeRole,
+                hedgeLevel: o.hedgeLevel,
+                quantity: o.quantity,
+                filledQuantity: o.filledQuantity,
+                price: o.price,
+                stopPrice: o.stopPrice,
+                status: o.status as OrderStatus,
+                positionSide: (o as { positionSide?: 'LONG' | 'SHORT' | 'BOTH' }).positionSide,
+              })),
+          });
+        }
+
         this.wireTraderEvents(trader);
         this.traders.set(trader.getId(), trader);
         this.symbolToTrader.set(dbTrader.symbol, trader.getId());
@@ -930,6 +991,11 @@ export class TraderManager extends EventEmitter {
   private onPriceUpdate(update: PriceUpdate): void {
     const traderId = this.symbolToTrader.get(update.symbol);
     if (traderId == null) return;
+    // Always feed simulation book (server also listens; duplicate evaluate is idempotent)
+    const sim = this.executionProvider as { onPriceUpdate?: (s: string, p: string) => void; isSimulation?: boolean };
+    if (sim.isSimulation && typeof sim.onPriceUpdate === 'function') {
+      sim.onPriceUpdate(update.symbol, update.price);
+    }
     const trader = this.traders.get(traderId);
     trader?.onPriceUpdate(update.price);
   }

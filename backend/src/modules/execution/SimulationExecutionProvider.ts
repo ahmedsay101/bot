@@ -91,6 +91,24 @@ export class SimulationExecutionProvider extends EventEmitter implements IExecut
   /** Event-driven: every mark tick evaluates the pending/triggered book. */
   onPriceUpdate(symbol: string, price: string): void {
     this.markPrices.set(symbol, price);
+    if (
+      !this.symbolInfoCache.has(symbol)
+      && [...this.orders.values()].some(
+        (o) => o.req.symbol === symbol
+          && o.phase !== 'FILLED'
+          && o.phase !== 'CANCELED'
+          && o.phase !== 'REJECTED',
+      )
+    ) {
+      // Warm cache then evaluate — prevents silent skip after rehydrate/restart
+      void this.getSymbolInfo(symbol)
+        .then(() => this.evaluateBook(symbol, price))
+        .catch((err) => log.warn('Sim mark evaluate skipped (no symbolInfo)', {
+          symbol,
+          error: String(err),
+        }));
+      return;
+    }
     this.evaluateBook(symbol, price);
   }
 
@@ -374,6 +392,7 @@ export class SimulationExecutionProvider extends EventEmitter implements IExecut
 
   private evaluateBook(symbol: string, markPrice: string): void {
     const mark = new Decimal(markPrice);
+    const cachedInfo = this.symbolInfoCache.get(symbol);
 
     for (const [clientId, order] of this.orders) {
       if (order.req.symbol !== symbol) continue;
@@ -386,8 +405,17 @@ export class SimulationExecutionProvider extends EventEmitter implements IExecut
         if (this.isStopTriggered(type, side, mark, new Decimal(stopPrice))) {
           if (type === 'STOP_MARKET' || type === 'TAKE_PROFIT_MARKET') {
             // Immediate market execution
-            const symbolInfo = this.symbolInfoCache.get(symbol);
-            if (symbolInfo == null) continue;
+            const symbolInfo = cachedInfo ?? this.symbolInfoCache.get(symbol);
+            if (symbolInfo == null) {
+              log.warn('Sim STOP fill deferred — symbolInfo not cached yet', {
+                clientId,
+                symbol,
+                type,
+                stop: stopPrice,
+                mark: markPrice,
+              });
+              continue;
+            }
             const fillPrice = this.applySlippage(markPrice, side, symbolInfo);
             this.finalizeFill(clientId, order, fillPrice, symbolInfo);
             continue;
@@ -414,7 +442,7 @@ export class SimulationExecutionProvider extends EventEmitter implements IExecut
         if (limitPrice == null) {
           // STOP_MARKET / TAKE_PROFIT_MARKET should have filled in phase 1; safety net
           if (type === 'STOP_MARKET' || type === 'TAKE_PROFIT_MARKET') {
-            const symbolInfo = this.symbolInfoCache.get(symbol);
+            const symbolInfo = cachedInfo ?? this.symbolInfoCache.get(symbol);
             if (symbolInfo == null) continue;
             const fillPrice = this.applySlippage(markPrice, side, symbolInfo);
             this.finalizeFill(clientId, order, fillPrice, symbolInfo);
@@ -422,7 +450,7 @@ export class SimulationExecutionProvider extends EventEmitter implements IExecut
           continue;
         }
         const limit = new Decimal(limitPrice);
-        const symbolInfo = this.symbolInfoCache.get(symbol);
+        const symbolInfo = cachedInfo ?? this.symbolInfoCache.get(symbol);
         if (symbolInfo == null) continue;
 
         if (this.isLimitExecutable(side, mark, limit)) {
