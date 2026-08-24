@@ -1,8 +1,9 @@
-/**
- * Two-sided grid trader:
+ /**
+ * Two-sided grid trader (normal directional orientation):
+ * - LONG entries BELOW start; SHORT entries ABOVE start
+ * - TP/SL ± grid spacing % from actual entry (LONG TP↑/SL↓; SHORT TP↓/SL↑)
  * - Capital MODE A: triangular side-pool scaling (GRID_CAPITAL_SCALING_ENABLED=true)
  * - Capital MODE B: 100% current capital, max 1 active (GRID_CAPITAL_SCALING_ENABLED=false)
- * - Every level has TP and SL at ± grid spacing % from entry
  * - Destroy ONLY for MAX_LIFETIME or ALL_GRID_POSITIONS_TP (FORCE for emergency)
  * - Price leaving the grid does NOT destroy the trader
  * - SL on a level closes that level only
@@ -41,6 +42,7 @@ import {
   isTpTriggeredByMark,
   isSlTriggeredByMark,
   isEntryTriggered,
+  isValidDirectionalTpSl,
   type GridLevelPlan,
 } from './gridCalc';
 import {
@@ -695,8 +697,9 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
     const lines: Array<Record<string, unknown>> = [];
 
     for (const l of this.levels.values()) {
-      if (l.plan.direction === 'LONG' && !mark.gt(start)) continue;
-      if (l.plan.direction === 'SHORT' && !mark.lt(start)) continue;
+      // LONG below start; SHORT above start
+      if (l.plan.direction === 'LONG' && !mark.lt(start)) continue;
+      if (l.plan.direction === 'SHORT' && !mark.gt(start)) continue;
       const crossed = isEntryTriggered(l.plan.direction, currentPrice, l.plan.triggerPrice);
       if (!crossed && l.status !== 'ACTIVE') continue;
       const eligible = l.status === 'PENDING' && l.clientOrderId == null && !blocked
@@ -857,8 +860,11 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
 
     const gridLevels = [...this.levels.values()]
       .sort((a, b) => {
-        if (a.plan.direction !== b.plan.direction) return a.plan.direction === 'LONG' ? -1 : 1;
-        return a.plan.direction === 'LONG' ? b.plan.level - a.plan.level : a.plan.level - b.plan.level;
+        // High → low price: SHORT (above start) then LONG (below start)
+        const pa = new Decimal(a.plan.triggerPrice);
+        const pb = new Decimal(b.plan.triggerPrice);
+        if (!pb.eq(pa)) return pb.minus(pa).toNumber();
+        return a.plan.level - b.plan.level;
       })
       .map((l) => {
         const key = levelKey(l.plan.direction, l.plan.level);
@@ -873,6 +879,25 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
             this.markPrice,
             active.quantity,
           ).toFixed(8);
+        }
+        const tp = l.tpPrice ?? l.plan.tpPrice;
+        const sl = l.slPrice ?? l.plan.slPrice;
+        const entryForCheck = l.entryPrice ?? l.plan.triggerPrice;
+        if (
+          process.env.NODE_ENV !== 'production'
+          && entryForCheck
+          && tp
+          && sl
+          && !isValidDirectionalTpSl(l.plan.direction, entryForCheck, tp, sl)
+        ) {
+          log.warn('[LIFECYCLE] INVALID_TP_SL_ORIENTATION', {
+            traderId: this.id,
+            key,
+            direction: l.plan.direction,
+            entry: entryForCheck,
+            tp,
+            sl,
+          });
         }
         return {
           level: l.plan.level,
@@ -1047,7 +1072,7 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
     return allGridLevelsHitTp([...this.levels.values()].map((l) => l.status));
   }
 
-  /** Highest LONG / lowest SHORT trigger prices (final grid levels). */
+  /** Furthest LONG (lowest) / furthest SHORT (highest) trigger prices. */
   private getFinalGridTriggers(): { lastLong: string | null; lastShort: string | null } {
     let lastLong: string | null = null;
     let lastShort: string | null = null;
@@ -1076,11 +1101,12 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
     return {
       lastLong,
       lastShort,
-      upperDestroy: lastLong != null
-        ? getUpperGridExhaustionPrice(lastLong, this.distancePercent).toFixed(8)
+      // SHORT above start → upper bound from last SHORT; LONG below → lower from last LONG
+      upperDestroy: lastShort != null
+        ? getUpperGridExhaustionPrice(lastShort, this.distancePercent).toFixed(8)
         : null,
-      lowerDestroy: lastShort != null
-        ? getLowerGridExhaustionPrice(lastShort, this.distancePercent).toFixed(8)
+      lowerDestroy: lastLong != null
+        ? getLowerGridExhaustionPrice(lastLong, this.distancePercent).toFixed(8)
         : null,
     };
   }
@@ -1148,13 +1174,14 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
         const start = new Decimal(this.startPrice);
         let candidate: LevelState | null = null;
 
-        if (mark.gt(start)) {
+        // Below start → LONG dips; above start → SHORT rallies
+        if (mark.lt(start)) {
           const longs = [...this.levels.values()]
             .filter((l) => l.plan.direction === 'LONG' && l.status === 'PENDING' && l.clientOrderId == null)
             .filter((l) => isEntryTriggered('LONG', mark, l.plan.triggerPrice))
             .sort((a, b) => a.plan.level - b.plan.level);
           candidate = longs[0] ?? null;
-        } else if (mark.lt(start)) {
+        } else if (mark.gt(start)) {
           const shorts = [...this.levels.values()]
             .filter((l) => l.plan.direction === 'SHORT' && l.status === 'PENDING' && l.clientOrderId == null)
             .filter((l) => isEntryTriggered('SHORT', mark, l.plan.triggerPrice))
@@ -1232,16 +1259,18 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
     const dir = level.plan.direction === 'LONG' ? 'L' : 'S';
     const clientOrderId = `g-${shortId}-${dir}${level.plan.level}-${uuidv4().slice(0, 8)}`;
     const side = marketSideForPosition(level.plan.direction);
+    // LONG dip: already through when mark ≤ trigger; SHORT rally: mark ≥ trigger
     const alreadyThrough = level.plan.direction === 'LONG'
-      ? new Decimal(this.markPrice).gte(level.plan.triggerPrice)
-      : new Decimal(this.markPrice).lte(level.plan.triggerPrice);
+      ? new Decimal(this.markPrice).lte(level.plan.triggerPrice)
+      : new Decimal(this.markPrice).gte(level.plan.triggerPrice);
 
     const req = {
       traderId: this.id,
       clientOrderId,
       symbol: this.symbol,
       side,
-      type: (alreadyThrough ? 'MARKET' : 'STOP_MARKET') as 'MARKET' | 'STOP_MARKET',
+      // Dip/rally entries: TAKE_PROFIT_MARKET (not STOP_MARKET breakout)
+      type: (alreadyThrough ? 'MARKET' : 'TAKE_PROFIT_MARKET') as 'MARKET' | 'TAKE_PROFIT_MARKET',
       role: level.plan.direction === 'SHORT' ? 'SHORT' as const : 'LONG' as const,
       hedgeLevel: level.plan.level,
       quantity: sized.quantity,

@@ -185,6 +185,12 @@ export function resolveGridDistanceAbs(params: {
   throw new Error('Cannot resolve gridDistanceAbs: no levels, storedAbs, or start/percent');
 }
 
+/**
+ * Grid orientation (normal directional):
+ * LONG entries BELOW start; SHORT entries ABOVE start.
+ * LONG L: start × (1 − spacing×L)
+ * SHORT L: start × (1 + spacing×L)
+ */
 export function calcGridTriggerPrice(
   startPrice: string | Decimal,
   level: number,
@@ -195,8 +201,8 @@ export function calcGridTriggerPrice(
   const L = Math.max(1, Math.floor(level));
   const dist = new Decimal(distancePercent).div(100);
   const factor = direction === 'LONG'
-    ? new Decimal(1).plus(dist.mul(L))
-    : new Decimal(1).minus(dist.mul(L));
+    ? new Decimal(1).minus(dist.mul(L))
+    : new Decimal(1).plus(dist.mul(L));
   const px = start.mul(factor);
   if (px.lte(0)) {
     throw new Error(`Grid trigger non-positive for ${direction} L${L}: ${px.toFixed()}`);
@@ -205,9 +211,9 @@ export function calcGridTriggerPrice(
 }
 
 /**
- * Per-level TP/SL from entry using grid spacing %.
- * LONG:  TP = L×(1+s)  SL = L×(1−s)
- * SHORT: TP = L×(1−s)  SL = L×(1+s)
+ * Per-level TP/SL from entry using grid spacing % (normal directional).
+ * LONG:  TP = entry×(1+s)  SL = entry×(1−s)  → TP > entry > SL
+ * SHORT: TP = entry×(1−s)  SL = entry×(1+s)  → SL > entry > TP
  */
 export function calcLevelTpSlPrices(
   entryPrice: string | Decimal,
@@ -231,10 +237,41 @@ export function calcLevelTpSlPrices(
       `TP/SL non-positive for ${direction} entry=${entry.toFixed()} spacing=${spacingPercent}`,
     );
   }
-  return {
+  const out = {
     tpPrice: adjustPrice(tpRaw, symbolInfo),
     slPrice: adjustPrice(slRaw, symbolInfo),
   };
+  assertDirectionalTpSl(direction, entryPrice, out.tpPrice, out.slPrice);
+  return out;
+}
+
+/** True when TP/SL respect normal directional invariants relative to entry. */
+export function isValidDirectionalTpSl(
+  direction: GridDirection,
+  entryPrice: string | Decimal,
+  tpPrice: string | Decimal,
+  slPrice: string | Decimal,
+): boolean {
+  const entry = new Decimal(entryPrice);
+  const tp = new Decimal(tpPrice);
+  const sl = new Decimal(slPrice);
+  if (direction === 'LONG') return tp.gt(entry) && sl.lt(entry);
+  return tp.lt(entry) && sl.gt(entry);
+}
+
+/** Throws if TP/SL violate LONG tp>entry>sl or SHORT sl>entry>tp. */
+export function assertDirectionalTpSl(
+  direction: GridDirection,
+  entryPrice: string | Decimal,
+  tpPrice: string | Decimal,
+  slPrice: string | Decimal,
+): void {
+  if (!isValidDirectionalTpSl(direction, entryPrice, tpPrice, slPrice)) {
+    throw new Error(
+      `Invalid ${direction} TP/SL: entry=${new Decimal(entryPrice).toFixed()} `
+      + `tp=${new Decimal(tpPrice).toFixed()} sl=${new Decimal(slPrice).toFixed()}`,
+    );
+  }
 }
 
 /** @deprecated Prefer calcLevelTpSlPrices (percent-based). Absolute-step TP for compat. */
@@ -255,22 +292,22 @@ export function calcLevelTpPrice(
 
 /**
  * Informational grid bounds (NOT destruction triggers).
- * Kept for dashboard display of last level ± one spacing.
+ * After orientation flip: pass last SHORT for upper, last LONG for lower.
  */
 export function getUpperGridExhaustionPrice(
-  lastLongLevel: string | Decimal,
+  lastHighestLevel: string | Decimal,
   gridSpacingPercent: string | number,
 ): Decimal {
-  const last = new Decimal(lastLongLevel);
+  const last = new Decimal(lastHighestLevel);
   const pct = new Decimal(gridSpacingPercent).div(100);
   return last.mul(new Decimal(1).plus(pct));
 }
 
 export function getLowerGridExhaustionPrice(
-  lastShortLevel: string | Decimal,
+  lastLowestLevel: string | Decimal,
   gridSpacingPercent: string | number,
 ): Decimal {
-  const last = new Decimal(lastShortLevel);
+  const last = new Decimal(lastLowestLevel);
   const pct = new Decimal(gridSpacingPercent).div(100);
   const out = last.mul(new Decimal(1).minus(pct));
   if (out.lte(0)) {
@@ -281,20 +318,24 @@ export function getLowerGridExhaustionPrice(
 
 export function isPricePastUpperExhaustion(
   price: string | Decimal,
-  lastLongLevel: string | Decimal,
+  lastHighestLevel: string | Decimal,
   gridSpacingPercent: string | number,
 ): boolean {
-  return new Decimal(price).gt(getUpperGridExhaustionPrice(lastLongLevel, gridSpacingPercent));
+  return new Decimal(price).gt(getUpperGridExhaustionPrice(lastHighestLevel, gridSpacingPercent));
 }
 
 export function isPricePastLowerExhaustion(
   price: string | Decimal,
-  lastShortLevel: string | Decimal,
+  lastLowestLevel: string | Decimal,
   gridSpacingPercent: string | number,
 ): boolean {
-  return new Decimal(price).lt(getLowerGridExhaustionPrice(lastShortLevel, gridSpacingPercent));
+  return new Decimal(price).lt(getLowerGridExhaustionPrice(lastLowestLevel, gridSpacingPercent));
 }
 
+/**
+ * Limit price for planned entries.
+ * LONG dip (BUY): limit at/below trigger; SHORT rally (SELL): limit at/above trigger.
+ */
 export function calcGridLimitPrice(
   triggerPrice: string,
   direction: GridDirection,
@@ -304,10 +345,10 @@ export function calcGridLimitPrice(
   const stop = new Decimal(triggerPrice);
   const lim = new Decimal(limit);
   const tick = new Decimal(symbolInfo.tickSize);
-  if (direction === 'LONG' && lim.lt(stop)) {
-    limit = adjustPrice(stop.plus(tick), symbolInfo);
-  } else if (direction === 'SHORT' && lim.gt(stop)) {
+  if (direction === 'LONG' && lim.gt(stop)) {
     limit = adjustPrice(Decimal.max(tick, stop.minus(tick)), symbolInfo);
+  } else if (direction === 'SHORT' && lim.lt(stop)) {
+    limit = adjustPrice(stop.plus(tick), symbolInfo);
   }
   return limit;
 }
@@ -556,8 +597,8 @@ export function allGridLevelsHitTp(statuses: string[]): boolean {
 }
 
 /**
- * LONG entry eligible when mark is at/above trigger (above start side).
- * SHORT entry eligible when mark is at/below trigger (below start side).
+ * LONG (below start): eligible when mark is at/below trigger (dip entry).
+ * SHORT (above start): eligible when mark is at/above trigger (rally entry).
  * Does not require exact equality — gaps count.
  */
 export function isEntryTriggered(
@@ -567,12 +608,13 @@ export function isEntryTriggered(
 ): boolean {
   const mark = new Decimal(markPrice);
   const trigger = new Decimal(triggerPrice);
-  return direction === 'LONG' ? mark.gte(trigger) : mark.lte(trigger);
+  return direction === 'LONG' ? mark.lte(trigger) : mark.gte(trigger);
 }
 
 /**
- * Detect that mark moved through a trigger between previous and current
- * (or is already through on current). Handles gaps without exact equality.
+ * Detect that mark moved through a trigger between previous and current.
+ * LONG: downward cross (was above trigger, now at/below).
+ * SHORT: upward cross (was below trigger, now at/above).
  */
 export function didCrossEntry(
   direction: TradeSide,
@@ -584,13 +626,15 @@ export function didCrossEntry(
   const curr = new Decimal(currentPrice);
   const trigger = new Decimal(triggerPrice);
   if (direction === 'LONG') {
-    // Upward cross: was below trigger, now at/above — or already through
-    return curr.gte(trigger) && prev.lt(trigger);
+    return curr.lte(trigger) && prev.gt(trigger);
   }
-  return curr.lte(trigger) && prev.gt(trigger);
+  return curr.gte(trigger) && prev.lt(trigger);
 }
 
-/** List PENDING levels whose entry is satisfied by mark (gap-safe via >= / <=). */
+/**
+ * List PENDING levels whose entry is satisfied by mark.
+ * mark < start → LONG side; mark > start → SHORT side.
+ */
 export function findTriggeredPendingLevels<T extends {
   direction: TradeSide;
   status: string;
@@ -604,7 +648,7 @@ export function findTriggeredPendingLevels<T extends {
 ): T[] {
   const mark = new Decimal(markPrice);
   const start = new Decimal(startPrice);
-  const side: TradeSide | null = mark.gt(start) ? 'LONG' : mark.lt(start) ? 'SHORT' : null;
+  const side: TradeSide | null = mark.lt(start) ? 'LONG' : mark.gt(start) ? 'SHORT' : null;
   if (side == null) return [];
   return levels
     .filter((l) => l.direction === side && l.status === 'PENDING' && l.clientOrderId == null)

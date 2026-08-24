@@ -190,6 +190,45 @@ describe('gridCalc — MODE B scaling OFF (100% current capital)', () => {
   });
 });
 
+describe('gridCalc — flipped orientation (LONG below / SHORT above)', () => {
+  it('start=100 spacing=5%: LONG below, SHORT above', () => {
+    expect(calcGridTriggerPrice('100', 1, 'LONG', 5).toFixed(2)).toBe('95.00');
+    expect(calcGridTriggerPrice('100', 2, 'LONG', 5).toFixed(2)).toBe('90.00');
+    expect(calcGridTriggerPrice('100', 1, 'SHORT', 5).toFixed(2)).toBe('105.00');
+    expect(calcGridTriggerPrice('100', 2, 'SHORT', 5).toFixed(2)).toBe('110.00');
+  });
+
+  it('buildGridPlan: LONG entries < start < SHORT entries; TP/SL directional', () => {
+    const plan = buildGridPlan({
+      startPrice: '100',
+      traderAllocation: '1000',
+      leverage: 10,
+      levelsPerSide: 3,
+      distancePercent: 5,
+      symbolInfo: info,
+      capitalScalingEnabled: false,
+    });
+    const longs = plan.levels.filter((l) => l.direction === 'LONG').sort((a, b) => a.level - b.level);
+    const shorts = plan.levels.filter((l) => l.direction === 'SHORT').sort((a, b) => a.level - b.level);
+    expect(parseFloat(longs[0]!.triggerPrice)).toBeLessThan(100);
+    expect(parseFloat(longs[1]!.triggerPrice)).toBeLessThan(parseFloat(longs[0]!.triggerPrice));
+    expect(parseFloat(shorts[0]!.triggerPrice)).toBeGreaterThan(100);
+    expect(parseFloat(shorts[1]!.triggerPrice)).toBeGreaterThan(parseFloat(shorts[0]!.triggerPrice));
+    for (const l of plan.levels) {
+      const entry = parseFloat(l.triggerPrice);
+      const tp = parseFloat(l.tpPrice);
+      const sl = parseFloat(l.slPrice);
+      if (l.direction === 'LONG') {
+        expect(tp).toBeGreaterThan(entry);
+        expect(sl).toBeLessThan(entry);
+      } else {
+        expect(tp).toBeLessThan(entry);
+        expect(sl).toBeGreaterThan(entry);
+      }
+    }
+  });
+});
+
 describe('gridCalc — TP/SL from spacing %', () => {
   it('LONG 1%', () => {
     const { tpPrice, slPrice } = calcLevelTpSlPrices('100', 'LONG', '1', info);
@@ -217,8 +256,8 @@ describe('allGridLevelsHitTp', () => {
 });
 
 describe('misc', () => {
-  it('triggers', () => {
-    expect(calcGridTriggerPrice('100', 1, 'LONG', 5).toFixed(2)).toBe('105.00');
+  it('triggers and exhaustion helpers', () => {
+    expect(calcGridTriggerPrice('100', 1, 'LONG', 5).toFixed(2)).toBe('95.00');
     expect(calcGridDistanceAbs('100', 5).toFixed(2)).toBe('5.00');
     expect(levelWeight(1, 10, true)).toBe(1);
     expect(totalGridLevels(10)).toBe(20);
@@ -227,32 +266,54 @@ describe('misc', () => {
   });
 });
 
-describe('gridCalc — entry / TP / SL crossing (gap-safe)', () => {
-  it('LONG entry: gap from below to above without exact hit', () => {
-    expect(isEntryTriggered('LONG', '0.0645', '0.06379')).toBe(true);
-    expect(didCrossEntry('LONG', '0.0635', '0.0645', '0.06379')).toBe(true);
-    expect(didCrossEntry('LONG', '0.0645', '0.0650', '0.06379')).toBe(false); // already above
+describe('gridCalc — entry / TP / SL crossing (gap-safe, flipped)', () => {
+  it('LONG entry: downward cross / mark at or below trigger', () => {
+    expect(isEntryTriggered('LONG', '94', '95')).toBe(true);
+    expect(isEntryTriggered('LONG', '96', '95')).toBe(false);
+    expect(didCrossEntry('LONG', '96', '94', '95')).toBe(true);
+    expect(didCrossEntry('LONG', '94', '93', '95')).toBe(false); // already through
   });
 
-  it('detects multiple LONG levels crossed in one jump', () => {
-    const levels = [
-      { direction: 'LONG' as const, status: 'PENDING', triggerPrice: '0.063790', level: 1 },
-      { direction: 'LONG' as const, status: 'PENDING', triggerPrice: '0.064420', level: 2 },
-      { direction: 'LONG' as const, status: 'PENDING', triggerPrice: '0.065050', level: 3 },
-      { direction: 'LONG' as const, status: 'PENDING', triggerPrice: '0.065690', level: 4 },
-    ];
-    const hit = findTriggeredPendingLevels(levels, '0.065500', '0.063160');
-    expect(hit.map((l) => l.level)).toEqual([1, 2, 3]);
+  it('SHORT entry: upward cross / mark at or above trigger', () => {
+    expect(isEntryTriggered('SHORT', '106', '105')).toBe(true);
+    expect(isEntryTriggered('SHORT', '104', '105')).toBe(false);
+    expect(didCrossEntry('SHORT', '104', '106', '105')).toBe(true);
   });
 
-  it('detects multiple SHORT levels crossed downward', () => {
+  it('price moving up does not activate LONG; down does not activate SHORT', () => {
+    expect(isEntryTriggered('LONG', '106', '95')).toBe(false);
+    expect(isEntryTriggered('SHORT', '94', '105')).toBe(false);
+    expect(findTriggeredPendingLevels(
+      [{ direction: 'LONG' as const, status: 'PENDING', triggerPrice: '95', level: 1 }],
+      '106',
+      '100',
+    )).toHaveLength(0);
+    expect(findTriggeredPendingLevels(
+      [{ direction: 'SHORT' as const, status: 'PENDING', triggerPrice: '105', level: 1 }],
+      '94',
+      '100',
+    )).toHaveLength(0);
+  });
+
+  it('detects multiple LONG levels crossed in one downward jump', () => {
     const levels = [
-      { direction: 'SHORT' as const, status: 'PENDING', triggerPrice: '98', level: 1 },
-      { direction: 'SHORT' as const, status: 'PENDING', triggerPrice: '95', level: 2 },
-      { direction: 'SHORT' as const, status: 'PENDING', triggerPrice: '92', level: 3 },
+      { direction: 'LONG' as const, status: 'PENDING', triggerPrice: '95', level: 1 },
+      { direction: 'LONG' as const, status: 'PENDING', triggerPrice: '90', level: 2 },
+      { direction: 'LONG' as const, status: 'PENDING', triggerPrice: '85', level: 3 },
+      { direction: 'LONG' as const, status: 'PENDING', triggerPrice: '80', level: 4 },
     ];
-    const hit = findTriggeredPendingLevels(levels, '90', '100');
-    expect(hit.map((l) => l.level)).toEqual([1, 2, 3]);
+    const hit = findTriggeredPendingLevels(levels, '88', '100');
+    expect(hit.map((l) => l.level)).toEqual([1, 2]);
+  });
+
+  it('detects multiple SHORT levels crossed upward', () => {
+    const levels = [
+      { direction: 'SHORT' as const, status: 'PENDING', triggerPrice: '105', level: 1 },
+      { direction: 'SHORT' as const, status: 'PENDING', triggerPrice: '110', level: 2 },
+      { direction: 'SHORT' as const, status: 'PENDING', triggerPrice: '115', level: 3 },
+    ];
+    const hit = findTriggeredPendingLevels(levels, '112', '100');
+    expect(hit.map((l) => l.level)).toEqual([1, 2]);
   });
 
   it('LONG TP/SL by mark without exact equality', () => {

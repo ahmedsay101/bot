@@ -239,7 +239,7 @@ function GridLadder({ grid, markPrice }: { grid: GridTraderView; markPrice: stri
           PRICE LADDER
         </Typography>
         <Typography variant="caption" color="text.secondary">
-          LONG {longActive}/{grid.levelsPerSide} · SHORT {shortActive}/{grid.levelsPerSide}
+          SHORT above · LONG below · {longActive}/{grid.levelsPerSide}L · {shortActive}/{grid.levelsPerSide}S
         </Typography>
       </Box>
       <Stack
@@ -305,6 +305,14 @@ function GridLadder({ grid, markPrice }: { grid: GridTraderView; markPrice: stri
           const active = l.status === 'ACTIVE';
           const dead = l.status === 'TP_HIT' || l.status === 'SL_HIT';
           const cancelled = l.status === 'CANCELLED' || l.status === 'CANCELED';
+          const entryPx = parseFloat(l.entryPrice ?? l.triggerPrice) || 0;
+          const tpPx = parseFloat(l.tpPrice ?? '') || 0;
+          const slPx = parseFloat(l.slPrice ?? '') || 0;
+          const tpSlInvalid = entryPx > 0 && tpPx > 0 && slPx > 0 && (
+            l.direction === 'LONG'
+              ? !(tpPx > entryPx && slPx < entryPx)
+              : !(tpPx < entryPx && slPx > entryPx)
+          );
           return (
             <Box
               key={`${l.direction}-${l.level}`}
@@ -317,7 +325,7 @@ function GridLadder({ grid, markPrice }: { grid: GridTraderView; markPrice: stri
                 borderRadius: 1.25,
                 bgcolor: active ? `${accent}22` : dead ? 'rgba(255,255,255,0.03)' : 'transparent',
                 border: '1px solid',
-                borderColor: active ? accent : dead ? (l.status === 'TP_HIT' ? LONG : SHORT) : BORDER,
+                borderColor: tpSlInvalid ? '#ff9800' : active ? accent : dead ? (l.status === 'TP_HIT' ? LONG : SHORT) : BORDER,
                 opacity: cancelled ? 0.45 : dead ? 0.72 : 1,
               }}
             >
@@ -326,6 +334,7 @@ function GridLadder({ grid, markPrice }: { grid: GridTraderView; markPrice: stri
                 <Typography fontFamily="monospace" fontWeight={800} sx={{ fontSize: 12 }}>
                   {l.direction} #{l.level}
                   {l.weight != null ? ` · w${l.weight}` : ''}
+                  {tpSlInvalid ? ' · ⚠ TP/SL ORIENTATION' : ''}
                 </Typography>
                 <Typography variant="caption" color="text.secondary" display="block" sx={{ fontSize: 10 }}>
                   Entry {l.entryPrice != null ? `$${px(l.entryPrice)}` : '—'}
