@@ -321,6 +321,43 @@ describe('gridCalc — entry / TP crossing (gap-safe, flipped)', () => {
     expect(hit.map((l) => l.level)).toEqual([1, 2]);
   });
 
+  it('Test A: previous 100 → current 95 crosses LONG 97', () => {
+    expect(didCrossEntry('LONG', '100', '95', '97')).toBe(true);
+    expect(isEntryTriggered('LONG', '95', '97')).toBe(true);
+  });
+
+  it('Test B: previous 100 → current 80 crosses LONG 95/90/85', () => {
+    expect(didCrossEntry('LONG', '100', '80', '95')).toBe(true);
+    expect(didCrossEntry('LONG', '100', '80', '90')).toBe(true);
+    expect(didCrossEntry('LONG', '100', '80', '85')).toBe(true);
+    const hit = findTriggeredPendingLevels(
+      [
+        { direction: 'LONG' as const, status: 'PENDING', triggerPrice: '95', level: 1 },
+        { direction: 'LONG' as const, status: 'PENDING', triggerPrice: '90', level: 2 },
+        { direction: 'LONG' as const, status: 'PENDING', triggerPrice: '85', level: 3 },
+      ],
+      '80',
+      '100',
+    );
+    expect(hit.map((l) => l.level)).toEqual([1, 2, 3]);
+  });
+
+  it('Test C: previous 80 → current 100 crosses SHORT 85/90/95', () => {
+    expect(didCrossEntry('SHORT', '80', '100', '85')).toBe(true);
+    expect(didCrossEntry('SHORT', '80', '100', '90')).toBe(true);
+    expect(didCrossEntry('SHORT', '80', '100', '95')).toBe(true);
+    const hit = findTriggeredPendingLevels(
+      [
+        { direction: 'SHORT' as const, status: 'PENDING', triggerPrice: '85', level: 1 },
+        { direction: 'SHORT' as const, status: 'PENDING', triggerPrice: '90', level: 2 },
+        { direction: 'SHORT' as const, status: 'PENDING', triggerPrice: '95', level: 3 },
+      ],
+      '100',
+      '80',
+    );
+    expect(hit.map((l) => l.level)).toEqual([1, 2, 3]);
+  });
+
   it('detects multiple SHORT levels crossed upward', () => {
     const levels = [
       { direction: 'SHORT' as const, status: 'PENDING', triggerPrice: '105', level: 1 },

@@ -1,4 +1,4 @@
-import { selectReplacementSymbols } from '../../src/modules/trader-manager/poolSelection';
+import { explainTopGainerSelection, selectReplacementSymbols } from '../../src/modules/trader-manager/poolSelection';
 
 describe('poolSelection — maxTraders is slot count not rank cutoff', () => {
   const isValid = (s: string) => s.endsWith('USDT') && !s.includes('UP');
@@ -118,5 +118,47 @@ describe('poolSelection — maxTraders is slot count not rank cutoff', () => {
       isValidSymbol: isValid,
     });
     expect(selected).toEqual(['WEAKUSDT', 'NOTRENDUSDT']);
+  });
+
+  it('need 1 slot with active=3 MAX=4 — continues past blocked/duplicate to 4th eligible', () => {
+    const { selected, decisions, slotsNeeded } = explainTopGainerSelection({
+      rankedSymbols: ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT', 'DOGEUSDT', 'ADAUSDT'],
+      maxTraders: 4,
+      occupiedSymbols: new Set(['BTCUSDT', 'ETHUSDT', 'SOLUSDT']),
+      blockedSymbols: new Set(['XRPUSDT']),
+      isValidSymbol: isValid,
+    });
+    expect(slotsNeeded).toBe(1);
+    expect(selected).toEqual(['DOGEUSDT']);
+    expect(decisions.find((d) => d.symbol === 'XRPUSDT')).toEqual({
+      symbol: 'XRPUSDT',
+      action: 'skip',
+      reason: 'BLOCKED',
+    });
+    expect(decisions.find((d) => d.symbol === 'DOGEUSDT')).toEqual({
+      symbol: 'DOGEUSDT',
+      action: 'select',
+    });
+  });
+
+  it('example: skips active/blocked then fills remaining slots from deeper list', () => {
+    // occupied 1, max 4 → need 3; skip ETH blocked → SOL, XRP, DOGE
+    expect(selectReplacementSymbols({
+      rankedSymbols: ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT', 'DOGEUSDT', 'ADAUSDT'],
+      maxTraders: 4,
+      occupiedSymbols: new Set(['BTCUSDT']),
+      blockedSymbols: new Set(['ETHUSDT']),
+      isValidSymbol: isValid,
+    })).toEqual(['SOLUSDT', 'XRPUSDT', 'DOGEUSDT']);
+  });
+
+  it('empty pool fills four when none occupied', () => {
+    expect(selectReplacementSymbols({
+      rankedSymbols: ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT', 'DOGEUSDT'],
+      maxTraders: 4,
+      occupiedSymbols: new Set(),
+      blockedSymbols: new Set(['ETHUSDT']),
+      isValidSymbol: isValid,
+    })).toEqual(['BTCUSDT', 'SOLUSDT', 'XRPUSDT', 'DOGEUSDT']);
   });
 });

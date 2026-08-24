@@ -242,6 +242,63 @@ describe('GridDirectionalTrader lifecycle', () => {
     trader.destroy();
   });
 
+  it('MODE B OFF: LONG multi-cross keeps extras PENDING with ACTIVE_POSITION_LIMIT', async () => {
+    const trader = await boot({
+      ...baseConfig,
+      gridLevelsPerSide: 5,
+      gridDistancePercent: '5',
+      gridCapitalScalingEnabled: false,
+    });
+    // LONG L1 @95
+    await tick('95', trader, 900);
+    expect(trader.getOpenLegCount()).toBe(1);
+    const mid = trader.toSummary().grid!;
+    const l1 = mid.levels.find((l) => l.direction === 'LONG' && l.level === 1)!;
+    expect(l1.status).toBe('ACTIVE');
+    // Gap through L2@90 and L3@85 → still max 1 active; crossed levels preserved as PENDING
+    await tick('80', trader, 900);
+    const g = trader.toSummary().grid!;
+    expect(g.activeOpenCount).toBe(1);
+    expect(trader.getOpenLegCount()).toBe(1);
+    const l2 = g.levels.find((l) => l.direction === 'LONG' && l.level === 2)!;
+    const l3 = g.levels.find((l) => l.direction === 'LONG' && l.level === 3)!;
+    expect(l2.status).toBe('PENDING');
+    expect(l3.status).toBe('PENDING');
+    expect(l2.crossed).toBe(true);
+    expect(l3.crossed).toBe(true);
+    expect(l2.eligible).toBe(false);
+    expect(l3.eligible).toBe(false);
+    expect(l2.reasonNotActivated).toBe('ACTIVE_POSITION_LIMIT');
+    expect(l3.reasonNotActivated).toBe('ACTIVE_POSITION_LIMIT');
+    trader.destroy();
+  });
+
+  it('MODE B OFF: after LONG TP, next nearest crossed level activates on re-dip', async () => {
+    const trader = await boot({
+      ...baseConfig,
+      gridLevelsPerSide: 4,
+      gridDistancePercent: '5',
+      gridCapitalScalingEnabled: false,
+    });
+    await tick('95', trader, 900);
+    await tick('88', trader, 700);
+    // TP LONG L1 ≈ 95 * 1.05 = 99.75
+    await tick('99.80', trader, 1000);
+    await wait(600);
+    const afterTp = trader.toSummary().grid!;
+    expect(afterTp.levels.find((l) => l.direction === 'LONG' && l.level === 1)!.status).toBe('TP_HIT');
+    // Re-dip through L2 @90 — nearest-to-start ordering
+    await tick('90', trader, 1000);
+    await wait(500);
+    const g = trader.toSummary().grid!;
+    const l2 = g.levels.find((l) => l.direction === 'LONG' && l.level === 2)!;
+    expect(l2.status).toBe('ACTIVE');
+    expect(g.activeOpenCount).toBe(1);
+    const l3 = g.levels.find((l) => l.direction === 'LONG' && l.level === 3)!;
+    expect(l3.status).toBe('PENDING');
+    trader.destroy();
+  });
+
   it('MODE B OFF: after TP next position uses updated capital', async () => {
     const trader = await boot({
       ...baseConfig,

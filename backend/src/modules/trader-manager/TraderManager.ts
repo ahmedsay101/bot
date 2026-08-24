@@ -20,12 +20,14 @@ import type {
 import { calcTotalPnl } from '../calc/allocation';
 import { createContextLogger } from '../logger';
 import { withRetry } from '../utils/retry';
-import { selectReplacementSymbols } from './poolSelection';
+import { explainTopGainerSelection } from './poolSelection';
 import type { PrismaClient } from '@prisma/client';
 
 const log = createContextLogger('TraderManager');
 
 const LEVERAGED_TOKEN_SUFFIXES = ['UP', 'DOWN', 'BEAR', 'BULL', '2L', '2S', '3L', '3S'];
+/** Skip symbols that failed create recently so the same broken top-gainer cannot block the slot forever. */
+const CREATE_FAIL_COOLDOWN_MS = 60_000;
 
 function isLeveragedToken(symbol: string): boolean {
   return LEVERAGED_TOKEN_SUFFIXES.some((suffix) => symbol.endsWith(suffix));
@@ -50,6 +52,8 @@ export class TraderManager extends EventEmitter {
   private trendCandidates: unknown[] = [];
   /** Symbols currently mid-create (prevents duplicate concurrent creates). */
   private pendingCreates = new Set<string>();
+  /** symbol → last failed create timestamp (ms). */
+  private recentCreateFailures = new Map<string, number>();
   private refreshTimer: NodeJS.Timeout | null = null;
   private summaryTimer: NodeJS.Timeout | null = null;
   private pricePollTimer: NodeJS.Timeout | null = null;
@@ -578,66 +582,113 @@ export class TraderManager extends EventEmitter {
 
       const occupied = new Set(this.symbolToTrader.keys());
       const availableSlots = Math.max(0, this.traderConfig.maxTraders - occupied.size);
+      const now = Date.now();
+      for (const [sym, ts] of this.recentCreateFailures) {
+        if (now - ts > CREATE_FAIL_COOLDOWN_MS) this.recentCreateFailures.delete(sym);
+      }
 
       log.info('[LIFECYCLE] TOP_GAINER_SCAN', {
-        topGainers: this.topGainers.slice(0, 10).map((t) => `${t.symbol}:${t.priceChangePercent}%`),
-        activeTraders: occupied.size,
         maxTraders: this.traderConfig.maxTraders,
-        slotsAvailable: availableSlots,
+        activeTraders: occupied.size,
+        availableSlots,
+        topGainers: this.topGainers.slice(0, 15).map((t, i) => `${i + 1}. ${t.symbol} ${t.priceChangePercent}%`),
         pendingCreates: [...this.pendingCreates],
         durationMs: Date.now() - scanStarted,
       });
 
       if (availableSlots <= 0) {
-        log.info('[LIFECYCLE] NO_SLOTS — scan complete, no creates', {
+        log.info('[LIFECYCLE] TARGET_REACHED — no creates', {
           occupied: occupied.size,
           maxTraders: this.traderConfig.maxTraders,
         });
         return;
       }
 
+      // Walk highest→lowest gainers until slots full; never stop at first N rejects.
       const rankedSymbols = this.topGainers.map((t) => t.symbol);
-      const selected = selectReplacementSymbols({
+      const preview = explainTopGainerSelection({
         rankedSymbols,
         maxTraders: this.traderConfig.maxTraders,
         occupiedSymbols: occupied,
+        blockedSymbols: this.recentCreateFailures.size > 0
+          ? new Set(this.recentCreateFailures.keys())
+          : undefined,
         skipSymbols: this.pendingCreates,
         isValidSymbol: (s) => this.isStructurallyValidSymbol(s),
       });
 
-      log.info('[LIFECYCLE] TOP_GAINER_SELECTION', {
-        selected,
-        reason: 'Top eligible gainer(s) — no trend confirmation required',
-        slotsAvailable: availableSlots,
-      });
+      for (const d of preview.decisions) {
+        if (d.action === 'skip') {
+          log.info('[LIFECYCLE] TOP_GAINER_CANDIDATE', {
+            candidate: d.symbol,
+            skipped: d.reason,
+          });
+        }
+      }
 
-      if (selected.length === 0) {
+      if (preview.selected.length === 0) {
         log.warn('[LIFECYCLE] NO_ELIGIBLE_TOP_GAINERS', {
-          availableSlots,
+          availableSlots: preview.slotsNeeded,
           scanned: rankedSymbols.length,
           occupied: occupied.size,
+          decisions: preview.decisions.slice(0, 30),
         });
         return;
       }
 
-      for (const symbol of selected) {
-        if (this.getOccupiedSlots() >= this.traderConfig.maxTraders) break;
+      // Create one-by-one; on failure continue to next ranked candidate (same scan).
+      for (const symbol of rankedSymbols) {
+        if (this.getOccupiedSlots() >= this.traderConfig.maxTraders) {
+          log.info('[LIFECYCLE] TARGET_REACHED', {
+            activeTraders: this.getOccupiedSlots(),
+            maxTraders: this.traderConfig.maxTraders,
+          });
+          break;
+        }
         if (this.symbolToTrader.has(symbol)) continue;
         if (this.pendingCreates.has(symbol)) continue;
+        if (!this.isStructurallyValidSymbol(symbol)) continue;
+        const failAt = this.recentCreateFailures.get(symbol);
+        if (failAt != null && Date.now() - failAt < CREATE_FAIL_COOLDOWN_MS) continue;
+
         this.pendingCreates.add(symbol);
         try {
-          log.info('[LIFECYCLE] CREATING_TRADER', {
-            symbol,
-            reason: 'Top eligible gainer',
+          log.info('[LIFECYCLE] TOP_GAINER_CANDIDATE', {
+            candidate: symbol,
+            selected: true,
             occupied: this.getOccupiedSlots(),
             maxTraders: this.traderConfig.maxTraders,
           });
-          await this.createTrader(symbol);
+          const ok = await this.createTrader(symbol);
+          if (ok) {
+            log.info('[LIFECYCLE] CREATING_TRADER_OK', {
+              symbol,
+              activeTraders: this.getOccupiedSlots(),
+              maxTraders: this.traderConfig.maxTraders,
+            });
+          } else {
+            this.recentCreateFailures.set(symbol, Date.now());
+            log.warn('[LIFECYCLE] CREATING_TRADER_FAILED — trying next candidate', { symbol });
+          }
         } catch (err) {
+          this.recentCreateFailures.set(symbol, Date.now());
           log.error(`Failed to create trader for ${symbol}`, { error: String(err) });
         } finally {
           this.pendingCreates.delete(symbol);
         }
+      }
+
+      if (this.getOccupiedSlots() < this.traderConfig.maxTraders) {
+        log.warn('[LIFECYCLE] SLOTS_REMAIN_UNFILLED', {
+          activeTraders: this.getOccupiedSlots(),
+          maxTraders: this.traderConfig.maxTraders,
+          scanned: rankedSymbols.length,
+        });
+      } else {
+        log.info('[LIFECYCLE] TARGET_REACHED', {
+          activeTraders: this.getOccupiedSlots(),
+          maxTraders: this.traderConfig.maxTraders,
+        });
       }
     } catch (err) {
       log.error('Error reconciling trader pool', { error: String(err) });
@@ -663,18 +714,18 @@ export class TraderManager extends EventEmitter {
     return this.isStructurallyValidSymbol(symbol);
   }
 
-  private async createTrader(symbol: string): Promise<void> {
+  private async createTrader(symbol: string): Promise<boolean> {
     if (this.symbolToTrader.has(symbol)) {
       log.warn(`Attempted to create duplicate trader for ${symbol}`);
-      return;
+      return false;
     }
     if (this.getOccupiedSlots() >= this.traderConfig.maxTraders) {
       log.warn(`At max traders (${this.traderConfig.maxTraders}) — refusing ${symbol}`);
-      return;
+      return false;
     }
     if (!this.isStructurallyValidSymbol(symbol)) {
       log.warn(`Symbol structurally invalid — refusing ${symbol}`);
-      return;
+      return false;
     }
 
     const traderId = uuidv4();
@@ -736,6 +787,7 @@ export class TraderManager extends EventEmitter {
         maxTraders: this.traderConfig.maxTraders,
       });
       await this.broadcastSummary(true);
+      return true;
     } catch (err) {
       log.error(`[LIFECYCLE] TRADER_SLOT_FAILED`, { traderId, symbol, error: String(err) });
       this.symbolToTrader.delete(symbol);
@@ -744,6 +796,7 @@ export class TraderManager extends EventEmitter {
         where: { id: traderId },
         data: { status: 'FAILED' },
       });
+      return false;
     }
   }
 

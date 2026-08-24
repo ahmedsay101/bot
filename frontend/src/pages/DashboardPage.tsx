@@ -305,11 +305,17 @@ function GridLadder({ grid, markPrice }: { grid: GridTraderView; markPrice: stri
           const active = l.status === 'ACTIVE';
           const dead = l.status === 'TP_HIT' || l.status === 'SL_HIT';
           const cancelled = l.status === 'CANCELLED' || l.status === 'CANCELED';
+          const crossedPending = l.status === 'PENDING' && l.crossed === true;
           const entryPx = parseFloat(l.entryPrice ?? l.triggerPrice) || 0;
           const tpPx = parseFloat(l.tpPrice ?? '') || 0;
           const tpSlInvalid = entryPx > 0 && tpPx > 0 && (
             l.direction === 'LONG' ? !(tpPx > entryPx) : !(tpPx < entryPx)
           );
+          const statusText = dead
+            ? `${statusLabel(l.status)} · Realized ${pnl(l.realizedPnl ?? '0')}`
+            : crossedPending
+              ? `PENDING · CROSSED${l.reasonNotActivated === 'ACTIVE_POSITION_LIMIT' ? ' · WAITING (max 1 active)' : l.reasonNotActivated != null ? ` · ${l.reasonNotActivated}` : ''}`
+              : statusLabel(l.status);
           return (
             <Box
               key={`${l.direction}-${l.level}`}
@@ -320,9 +326,9 @@ function GridLadder({ grid, markPrice }: { grid: GridTraderView; markPrice: stri
                 py: 0.55,
                 px: 1,
                 borderRadius: 1.25,
-                bgcolor: active ? `${accent}22` : dead ? 'rgba(255,255,255,0.03)' : 'transparent',
+                bgcolor: active ? `${accent}22` : crossedPending ? `${accent}10` : dead ? 'rgba(255,255,255,0.03)' : 'transparent',
                 border: '1px solid',
-                borderColor: tpSlInvalid ? '#ff9800' : active ? accent : dead ? (l.status === 'TP_HIT' ? LONG : SHORT) : BORDER,
+                borderColor: tpSlInvalid ? '#ff9800' : active ? accent : crossedPending ? `${accent}88` : dead ? (l.status === 'TP_HIT' ? LONG : SHORT) : BORDER,
                 opacity: cancelled ? 0.45 : dead ? 0.72 : 1,
               }}
             >
@@ -340,9 +346,7 @@ function GridLadder({ grid, markPrice }: { grid: GridTraderView; markPrice: stri
                   {' · '}
                   {dead ? 'Hist margin' : 'Margin'} {money(l.allocatedMargin)}
                   {' · '}
-                  {dead
-                    ? `${statusLabel(l.status)} · Realized ${pnl(l.realizedPnl ?? '0')}`
-                    : statusLabel(l.status)}
+                  {statusText}
                   {tpSlInvalid ? ' · ⚠ INVALID TP' : ''}
                 </Typography>
               </Box>
@@ -626,11 +630,11 @@ function GridTraderCard({
                 </Typography>
                 <Typography variant="body2" sx={{ fontSize: 13 }}>
                   {grid.destroyConditions?.pastFinalLong ? '✗' : '✓'} Inside LONG bound
-                  {grid.lastLongLevel != null ? ` (≥ $${parseFloat(grid.lastLongLevel).toFixed(2)})` : ''}
+                  {grid.lastLongLevel != null ? ` (≥ $${px(grid.lastLongLevel)})` : ''}
                 </Typography>
                 <Typography variant="body2" sx={{ fontSize: 13 }}>
                   {grid.destroyConditions?.pastFinalShort ? '✗' : '✓'} Inside SHORT bound
-                  {grid.lastShortLevel != null ? ` (≤ $${parseFloat(grid.lastShortLevel).toFixed(2)})` : ''}
+                  {grid.lastShortLevel != null ? ` (≤ $${px(grid.lastShortLevel)})` : ''}
                 </Typography>
               </Stack>
               {(grid.lastLongLevel != null || grid.lastShortLevel != null) && (
@@ -638,13 +642,13 @@ function GridTraderCard({
                   <Box>
                     <Typography variant="caption" color="text.secondary" display="block">LONG last level</Typography>
                     <Typography variant="body2" fontFamily="monospace" fontWeight={700}>
-                      ${grid.lastLongLevel != null ? parseFloat(grid.lastLongLevel).toFixed(2) : '—'}
+                      ${grid.lastLongLevel != null ? px(grid.lastLongLevel) : '—'}
                     </Typography>
                   </Box>
                   <Box>
                     <Typography variant="caption" color="text.secondary" display="block">SHORT last level</Typography>
                     <Typography variant="body2" fontFamily="monospace" fontWeight={700}>
-                      ${grid.lastShortLevel != null ? parseFloat(grid.lastShortLevel).toFixed(2) : '—'}
+                      ${grid.lastShortLevel != null ? px(grid.lastShortLevel) : '—'}
                     </Typography>
                   </Box>
                 </Box>

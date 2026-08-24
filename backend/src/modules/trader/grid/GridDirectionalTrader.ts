@@ -691,38 +691,66 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
     }
   }
 
+  /**
+   * Gap-safe entry eligibility for a level.
+   * Activation uses mark-through (isEntryTriggered), not exact price equality.
+   * Ordering when capacity frees: nearest-to-start first (ascending level #).
+   */
+  private describeLevelActivation(l: LevelState): {
+    crossed: boolean;
+    eligible: boolean;
+    reasonNotActivated: string | null;
+  } {
+    if (this.startPrice == null) {
+      return { crossed: false, eligible: false, reasonNotActivated: 'NO_START_PRICE' };
+    }
+    const mark = this.markPrice;
+    const start = new Decimal(this.startPrice);
+    const onLongSide = new Decimal(mark).lt(start);
+    const onShortSide = new Decimal(mark).gt(start);
+    if (l.plan.direction === 'LONG' && !onLongSide) {
+      return { crossed: false, eligible: false, reasonNotActivated: l.status === 'PENDING' ? 'WRONG_SIDE' : null };
+    }
+    if (l.plan.direction === 'SHORT' && !onShortSide) {
+      return { crossed: false, eligible: false, reasonNotActivated: l.status === 'PENDING' ? 'WRONG_SIDE' : null };
+    }
+
+    const crossed = isEntryTriggered(l.plan.direction, mark, l.plan.triggerPrice);
+    if (l.status !== 'PENDING') {
+      return { crossed, eligible: false, reasonNotActivated: null };
+    }
+
+    const blockedByMaxOne = !this.capitalScalingEnabled && this.hasInFlightOrActivePosition();
+    if (!crossed) {
+      return { crossed: false, eligible: false, reasonNotActivated: 'NOT_CROSSED' };
+    }
+    if (l.clientOrderId != null) {
+      return { crossed: true, eligible: false, reasonNotActivated: 'ENTRY_ORDER_IN_FLIGHT' };
+    }
+    if (blockedByMaxOne) {
+      return { crossed: true, eligible: false, reasonNotActivated: 'ACTIVE_POSITION_LIMIT' };
+    }
+    return { crossed: true, eligible: true, reasonNotActivated: null };
+  }
+
   /** Structured diagnostics for crossed-but-still-PENDING levels. */
   private logGridEvaluation(previousPrice: string, currentPrice: string): void {
     if (this.startPrice == null) return;
-    const mark = new Decimal(currentPrice);
-    const start = new Decimal(this.startPrice);
-    const blocked = !this.capitalScalingEnabled && this.hasInFlightOrActivePosition();
     const lines: Array<Record<string, unknown>> = [];
 
     for (const l of this.levels.values()) {
-      // LONG below start; SHORT above start
-      if (l.plan.direction === 'LONG' && !mark.lt(start)) continue;
-      if (l.plan.direction === 'SHORT' && !mark.gt(start)) continue;
-      const crossed = isEntryTriggered(l.plan.direction, currentPrice, l.plan.triggerPrice);
-      if (!crossed && l.status !== 'ACTIVE') continue;
-      const eligible = l.status === 'PENDING' && l.clientOrderId == null && !blocked
-        && (this.capitalScalingEnabled || !this.hasInFlightOrActivePosition());
-      let reasonNotActivated: string | null = null;
-      if (l.status === 'PENDING' && crossed) {
-        if (blocked) reasonNotActivated = 'max_one_active_position';
-        else if (l.clientOrderId != null) reasonNotActivated = 'entry_order_in_flight';
-        else reasonNotActivated = eligible ? null : 'not_selected_yet';
-      }
+      const meta = this.describeLevelActivation(l);
+      if (!meta.crossed && l.status !== 'ACTIVE') continue;
       lines.push({
         levelId: levelKey(l.plan.direction, l.plan.level),
         side: l.plan.direction,
         entryPrice: l.plan.triggerPrice,
         previousPrice,
         currentPrice,
-        crossed,
-        eligible: Boolean(eligible && crossed),
-        currentState: l.status,
-        reasonNotActivated,
+        crossed: meta.crossed,
+        eligible: meta.eligible,
+        state: l.status,
+        reason: meta.reasonNotActivated,
       });
     }
 
@@ -735,6 +763,7 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
       startPrice: this.startPrice,
       capitalScalingEnabled: this.capitalScalingEnabled,
       activePositionCount: this.activePositions.size,
+      activationOrder: 'nearest_to_start_first',
       levels: lines,
     });
   }
@@ -892,6 +921,7 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
             tp,
           });
         }
+        const activation = this.describeLevelActivation(l);
         return {
           level: l.plan.level,
           direction: l.plan.direction,
@@ -911,6 +941,9 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
           weight: l.plan.weight,
           allocationPct: l.plan.allocationPct,
           completionReason: l.completionReason,
+          crossed: activation.crossed,
+          eligible: activation.eligible,
+          reasonNotActivated: activation.reasonNotActivated,
         };
       });
 

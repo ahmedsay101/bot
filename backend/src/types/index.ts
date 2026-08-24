@@ -314,6 +314,12 @@ export interface GridLevelView {
   weight?: number;
   allocationPct?: string | null;
   completionReason?: string | null;
+  /** Mark is at/through this level's entry (gap-safe). */
+  crossed?: boolean;
+  /** True when crossed AND activation is allowed right now. */
+  eligible?: boolean;
+  /** Why a crossed PENDING level is not activating (e.g. ACTIVE_POSITION_LIMIT). */
+  reasonNotActivated?: string | null;
 }
 
 export interface GridTraderView {

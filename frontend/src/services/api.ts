@@ -304,6 +304,9 @@ export interface GridLevelView {
   weight?: number;
   allocationPct?: string | null;
   completionReason?: string | null;
+  crossed?: boolean;
+  eligible?: boolean;
+  reasonNotActivated?: string | null;
 }
 
 export interface GridTraderView {
