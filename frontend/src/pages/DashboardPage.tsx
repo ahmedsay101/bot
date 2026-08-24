@@ -810,6 +810,9 @@ export function DashboardPage(): React.ReactElement {
                   <Typography variant="caption" fontWeight={800} sx={{ letterSpacing: 0.8, color: 'text.secondary', display: 'block', mb: 1 }}>
                     TOP GAINERS
                   </Typography>
+                  <Typography variant="caption" color="text.secondary" display="block" sx={{ fontSize: 9, mb: 1, lineHeight: 1.35 }}>
+                    Traders are filled from top gainers up to MAX_TRADERS. No trend confirmation required.
+                  </Typography>
                   {gainers.slice(0, 18).map((g) => {
                     const pct = parseFloat(g.priceChangePercent);
                     const active = list.some((t) => t.symbol === g.symbol);

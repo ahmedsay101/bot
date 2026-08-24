@@ -129,7 +129,7 @@ const schema = Joi.object({
   GRID_CAPITAL_SCALING_ENABLED: Joi.boolean().default(true),
   TRADER_TAKE_PROFIT_PERCENT: Joi.string().default('10'),
   TRADER_MAX_LIFETIME_HOURS: Joi.number().min(0.001).max(720).default(12),
-  TREND_DETECTION_ENABLED: Joi.boolean().default(true),
+  TREND_DETECTION_ENABLED: Joi.boolean().default(false),
   TREND_PRIMARY_TIMEFRAME: Joi.string().default('15m'),
   TREND_CONFIRMATION_TIMEFRAME: Joi.string().default('1h'),
   TREND_EMA_FAST: Joi.number().integer().min(2).max(500).default(20),
