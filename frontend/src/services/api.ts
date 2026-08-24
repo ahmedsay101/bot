@@ -353,12 +353,10 @@ export interface GridTraderView {
   lifetimeRemaining?: number;
   destroyConditions?: {
     lifetimeExpired: boolean;
-    allPositionsTp: boolean;
-    remainingMs: number;
-  };
-  destroyConditions?: {
-    lifetimeExpired: boolean;
-    allPositionsTp: boolean;
+    pastFinalLong?: boolean;
+    pastFinalShort?: boolean;
+    /** @deprecated removed — no longer a destroy condition */
+    allPositionsTp?: boolean;
     remainingMs: number;
   };
   trend?: GridTrendView;

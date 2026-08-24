@@ -307,11 +307,8 @@ function GridLadder({ grid, markPrice }: { grid: GridTraderView; markPrice: stri
           const cancelled = l.status === 'CANCELLED' || l.status === 'CANCELED';
           const entryPx = parseFloat(l.entryPrice ?? l.triggerPrice) || 0;
           const tpPx = parseFloat(l.tpPrice ?? '') || 0;
-          const slPx = parseFloat(l.slPrice ?? '') || 0;
-          const tpSlInvalid = entryPx > 0 && tpPx > 0 && slPx > 0 && (
-            l.direction === 'LONG'
-              ? !(tpPx > entryPx && slPx < entryPx)
-              : !(tpPx < entryPx && slPx > entryPx)
+          const tpSlInvalid = entryPx > 0 && tpPx > 0 && (
+            l.direction === 'LONG' ? !(tpPx > entryPx) : !(tpPx < entryPx)
           );
           return (
             <Box
@@ -334,20 +331,19 @@ function GridLadder({ grid, markPrice }: { grid: GridTraderView; markPrice: stri
                 <Typography fontFamily="monospace" fontWeight={800} sx={{ fontSize: 12 }}>
                   {l.direction} #{l.level}
                   {l.weight != null ? ` · w${l.weight}` : ''}
-                  {tpSlInvalid ? ' · ⚠ TP/SL ORIENTATION' : ''}
+                  {tpSlInvalid ? ' · ⚠ TP ORIENTATION' : ''}
                 </Typography>
                 <Typography variant="caption" color="text.secondary" display="block" sx={{ fontSize: 10 }}>
                   Entry {l.entryPrice != null ? `$${px(l.entryPrice)}` : '—'}
                   {' · '}
                   TP {l.tpPrice != null && l.tpPrice !== '' ? `$${px(l.tpPrice)}` : '—'}
                   {' · '}
-                  SL {l.slPrice != null && l.slPrice !== '' ? `$${px(l.slPrice)}` : '—'}
-                  {' · '}
                   {dead ? 'Hist margin' : 'Margin'} {money(l.allocatedMargin)}
                   {' · '}
                   {dead
                     ? `${statusLabel(l.status)} · Realized ${pnl(l.realizedPnl ?? '0')}`
                     : statusLabel(l.status)}
+                  {tpSlInvalid ? ' · ⚠ INVALID TP' : ''}
                 </Typography>
               </Box>
               <Typography fontFamily="monospace" fontWeight={700} sx={{ fontSize: 12, color: accent }}>
@@ -560,12 +556,12 @@ function GridTraderCard({
                   value={`${grid.levelsPending ?? 0} / ${grid.levelsActive ?? 0}`}
                 />
                 <Stat
-                  label="TP / SL (dead)"
-                  value={`${grid.levelsTp ?? 0} / ${grid.levelsSl ?? 0}`}
+                  label="TP (dead)"
+                  value={`${grid.levelsTp ?? 0}`}
                 />
                 <Stat
                   label="Dead / Tradable"
-                  value={`${grid.levelsDead ?? (grid.levelsTp ?? 0) + (grid.levelsSl ?? 0)} / ${grid.levelsTradable ?? (grid.levelsPending ?? 0) + (grid.levelsActive ?? 0)}`}
+                  value={`${grid.levelsDead ?? (grid.levelsTp ?? 0)} / ${grid.levelsTradable ?? (grid.levelsPending ?? 0) + (grid.levelsActive ?? 0)}`}
                 />
                 {grid.capitalScalingEnabled !== false && (
                   <>
@@ -621,7 +617,7 @@ function GridTraderCard({
                 DESTROY CONDITIONS
               </Typography>
               <Typography variant="body2" sx={{ fontSize: 13, mt: 1, color: 'text.secondary' }}>
-                Trader is destroyed only for MAX_LIFETIME or when every grid level has hit TP (SL does not count).
+                Destroyed only for MAX_LIFETIME or when price passes the final grid level on either side.
               </Typography>
               <Stack spacing={0.75} sx={{ mt: 1.25 }}>
                 <Typography variant="body2" sx={{ fontSize: 13 }}>
@@ -629,8 +625,12 @@ function GridTraderCard({
                   {' '}({formatDuration(stats.remainingMs)} left)
                 </Typography>
                 <Typography variant="body2" sx={{ fontSize: 13 }}>
-                  {grid.destroyConditions?.allPositionsTp ? '✓' : '✗'} All positions TP
-                  {' '}({grid.levelsTp ?? 0}/{grid.totalLevels ?? n * 2} TP · {grid.levelsSl ?? 0} SL)
+                  {grid.destroyConditions?.pastFinalLong ? '✗' : '✓'} Inside LONG bound
+                  {grid.lastLongLevel != null ? ` (≥ $${parseFloat(grid.lastLongLevel).toFixed(2)})` : ''}
+                </Typography>
+                <Typography variant="body2" sx={{ fontSize: 13 }}>
+                  {grid.destroyConditions?.pastFinalShort ? '✗' : '✓'} Inside SHORT bound
+                  {grid.lastShortLevel != null ? ` (≤ $${parseFloat(grid.lastShortLevel).toFixed(2)})` : ''}
                 </Typography>
               </Stack>
               {(grid.lastLongLevel != null || grid.lastShortLevel != null) && (

@@ -1,5 +1,5 @@
 /**
- * GridDirectionalTrader lifecycle: capital modes, per-level TP/SL, destroy rules.
+ * GridDirectionalTrader lifecycle: capital modes, per-level TP only, destroy rules.
  */
 import { GridDirectionalTrader } from '../../src/modules/trader/grid/GridDirectionalTrader';
 import { SimulationExecutionProvider } from '../../src/modules/execution/SimulationExecutionProvider';
@@ -159,7 +159,7 @@ describe('GridDirectionalTrader lifecycle', () => {
     await wait(ms);
   }
 
-  it('after entry fill, TP and SL orders are created', async () => {
+  it('after entry fill, TP order created and no protective STOP_MARKET SL', async () => {
     const trader = await boot({
       ...baseConfig,
       gridLevelsPerSide: 3,
@@ -168,12 +168,28 @@ describe('GridDirectionalTrader lifecycle', () => {
     await tick('105', trader, 900);
     const types = [...db._orders.values()].map((o: any) => o.type);
     expect(types.some((t: string) => t === 'TAKE_PROFIT_MARKET')).toBe(true);
-    expect(types.some((t: string) => t === 'STOP_MARKET')).toBe(true);
+    expect(types.some((t: string) => t === 'STOP_MARKET')).toBe(false);
     const g = trader.toSummary().grid!;
     const active = g.levels.find((l) => l.status === 'ACTIVE');
     expect(active?.tpPrice).toBeTruthy();
-    expect(active?.slPrice).toBeTruthy();
+    expect(active?.slPrice == null || active?.slPrice === '').toBe(true);
     expect(trader.getStatus()).toBe('ACTIVE');
+    trader.destroy();
+  });
+
+  it('no SL order created after entry', async () => {
+    const trader = await boot({
+      ...baseConfig,
+      gridLevelsPerSide: 2,
+      gridDistancePercent: '5',
+      gridCapitalScalingEnabled: false,
+    });
+    await tick('105', trader, 900);
+    expect(trader.getOpenLegCount()).toBe(1);
+    const stopMarket = [...db._orders.values()].filter((o: any) => o.type === 'STOP_MARKET');
+    expect(stopMarket).toHaveLength(0);
+    const active = trader.toSummary().grid!.levels.find((l) => l.status === 'ACTIVE')!;
+    expect(active.slPrice == null || active.slPrice === '').toBe(true);
     trader.destroy();
   });
 
@@ -222,7 +238,7 @@ describe('GridDirectionalTrader lifecycle', () => {
     await tick('120', trader, 700);
     expect(trader.getOpenLegCount()).toBeLessThanOrEqual(1);
     expect(trader.toSummary().grid!.activeOpenCount).toBeLessThanOrEqual(1);
-    expect(trader.getStatus()).toBe('ACTIVE');
+    // past last short @125 → may complete via GRID_BOUNDARY_PASSED
     trader.destroy();
   });
 
@@ -271,39 +287,24 @@ describe('GridDirectionalTrader lifecycle', () => {
     trader.destroy();
   });
 
-  it('price leaving the grid does NOT destroy the trader (no GRID_EXHAUSTED)', async () => {
+  it('adverse move does NOT close SHORT (no SL)', async () => {
     const trader = await boot({
       ...baseConfig,
       gridLevelsPerSide: 3,
       gridDistancePercent: '5',
+      gridCapitalScalingEnabled: false,
     });
-    await tick('105', trader, 800);
-    await tick('110', trader, 800);
-    await tick('115', trader, 1000);
-    await wait(400);
-    expect(trader.getStatus()).toBe('ACTIVE');
-    await tick('130', trader, 1000);
-    await wait(600);
-    expect(trader.getStatus()).toBe('ACTIVE');
-    expect(trader.toSummary().grid!.exitReason).toBeNull();
-    trader.destroy();
-  });
-
-  it('one level SL does NOT destroy trader', async () => {
-    const trader = await boot({
-      ...baseConfig,
-      gridLevelsPerSide: 2,
-      gridDistancePercent: '5',
-    });
-    // SHORT L1 @105; SL ≈ 105*1.05 = 110.25
+    // SHORT L1 @105; old SL zone was ~110.25 — must stay open
     await tick('105', trader, 900);
-    expect(trader.getOpenLegCount()).toBeGreaterThanOrEqual(1);
+    expect(trader.getOpenLegCount()).toBe(1);
     await tick('110.30', trader, 1000);
     await wait(500);
+    const g = trader.toSummary().grid!;
+    const s1 = g.levels.find((l) => l.direction === 'SHORT' && l.level === 1)!;
+    expect(s1.status).toBe('ACTIVE');
+    expect(g.levelsSl ?? 0).toBe(0);
     expect(trader.getStatus()).toBe('ACTIVE');
-    expect(trader.toSummary().grid!.exitReason).toBeNull();
-    const slCount = trader.toSummary().grid!.levelsSl ?? 0;
-    expect(slCount).toBeGreaterThanOrEqual(1);
+    expect(g.exitReason).toBeNull();
     trader.destroy();
   });
 
@@ -322,7 +323,7 @@ describe('GridDirectionalTrader lifecycle', () => {
     trader.destroy();
   });
 
-  it('ALL_GRID_POSITIONS_TP destroys when every level hit TP', async () => {
+  it('ALL_GRID_POSITIONS_TP does NOT destroy trader — stays ACTIVE', async () => {
     const trader = await boot({
       ...baseConfig,
       gridLevelsPerSide: 1,
@@ -336,25 +337,152 @@ describe('GridDirectionalTrader lifecycle', () => {
     await tick('95', trader, 900); // LONG entry
     await tick('99.80', trader, 1000); // LONG TP
     await wait(800);
-    expect(trader.getStatus()).toBe('COMPLETED');
-    expect(trader.toSummary().grid!.exitReason).toBe('ALL_GRID_POSITIONS_TP');
+    expect(trader.getStatus()).toBe('ACTIVE');
+    expect(trader.toSummary().grid!.exitReason).toBeNull();
+    expect(trader.toSummary().grid!.levelsTp).toBe(2);
+    trader.destroy();
   });
 
-  it('19 TP + 1 SL does not destroy (SL does not count as TP)', async () => {
+  it('multiple TPs do not destroy trader', async () => {
+    const trader = await boot({
+      ...baseConfig,
+      gridLevelsPerSide: 2,
+      gridDistancePercent: '5',
+      gridCapitalScalingEnabled: true,
+    });
+    await tick('105', trader, 900);
+    await tick('110', trader, 900);
+    await tick('99.70', trader, 1200); // SHORT L1 TP (~99.75); L2 TP = 110*0.95=104.5 — may still be open
+    await wait(600);
+    await tick('104.40', trader, 1200); // SHORT L2 TP
+    await wait(600);
+    expect(trader.toSummary().grid!.levelsTp).toBeGreaterThanOrEqual(2);
+    expect(trader.getStatus()).toBe('ACTIVE');
+    expect(trader.toSummary().grid!.exitReason).toBeNull();
+    trader.destroy();
+  });
+
+  it('LONG gap TP: entry 95, jump past TP closes', async () => {
+    const trader = await boot({
+      ...baseConfig,
+      gridLevelsPerSide: 2,
+      gridDistancePercent: '5',
+      gridCapitalScalingEnabled: false,
+    });
+    await tick('95', trader, 900);
+    const active = trader.toSummary().grid!.levels.find((l) => l.status === 'ACTIVE')!;
+    expect(active.direction).toBe('LONG');
+    expect(parseFloat(active.tpPrice!)).toBeCloseTo(99.75, 1);
+    await tick('99', trader, 600); // below TP — still open
+    expect(
+      trader.toSummary().grid!.levels.find((l) => l.direction === 'LONG' && l.level === 1)!.status,
+    ).toBe('ACTIVE');
+    await tick('100', trader, 1200); // gap past TP
+    await wait(500);
+    const l1 = trader.toSummary().grid!.levels.find((l) => l.direction === 'LONG' && l.level === 1)!;
+    expect(l1.status).toBe('TP_HIT');
+    trader.destroy();
+  });
+
+  it('SHORT gap TP: entry 105, jump past TP closes', async () => {
+    const trader = await boot({
+      ...baseConfig,
+      gridLevelsPerSide: 2,
+      gridDistancePercent: '5',
+      gridCapitalScalingEnabled: false,
+    });
+    await tick('105', trader, 900);
+    const active = trader.toSummary().grid!.levels.find((l) => l.status === 'ACTIVE')!;
+    expect(active.direction).toBe('SHORT');
+    expect(parseFloat(active.tpPrice!)).toBeCloseTo(99.75, 1);
+    await tick('100', trader, 600); // above TP — still open
+    expect(
+      trader.toSummary().grid!.levels.find((l) => l.direction === 'SHORT' && l.level === 1)!.status,
+    ).toBe('ACTIVE');
+    await tick('99.70', trader, 1200);
+    await wait(500);
+    const s1 = trader.toSummary().grid!.levels.find((l) => l.direction === 'SHORT' && l.level === 1)!;
+    expect(s1.status).toBe('TP_HIT');
+    trader.destroy();
+  });
+
+  it('already past TP closes position', async () => {
     const trader = await boot({
       ...baseConfig,
       gridLevelsPerSide: 1,
       gridDistancePercent: '5',
+      gridCapitalScalingEnabled: false,
     });
-    await tick('105', trader, 900);
-    await tick('110.30', trader, 1000); // SHORT SL
-    await wait(400);
+    await tick('95', trader, 900);
+    expect(trader.getOpenLegCount()).toBe(1);
+    // Single jump well past LONG TP ~99.75
+    await tick('101', trader, 1200);
+    await wait(500);
+    const l1 = trader.toSummary().grid!.levels.find((l) => l.direction === 'LONG' && l.level === 1)!;
+    expect(l1.status).toBe('TP_HIT');
     expect(trader.getStatus()).toBe('ACTIVE');
-    await tick('95', trader, 900); // LONG entry
-    await tick('99.80', trader, 1000); // LONG TP
+    trader.destroy();
+  });
+
+  it('price beyond final LONG destroys with GRID_BOUNDARY_PASSED', async () => {
+    const trader = await boot({
+      ...baseConfig,
+      gridLevelsPerSide: 2,
+      gridDistancePercent: '5',
+      gridCapitalScalingEnabled: false,
+    });
+    // last long @90; mark 89 is strictly past
+    await tick('90', trader, 900);
+    expect(trader.getStatus()).toBe('ACTIVE');
+    await tick('89', trader, 1200);
     await wait(600);
+    expect(trader.getStatus()).toBe('COMPLETED');
+    expect(trader.toSummary().grid!.exitReason).toBe('GRID_BOUNDARY_PASSED');
+  });
+
+  it('price beyond final SHORT destroys with GRID_BOUNDARY_PASSED', async () => {
+    const trader = await boot({
+      ...baseConfig,
+      gridLevelsPerSide: 2,
+      gridDistancePercent: '5',
+      gridCapitalScalingEnabled: false,
+    });
+    // last short @110; mark 111 is strictly past
+    await tick('110', trader, 900);
+    expect(trader.getStatus()).toBe('ACTIVE');
+    await tick('111', trader, 1200);
+    await wait(600);
+    expect(trader.getStatus()).toBe('COMPLETED');
+    expect(trader.toSummary().grid!.exitReason).toBe('GRID_BOUNDARY_PASSED');
+  });
+
+  it('touch final LONG level does NOT destroy', async () => {
+    const trader = await boot({
+      ...baseConfig,
+      gridLevelsPerSide: 2,
+      gridDistancePercent: '5',
+      gridCapitalScalingEnabled: false,
+    });
+    await tick('90', trader, 1200);
+    await wait(500);
     expect(trader.getStatus()).toBe('ACTIVE');
     expect(trader.toSummary().grid!.exitReason).toBeNull();
+    expect(trader.toSummary().grid!.destroyConditions!.pastFinalLong).toBe(false);
+    trader.destroy();
+  });
+
+  it('touch final SHORT level does NOT destroy', async () => {
+    const trader = await boot({
+      ...baseConfig,
+      gridLevelsPerSide: 2,
+      gridDistancePercent: '5',
+      gridCapitalScalingEnabled: false,
+    });
+    await tick('110', trader, 1200);
+    await wait(500);
+    expect(trader.getStatus()).toBe('ACTIVE');
+    expect(trader.toSummary().grid!.exitReason).toBeNull();
+    expect(trader.toSummary().grid!.destroyConditions!.pastFinalShort).toBe(false);
     trader.destroy();
   });
 
@@ -397,7 +525,8 @@ describe('GridDirectionalTrader lifecycle', () => {
     });
     const g = trader.toSummary().grid!;
     expect(g.destroyConditions).toBeDefined();
-    expect(g.destroyConditions!.allPositionsTp).toBe(false);
+    expect(g.destroyConditions!.pastFinalLong).toBe(false);
+    expect(g.destroyConditions!.pastFinalShort).toBe(false);
     expect(g.levelsPending).toBe(4);
     expect(g.capitalScalingEnabled).toBe(false);
     expect(g.totalLevels).toBe(4);
@@ -438,27 +567,23 @@ describe('GridDirectionalTrader lifecycle', () => {
     trader.destroy();
   });
 
-  it('after SL: level stays visible as SL_HIT and never reactivates', async () => {
+  it('adverse move toward old SL zone does NOT close SHORT without TP', async () => {
     const trader = await boot({
       ...baseConfig,
-      gridLevelsPerSide: 2,
+      gridLevelsPerSide: 3,
       gridDistancePercent: '5',
       gridCapitalScalingEnabled: false,
     });
     await tick('105', trader, 900);
-    await tick('110.30', trader, 1000); // SHORT SL
+    // Last short @115; 110.30 is adverse but still inside grid (old SL ~110.25)
+    await tick('110.30', trader, 1000);
     await wait(500);
     const g = trader.toSummary().grid!;
-    expect(g.levels.length).toBe(4);
     const s1 = g.levels.find((l) => l.direction === 'SHORT' && l.level === 1)!;
-    expect(s1.status).toBe('SL_HIT');
-    expect(g.levelsSl).toBeGreaterThanOrEqual(1);
-    await tick('105', trader, 900);
-    await tick('106', trader, 600);
-    expect(
-      trader.toSummary().grid!.levels.find((l) => l.direction === 'SHORT' && l.level === 1)!.status,
-    ).toBe('SL_HIT');
+    expect(s1.status).toBe('ACTIVE');
+    expect(g.levelsSl ?? 0).toBe(0);
     expect(trader.getStatus()).toBe('ACTIVE');
+    expect(g.exitReason).toBeNull();
     trader.destroy();
   });
 
@@ -551,31 +676,7 @@ describe('GridDirectionalTrader lifecycle', () => {
     trader.destroy();
   });
 
-  it('mark gap past SHORT SL closes position even without waiting for exact SL tick', async () => {
-    const trader = await boot({
-      ...baseConfig,
-      gridLevelsPerSide: 3,
-      gridDistancePercent: '1',
-      gridCapitalScalingEnabled: false,
-    });
-    // SHORT L1 @101 (start 100, 1%)
-    await tick('101', trader, 900);
-    expect(trader.getOpenLegCount()).toBe(1);
-    const active = trader.toSummary().grid!.levels.find((l) => l.status === 'ACTIVE');
-    expect(active?.direction).toBe('SHORT');
-    const sl = active!.slPrice!;
-    expect(parseFloat(sl)).toBeGreaterThan(parseFloat(active!.entryPrice!));
-    await tick('105', trader, 1200);
-    await wait(400);
-    const g = trader.toSummary().grid!;
-    const short1 = g.levels.find((l) => l.direction === 'SHORT' && l.level === 1)!;
-    expect(short1.status).toBe('SL_HIT');
-    expect(g.activeOpenCount ?? 0).toBeLessThanOrEqual(1);
-    expect(trader.getStatus()).toBe('ACTIVE');
-    trader.destroy();
-  });
-
-  it('OFF mode: after SHORT SL, gap into LONGs activates at most one; others stay PENDING', async () => {
+  it('OFF mode: after SHORT TP, gap into LONGs activates at most one; others stay PENDING', async () => {
     const trader = await boot({
       ...baseConfig,
       gridLevelsPerSide: 5,
@@ -584,13 +685,14 @@ describe('GridDirectionalTrader lifecycle', () => {
     });
     await tick('101', trader, 900); // SHORT L1
     expect(trader.getOpenLegCount()).toBe(1);
-    await tick('105', trader, 1200); // past SHORT SL
+    // SHORT L1 TP ≈ 101*0.99 = 99.99
+    await tick('99.90', trader, 1200);
     await wait(400);
     await tick('96', trader, 1500); // gap into LONG side
     await wait(500);
     const g = trader.toSummary().grid!;
     const short1 = g.levels.find((l) => l.direction === 'SHORT' && l.level === 1)!;
-    expect(short1.status).toBe('SL_HIT');
+    expect(short1.status).toBe('TP_HIT');
     expect(g.activeOpenCount ?? 0).toBeLessThanOrEqual(1);
     const activeLongs = g.levels.filter((l) => l.direction === 'LONG' && l.status === 'ACTIVE');
     expect(activeLongs.length).toBeLessThanOrEqual(1);
@@ -618,9 +720,11 @@ describe('GridDirectionalTrader lifecycle', () => {
     expect(afterClose.grid!.activeOpenCount ?? 0).toBe(0);
     const frozenRealized = parseFloat(afterClose.realizedPnl);
     expect(parseFloat(afterClose.unrealizedPnl)).toBe(0);
-    for (const p of ['120', '200', '106', '150']) {
+    // Stay inside final levels (LONG@95 / SHORT@105) so boundary does not fire
+    for (const p of ['100', '102', '98', '104']) {
       await tick(p, trader, 400);
       const s = trader.toSummary();
+      expect(s.status).toBe('ACTIVE');
       expect(parseFloat(s.realizedPnl)).toBeCloseTo(frozenRealized, 4);
       expect(s.grid!.activeOpenCount ?? 0).toBe(0);
       expect(parseFloat(s.unrealizedPnl)).toBe(0);
@@ -642,7 +746,7 @@ describe('GridDirectionalTrader lifecycle', () => {
     const active = trader.toSummary().grid!.levels.find((l) => l.status === 'ACTIVE');
     expect(active?.direction).toBe('LONG');
     expect(parseFloat(active!.tpPrice!)).toBeGreaterThan(parseFloat(active!.entryPrice!));
-    expect(parseFloat(active!.slPrice!)).toBeLessThan(parseFloat(active!.entryPrice!));
+    expect(active!.slPrice == null || active!.slPrice === '').toBe(true);
     await tick('99.80', trader, 1200);
     await wait(500);
     const l1 = trader.toSummary().grid!.levels.find((l) => l.direction === 'LONG' && l.level === 1)!;

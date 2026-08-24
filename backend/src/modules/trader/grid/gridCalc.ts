@@ -2,7 +2,7 @@
  * Pure directional-grid math (Decimal.js).
  * Capital MODE A: scaled (50/50 sides + L/triangular).
  * Capital MODE B: 100% of current trader capital for the single active position.
- * Per-level TP/SL = ± configured grid spacing % from entry.
+ * Per-level TP only (no stop loss) = +/− configured grid spacing % from entry.
  */
 import Decimal from 'decimal.js';
 import type { SymbolInfo, TradeSide } from '../../../types';
@@ -36,9 +36,10 @@ export interface GridLevelPlan {
   allocationPct: string;
   triggerPrice: string;
   limitPrice: string;
-  /** Precomputed at plan time from trigger; refreshed from actual entry on fill. */
+  /** Precomputed at plan time from trigger; refreshed from actual entry on fill. No SL. */
   tpPrice: string;
-  slPrice: string;
+  /** Always null for grid_directional (SL removed). Kept for schema/compat. */
+  slPrice: string | null;
   theoreticalMargin: string;
   allocatedMargin: string;
   notional: string;
@@ -211,71 +212,93 @@ export function calcGridTriggerPrice(
 }
 
 /**
- * Per-level TP/SL from entry using grid spacing % (normal directional).
- * LONG:  TP = entry×(1+s)  SL = entry×(1−s)  → TP > entry > SL
- * SHORT: TP = entry×(1−s)  SL = entry×(1+s)  → SL > entry > TP
+ * Per-level TP from entry using grid spacing % (NO stop loss).
+ * LONG:  TP = entry×(1+s)  → TP > entry
+ * SHORT: TP = entry×(1−s)  → TP < entry
+ */
+export function calcLevelTpPrice(
+  entryPrice: string | Decimal,
+  direction: GridDirection,
+  spacingPercent: string | number,
+  symbolInfo: SymbolInfo,
+): string {
+  const entry = new Decimal(entryPrice);
+  const pct = new Decimal(spacingPercent).div(100);
+  const tpRaw = direction === 'LONG'
+    ? entry.mul(new Decimal(1).plus(pct))
+    : entry.mul(new Decimal(1).minus(pct));
+  if (tpRaw.lte(0)) {
+    throw new Error(
+      `TP non-positive for ${direction} entry=${entry.toFixed()} spacing=${spacingPercent}`,
+    );
+  }
+  const tpPrice = adjustPrice(tpRaw, symbolInfo);
+  assertDirectionalTp(direction, entryPrice, tpPrice);
+  return tpPrice;
+}
+
+/**
+ * @deprecated Grid strategy has no SL — returns slPrice=null.
+ * Prefer calcLevelTpPrice.
  */
 export function calcLevelTpSlPrices(
   entryPrice: string | Decimal,
   direction: GridDirection,
   spacingPercent: string | number,
   symbolInfo: SymbolInfo,
-): { tpPrice: string; slPrice: string } {
-  const entry = new Decimal(entryPrice);
-  const pct = new Decimal(spacingPercent).div(100);
-  let tpRaw: Decimal;
-  let slRaw: Decimal;
-  if (direction === 'LONG') {
-    tpRaw = entry.mul(new Decimal(1).plus(pct));
-    slRaw = entry.mul(new Decimal(1).minus(pct));
-  } else {
-    tpRaw = entry.mul(new Decimal(1).minus(pct));
-    slRaw = entry.mul(new Decimal(1).plus(pct));
-  }
-  if (tpRaw.lte(0) || slRaw.lte(0)) {
-    throw new Error(
-      `TP/SL non-positive for ${direction} entry=${entry.toFixed()} spacing=${spacingPercent}`,
-    );
-  }
-  const out = {
-    tpPrice: adjustPrice(tpRaw, symbolInfo),
-    slPrice: adjustPrice(slRaw, symbolInfo),
+): { tpPrice: string; slPrice: string | null } {
+  return {
+    tpPrice: calcLevelTpPrice(entryPrice, direction, spacingPercent, symbolInfo),
+    slPrice: null,
   };
-  assertDirectionalTpSl(direction, entryPrice, out.tpPrice, out.slPrice);
-  return out;
 }
 
-/** True when TP/SL respect normal directional invariants relative to entry. */
+/** True when TP respects normal directional invariant relative to entry (no SL). */
+export function isValidDirectionalTp(
+  direction: GridDirection,
+  entryPrice: string | Decimal,
+  tpPrice: string | Decimal,
+): boolean {
+  const entry = new Decimal(entryPrice);
+  const tp = new Decimal(tpPrice);
+  return direction === 'LONG' ? tp.gt(entry) : tp.lt(entry);
+}
+
+export function assertDirectionalTp(
+  direction: GridDirection,
+  entryPrice: string | Decimal,
+  tpPrice: string | Decimal,
+): void {
+  if (!isValidDirectionalTp(direction, entryPrice, tpPrice)) {
+    throw new Error(
+      `Invalid ${direction} TP: entry=${new Decimal(entryPrice).toFixed()} `
+      + `tp=${new Decimal(tpPrice).toFixed()}`,
+    );
+  }
+}
+
+/** @deprecated Use isValidDirectionalTp — SL removed from grid. */
 export function isValidDirectionalTpSl(
   direction: GridDirection,
   entryPrice: string | Decimal,
   tpPrice: string | Decimal,
-  slPrice: string | Decimal,
+  _slPrice?: string | Decimal | null,
 ): boolean {
-  const entry = new Decimal(entryPrice);
-  const tp = new Decimal(tpPrice);
-  const sl = new Decimal(slPrice);
-  if (direction === 'LONG') return tp.gt(entry) && sl.lt(entry);
-  return tp.lt(entry) && sl.gt(entry);
+  return isValidDirectionalTp(direction, entryPrice, tpPrice);
 }
 
-/** Throws if TP/SL violate LONG tp>entry>sl or SHORT sl>entry>tp. */
+/** @deprecated Use assertDirectionalTp. */
 export function assertDirectionalTpSl(
   direction: GridDirection,
   entryPrice: string | Decimal,
   tpPrice: string | Decimal,
-  slPrice: string | Decimal,
+  _slPrice?: string | Decimal | null,
 ): void {
-  if (!isValidDirectionalTpSl(direction, entryPrice, tpPrice, slPrice)) {
-    throw new Error(
-      `Invalid ${direction} TP/SL: entry=${new Decimal(entryPrice).toFixed()} `
-      + `tp=${new Decimal(tpPrice).toFixed()} sl=${new Decimal(slPrice).toFixed()}`,
-    );
-  }
+  assertDirectionalTp(direction, entryPrice, tpPrice);
 }
 
-/** @deprecated Prefer calcLevelTpSlPrices (percent-based). Absolute-step TP for compat. */
-export function calcLevelTpPrice(
+/** @deprecated Absolute-step TP for compat — prefer percent-based calcLevelTpPrice. */
+export function calcLevelTpPriceFromAbs(
   entryPrice: string | Decimal,
   direction: GridDirection,
   gridDistanceAbs: string | Decimal,
@@ -291,8 +314,28 @@ export function calcLevelTpPrice(
 }
 
 /**
- * Informational grid bounds (NOT destruction triggers).
- * After orientation flip: pass last SHORT for upper, last LONG for lower.
+ * Final grid boundary destroy (strict past the last level).
+ * LONG side (below start): destroy when mark < lastLongLevel.
+ * SHORT side (above start): destroy when mark > lastShortLevel.
+ * Touching the final level (==) does NOT destroy.
+ */
+export function isPastFinalLongLevel(
+  markPrice: string | Decimal,
+  lastLongLevel: string | Decimal,
+): boolean {
+  return new Decimal(markPrice).lt(new Decimal(lastLongLevel));
+}
+
+export function isPastFinalShortLevel(
+  markPrice: string | Decimal,
+  lastShortLevel: string | Decimal,
+): boolean {
+  return new Decimal(markPrice).gt(new Decimal(lastShortLevel));
+}
+
+/**
+ * Informational display bounds (last level ± spacing) — NOT destroy triggers.
+ * Destroy uses isPastFinalLongLevel / isPastFinalShortLevel on the last triggers.
  */
 export function getUpperGridExhaustionPrice(
   lastHighestLevel: string | Decimal,
@@ -365,7 +408,7 @@ export function buildGridLevelPrices(
   triggerPrice: string;
   limitPrice: string;
   tpPrice: string;
-  slPrice: string;
+  slPrice: string | null;
   weight: number;
   allocationPct: string;
 }> {
@@ -377,7 +420,7 @@ export function buildGridLevelPrices(
     triggerPrice: string;
     limitPrice: string;
     tpPrice: string;
-    slPrice: string;
+    slPrice: string | null;
     weight: number;
     allocationPct: string;
   }> = [];

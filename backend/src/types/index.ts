@@ -373,10 +373,11 @@ export interface GridTraderView {
   levelsTradable?: number;
   /** Milliseconds until MAX_LIFETIME (0 if expired/unknown). */
   lifetimeRemaining?: number;
-  /** Destroy conditions: MAX_LIFETIME | ALL_GRID_POSITIONS_TP only. */
+  /** Destroy conditions: MAX_LIFETIME | GRID_BOUNDARY_PASSED only. */
   destroyConditions?: {
     lifetimeExpired: boolean;
-    allPositionsTp: boolean;
+    pastFinalLong: boolean;
+    pastFinalShort: boolean;
     remainingMs: number;
   };
   trend?: {

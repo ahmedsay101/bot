@@ -21,7 +21,8 @@ import {
   didCrossEntry,
   findTriggeredPendingLevels,
   isTpTriggeredByMark,
-  isSlTriggeredByMark,
+  isPastFinalLongLevel,
+  isPastFinalShortLevel,
 } from '../../src/modules/trader/grid/gridCalc';
 import type { SymbolInfo } from '../../src/types';
 
@@ -198,7 +199,7 @@ describe('gridCalc — flipped orientation (LONG below / SHORT above)', () => {
     expect(calcGridTriggerPrice('100', 2, 'SHORT', 5).toFixed(2)).toBe('110.00');
   });
 
-  it('buildGridPlan: LONG entries < start < SHORT entries; TP/SL directional', () => {
+  it('buildGridPlan: LONG entries < start < SHORT entries; TP only (sl null)', () => {
     const plan = buildGridPlan({
       startPrice: '100',
       traderAllocation: '1000',
@@ -217,34 +218,34 @@ describe('gridCalc — flipped orientation (LONG below / SHORT above)', () => {
     for (const l of plan.levels) {
       const entry = parseFloat(l.triggerPrice);
       const tp = parseFloat(l.tpPrice);
-      const sl = parseFloat(l.slPrice);
+      expect(l.slPrice).toBeNull();
       if (l.direction === 'LONG') {
         expect(tp).toBeGreaterThan(entry);
-        expect(sl).toBeLessThan(entry);
       } else {
         expect(tp).toBeLessThan(entry);
-        expect(sl).toBeGreaterThan(entry);
       }
     }
   });
 });
 
-describe('gridCalc — TP/SL from spacing %', () => {
-  it('LONG 1%', () => {
+describe('gridCalc — TP only from spacing % (no SL)', () => {
+  it('LONG 1%: TP correct, slPrice null', () => {
     const { tpPrice, slPrice } = calcLevelTpSlPrices('100', 'LONG', '1', info);
     expect(parseFloat(tpPrice)).toBeCloseTo(101, 2);
-    expect(parseFloat(slPrice)).toBeCloseTo(99, 2);
+    expect(slPrice).toBeNull();
   });
 
-  it('SHORT 1%', () => {
+  it('SHORT 1%: TP correct, slPrice null', () => {
     const { tpPrice, slPrice } = calcLevelTpSlPrices('100', 'SHORT', '1', info);
     expect(parseFloat(tpPrice)).toBeCloseTo(99, 2);
-    expect(parseFloat(slPrice)).toBeCloseTo(101, 2);
+    expect(slPrice).toBeNull();
   });
 
-  it('2% and 5%', () => {
+  it('2% and 5% TP only', () => {
     expect(parseFloat(calcLevelTpSlPrices('100', 'LONG', '2', info).tpPrice)).toBeCloseTo(102, 2);
-    expect(parseFloat(calcLevelTpSlPrices('100', 'LONG', '5', info).slPrice)).toBeCloseTo(95, 2);
+    expect(calcLevelTpSlPrices('100', 'LONG', '5', info).slPrice).toBeNull();
+    expect(parseFloat(calcLevelTpSlPrices('100', 'LONG', '5', info).tpPrice)).toBeCloseTo(105, 2);
+    expect(parseFloat(calcLevelTpSlPrices('100', 'SHORT', '5', info).tpPrice)).toBeCloseTo(95, 2);
   });
 });
 
@@ -266,7 +267,21 @@ describe('misc', () => {
   });
 });
 
-describe('gridCalc — entry / TP / SL crossing (gap-safe, flipped)', () => {
+describe('gridCalc — final grid boundary (strict past)', () => {
+  it('isPastFinalLongLevel: mark < lastLong only', () => {
+    expect(isPastFinalLongLevel('89', '90')).toBe(true);
+    expect(isPastFinalLongLevel('90', '90')).toBe(false);
+    expect(isPastFinalLongLevel('91', '90')).toBe(false);
+  });
+
+  it('isPastFinalShortLevel: mark > lastShort only', () => {
+    expect(isPastFinalShortLevel('111', '110')).toBe(true);
+    expect(isPastFinalShortLevel('110', '110')).toBe(false);
+    expect(isPastFinalShortLevel('109', '110')).toBe(false);
+  });
+});
+
+describe('gridCalc — entry / TP crossing (gap-safe, flipped)', () => {
   it('LONG entry: downward cross / mark at or below trigger', () => {
     expect(isEntryTriggered('LONG', '94', '95')).toBe(true);
     expect(isEntryTriggered('LONG', '96', '95')).toBe(false);
@@ -316,14 +331,14 @@ describe('gridCalc — entry / TP / SL crossing (gap-safe, flipped)', () => {
     expect(hit.map((l) => l.level)).toEqual([1, 2]);
   });
 
-  it('LONG TP/SL by mark without exact equality', () => {
+  it('LONG TP by mark without exact equality', () => {
     expect(isTpTriggeredByMark('LONG', '110.5', '110')).toBe(true);
-    expect(isSlTriggeredByMark('LONG', '89', '90')).toBe(true);
+    expect(isTpTriggeredByMark('LONG', '109.9', '110')).toBe(false);
   });
 
-  it('SHORT TP/SL by mark — SL above entry when mark jumps past', () => {
+  it('SHORT TP by mark — gaps and already-past', () => {
     expect(isTpTriggeredByMark('SHORT', '90', '95')).toBe(true);
-    expect(isSlTriggeredByMark('SHORT', '0.065500', '0.063100')).toBe(true);
-    expect(isSlTriggeredByMark('SHORT', '0.062900', '0.063100')).toBe(false);
+    expect(isTpTriggeredByMark('SHORT', '95', '95')).toBe(true);
+    expect(isTpTriggeredByMark('SHORT', '96', '95')).toBe(false);
   });
 });
