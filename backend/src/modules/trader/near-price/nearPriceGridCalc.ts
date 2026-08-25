@@ -180,7 +180,35 @@ export function assignSideForLevel(
 }
 
 export function isNearPriceLevelTerminal(status: string): boolean {
-  return status === 'TP_HIT' || status === 'CANCELLED' || status === 'SKIPPED';
+  // TP does NOT kill a level — levels are reusable. Only cancelled/skipped are terminal.
+  return status === 'CANCELLED' || status === 'SKIPPED';
+}
+
+/** After TP, level returns to EMPTY/AVAILABLE (not permanently dead). */
+export function resetLevelAfterTpClose(): {
+  status: 'EMPTY';
+  direction: null;
+  clientOrderId: null;
+  exchangeOrderId: null;
+  entryPrice: null;
+  filledQuantity: null;
+  tpPrice: null;
+  allocatedMargin: string;
+  notional: string;
+  quantity: string;
+} {
+  return {
+    status: 'EMPTY',
+    direction: null,
+    clientOrderId: null,
+    exchangeOrderId: null,
+    entryPrice: null,
+    filledQuantity: null,
+    tpPrice: null,
+    allocatedMargin: '0',
+    notional: '0',
+    quantity: '0',
+  };
 }
 
 export function buildNearPriceLevelPlans(params: {
@@ -249,7 +277,7 @@ export function findEligibleEmptyLevels<T extends {
 ): T[] {
   const eligible = levels.filter(
     (l) =>
-      (l.status === 'EMPTY' || l.status === 'PENDING')
+      l.status === 'EMPTY'
       && l.clientOrderId == null
       && isWithinActivationZone(markPrice, l.levelPrice, spacingPercent, activationMultiplier),
   );

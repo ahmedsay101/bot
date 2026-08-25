@@ -34,9 +34,12 @@ import {
   sizeNearPriceLevel,
   levelsPerSideFromConfig,
   activationDistancePercent,
+  distancePercentFromLevel,
+  isWithinActivationZone,
   isNearPriceLevelTerminal,
   equalCapitalPerLevel,
   totalGridLevels,
+  resetLevelAfterTpClose,
   type NearPriceLevelPlan,
   type NearPriceLevelStatus,
 } from './nearPriceGridCalc';
@@ -79,7 +82,7 @@ interface ActivePosition {
 
 interface LevelState {
   plan: NearPriceLevelPlan;
-  /** Assigned at activation; null while EMPTY. */
+  /** Assigned at activation only; null while EMPTY (never permanent). */
   direction: TradeSide | null;
   status: NearPriceLevelStatus;
   clientOrderId: string | null;
@@ -94,10 +97,41 @@ interface LevelState {
   allocatedMargin: string;
   notional: string;
   quantity: string;
+  /** Last closed position (history); level itself is reusable. */
+  lastSide: TradeSide | null;
+  lastExitPrice: string | null;
+  lastRealizedNetPnl: string | null;
+  lastCompletionReason: string | null;
+  positionsCompleted: number;
 }
 
 function levelKey(level: number): string {
   return `L:${level}`;
+}
+
+function createEmptyLevelState(plan: NearPriceLevelPlan): LevelState {
+  return {
+    plan,
+    direction: null,
+    status: 'EMPTY',
+    clientOrderId: null,
+    exchangeOrderId: null,
+    entryPrice: null,
+    filledQuantity: null,
+    fees: null,
+    tpPrice: null,
+    completionReason: null,
+    realizedNetPnl: null,
+    exitPrice: null,
+    allocatedMargin: '0',
+    notional: '0',
+    quantity: '0',
+    lastSide: null,
+    lastExitPrice: null,
+    lastRealizedNetPnl: null,
+    lastCompletionReason: null,
+    positionsCompleted: 0,
+  };
 }
 
 export class NearPriceDirectionalTrader extends EventEmitter implements IManagedTrader {
@@ -137,6 +171,8 @@ export class NearPriceDirectionalTrader extends EventEmitter implements IManaged
   private levels = new Map<string, LevelState>();
   private activePositions = new Map<string, ActivePosition>();
   private finalizedLevelKeys = new Set<string>();
+  /** Levels that closed via TP in the current price tick — skip re-entry until the next evaluation. */
+  private justClosedLevelKeys = new Set<string>();
   private handledFillIds = new Set<string>();
   private capitalHistory: Array<{ at: string; capital: string; event: string; netPnl?: string }> = [];
 
@@ -242,23 +278,7 @@ export class NearPriceDirectionalTrader extends EventEmitter implements IManaged
       symbolInfo: this.symbolInfo,
     });
     for (const plan of plans) {
-      this.levels.set(levelKey(plan.level), {
-        plan,
-        direction: null,
-        status: 'EMPTY',
-        clientOrderId: null,
-        exchangeOrderId: null,
-        entryPrice: null,
-        filledQuantity: null,
-        fees: null,
-        tpPrice: null,
-        completionReason: null,
-        realizedNetPnl: null,
-        exitPrice: null,
-        allocatedMargin: '0',
-        notional: '0',
-        quantity: '0',
-      });
+      this.levels.set(levelKey(plan.level), createEmptyLevelState(plan));
     }
 
     await this.db.trader.update({
@@ -327,53 +347,53 @@ export class NearPriceDirectionalTrader extends EventEmitter implements IManaged
         symbolInfo: this.symbolInfo,
       });
       for (const plan of plans) {
-        this.levels.set(levelKey(plan.level), {
-          plan,
-          direction: null,
-          status: 'EMPTY',
-          clientOrderId: null,
-          exchangeOrderId: null,
-          entryPrice: null,
-          filledQuantity: null,
-          fees: null,
-          tpPrice: null,
-          completionReason: null,
-          realizedNetPnl: null,
-          exitPrice: null,
-          allocatedMargin: '0',
-          notional: '0',
-          quantity: '0',
-        });
+        this.levels.set(levelKey(plan.level), createEmptyLevelState(plan));
       }
     } else {
       for (const row of rows) {
         const dir = row.direction === 'LONG' || row.direction === 'SHORT' ? row.direction as TradeSide : null;
-        const status = (row.status === 'PENDING' && dir == null ? 'EMPTY' : row.status) as NearPriceLevelStatus;
+        let status = (row.status === 'PENDING' && dir == null ? 'EMPTY' : row.status) as NearPriceLevelStatus;
         const lvl = Number(row.level);
-        this.levels.set(levelKey(lvl), {
-          plan: {
-            level: lvl,
-            geometry: new Decimal(row.triggerPrice).gte(this.startPrice ?? '0') ? 'ABOVE' : 'BELOW',
-            step: lvl,
-            levelPrice: row.triggerPrice,
-            status,
-          },
-          direction: dir,
+        // Legacy: TP_HIT meant permanent dead — migrate to reusable EMPTY + last history
+        const wasTpHit = status === 'TP_HIT';
+        if (wasTpHit) {
+          status = 'EMPTY';
+        }
+        const plan: NearPriceLevelPlan = {
+          level: lvl,
+          geometry: new Decimal(row.triggerPrice).gte(this.startPrice ?? '0') ? 'ABOVE' : 'BELOW',
+          step: lvl,
+          levelPrice: row.triggerPrice,
           status,
-          clientOrderId: row.clientOrderId ?? null,
-          exchangeOrderId: row.exchangeOrderId ?? null,
-          entryPrice: row.entryPrice ?? null,
-          filledQuantity: row.filledQuantity ?? null,
-          fees: row.fees ?? null,
-          tpPrice: row.tpPrice ?? null,
-          completionReason: row.completionReason ?? null,
-          realizedNetPnl: null,
-          exitPrice: null,
-          allocatedMargin: row.allocatedMargin ?? '0',
-          notional: row.notional ?? '0',
-          quantity: row.quantity ?? '0',
-        });
-        if (isNearPriceLevelTerminal(status)) {
+        };
+        const level = createEmptyLevelState(plan);
+        if (wasTpHit) {
+          level.lastSide = dir;
+          level.lastCompletionReason = row.completionReason ?? 'TP';
+          level.lastExitPrice = row.exitPrice ?? null;
+          level.lastRealizedNetPnl = row.realizedPnl ?? null;
+          level.completionReason = level.lastCompletionReason;
+          level.exitPrice = level.lastExitPrice;
+          level.realizedNetPnl = level.lastRealizedNetPnl;
+          level.fees = row.fees ?? null;
+          level.positionsCompleted = 1;
+        } else {
+          level.direction = dir;
+          level.status = status;
+          level.clientOrderId = row.clientOrderId ?? null;
+          level.exchangeOrderId = row.exchangeOrderId ?? null;
+          level.entryPrice = row.entryPrice ?? null;
+          level.filledQuantity = row.filledQuantity ?? null;
+          level.fees = row.fees ?? null;
+          level.tpPrice = row.tpPrice ?? null;
+          level.completionReason = row.completionReason ?? null;
+          level.allocatedMargin = row.allocatedMargin ?? '0';
+          level.notional = row.notional ?? '0';
+          level.quantity = row.quantity ?? '0';
+        }
+        this.levels.set(levelKey(lvl), level);
+        // Only permanently terminal statuses (CANCELLED/SKIPPED) block reactivation
+        if (isNearPriceLevelTerminal(level.status)) {
           this.finalizedLevelKeys.add(levelKey(lvl));
         }
       }
@@ -438,6 +458,8 @@ export class NearPriceDirectionalTrader extends EventEmitter implements IManaged
         return;
       }
       await this.tryActivateEligibleLevels();
+      // Allow just-closed levels to be considered on the *next* mark evaluation only
+      this.justClosedLevelKeys.clear();
     });
   }
 
@@ -529,27 +551,46 @@ export class NearPriceDirectionalTrader extends EventEmitter implements IManaged
             active.quantity,
           ).toFixed(8);
         }
-        const displayStatus = l.status === 'EMPTY' ? 'PENDING' : l.status;
+        const dist = distancePercentFromLevel(this.markPrice, l.plan.levelPrice);
+        const threshold = activationDistancePercent(this.spacingPercent, this.activationMultiplier);
+        const eligible = l.status === 'EMPTY'
+          && isWithinActivationZone(
+            this.markPrice,
+            l.plan.levelPrice,
+            this.spacingPercent,
+            this.activationMultiplier,
+          );
+        // EMPTY = available (reusable). PENDING = entry in flight. ACTIVE = filled.
+        // TP does not kill the level — last* fields hold closed-position history.
+        const hasLive = active != null && !terminal && !active.closing;
         return {
           level: l.plan.level,
           direction: (l.direction ?? 'LONG') as TradeSide,
           triggerPrice: l.plan.levelPrice,
           limitPrice: l.plan.levelPrice,
-          allocatedMargin: active != null && !terminal ? active.allocatedMargin : l.allocatedMargin,
-          notional: active != null && !terminal ? active.actualNotional : l.notional,
+          allocatedMargin: hasLive ? active!.allocatedMargin : '0',
+          notional: hasLive ? active!.actualNotional : '0',
           leverage: this.traderConfig.leverage,
-          quantity: active != null && !terminal ? active.quantity : l.quantity,
-          status: displayStatus,
+          quantity: hasLive ? active!.quantity : '0',
+          status: l.status,
           entryPrice: l.entryPrice,
-          exitPrice: l.exitPrice,
+          exitPrice: l.exitPrice ?? l.lastExitPrice,
           unrealizedPnl: terminal ? '0' : uPnl,
-          realizedPnl: l.realizedNetPnl,
+          realizedPnl: l.realizedNetPnl ?? l.lastRealizedNetPnl,
           tpPrice: l.tpPrice,
           slPrice: null,
-          completionReason: l.completionReason,
+          completionReason: l.completionReason ?? l.lastCompletionReason,
           geometry: l.plan.geometry,
           nearPriceStatus: l.status,
           assignedSide: l.direction,
+          lastSide: l.lastSide,
+          lastCompletionReason: l.lastCompletionReason,
+          lastExitPrice: l.lastExitPrice,
+          lastRealizedPnl: l.lastRealizedNetPnl,
+          positionsCompleted: l.positionsCompleted,
+          distancePercent: dist.toFixed(4),
+          activationThresholdPercent: threshold.toFixed(4),
+          activationEligible: eligible,
         };
       });
 
@@ -558,14 +599,26 @@ export class NearPriceDirectionalTrader extends EventEmitter implements IManaged
     );
     let activeMargin = new Decimal(0);
     let activeNotional = new Decimal(0);
-    for (const a of activeOpen) {
+    // Filled positions + in-flight entry orders reserve capital; EMPTY levels reserve nothing
+    for (const a of this.activePositions.values()) {
+      if (a.closing || this.finalizedLevelKeys.has(a.key)) continue;
       activeMargin = activeMargin.plus(a.allocatedMargin);
       activeNotional = activeNotional.plus(a.actualNotional);
     }
     const perLevel = equalCapitalPerLevel(this.initialCapital, this.levelsPerSide);
-    const empty = [...this.levels.values()].filter((l) => l.status === 'EMPTY' || l.status === 'PENDING').length;
+    const emptyCount = [...this.levels.values()].filter((l) => l.status === 'EMPTY').length;
+    const orderPendingCount = [...this.levels.values()].filter(
+      (l) => l.status === 'PENDING' && l.clientOrderId != null,
+    ).length;
     const activeCount = [...this.levels.values()].filter((l) => l.status === 'ACTIVE').length;
-    const tpCount = [...this.levels.values()].filter((l) => l.status === 'TP_HIT').length;
+    // Levels are reusable — do not count closed TPs as dead levels
+    const permanentlyDead = [...this.levels.values()].filter(
+      (l) => isNearPriceLevelTerminal(l.status),
+    ).length;
+    const completedPositionInstances = [...this.levels.values()].reduce(
+      (n, l) => n + l.positionsCompleted,
+      0,
+    );
 
     return {
       id: this.id,
@@ -630,7 +683,7 @@ export class NearPriceDirectionalTrader extends EventEmitter implements IManaged
       distanceToSlPct: null,
       distanceToSlAbs: null,
       openOrders: this.activePositions.size,
-      pendingOrders: empty,
+      pendingOrders: orderPendingCount,
       closedOrders: 0,
       orders: [],
       behavior: 'near_price_directional',
@@ -663,12 +716,16 @@ export class NearPriceDirectionalTrader extends EventEmitter implements IManaged
         perPositionNotional: perLevel.mul(this.traderConfig.leverage).toFixed(8),
         maxActivePositions: totalGridLevels(this.levelsPerSide),
         totalLevels: totalGridLevels(this.levelsPerSide),
-        levelsPending: empty,
+        levelsPending: orderPendingCount,
         levelsActive: activeCount,
-        levelsTp: tpCount,
+        levelsTp: this.takeProfits,
         levelsSl: 0,
-        levelsDead: tpCount,
-        levelsTradable: empty + activeCount,
+        levelsDead: permanentlyDead,
+        levelsEmpty: emptyCount,
+        levelsAvailable: emptyCount,
+        levelsOrderPending: orderPendingCount,
+        levelsTradable: emptyCount + orderPendingCount + activeCount,
+        positionsCompleted: completedPositionInstances,
         lastLongLevel: this.lowerBound,
         lastShortLevel: this.upperBound,
         upperDestroyPrice: this.upperBound,
@@ -682,7 +739,6 @@ export class NearPriceDirectionalTrader extends EventEmitter implements IManaged
             && new Decimal(this.markPrice).gt(this.upperBound),
           remainingMs,
         },
-        // Near-price specific
         nearPrice: true,
         boundaryPercent: this.boundaryPercent,
         spacingPercent: this.spacingPercent,
@@ -726,7 +782,41 @@ export class NearPriceDirectionalTrader extends EventEmitter implements IManaged
 
     this.activating = true;
     try {
-      const snapshots = [...this.levels.values()].map((l) => ({
+      const threshold = activationDistancePercent(this.spacingPercent, this.activationMultiplier);
+      const emptyLevels = [...this.levels.values()].filter((l) => l.status === 'EMPTY');
+      const diagnostics: Array<Record<string, unknown>> = [];
+      for (const l of emptyLevels) {
+        const dist = distancePercentFromLevel(this.markPrice, l.plan.levelPrice);
+        const inZone = dist.lte(threshold);
+        const side = inZone ? assignSideForLevel(this.markPrice, l.plan.levelPrice) : null;
+        diagnostics.push({
+          level: l.plan.level,
+          levelPrice: l.plan.levelPrice,
+          currentPrice: this.markPrice,
+          distancePercent: dist.toFixed(4),
+          activationThresholdPercent: threshold.toFixed(4),
+          result: inZone ? 'ELIGIBLE' : 'NOT_ELIGIBLE',
+          reason: inZone ? null : 'OUTSIDE_ACTIVATION_ZONE',
+          side,
+        });
+      }
+      const eligibleCount = diagnostics.filter((d) => d.result === 'ELIGIBLE').length;
+      log.info('[LIFECYCLE] GRID_ACTIVATION_CHECK', {
+        traderId: this.id,
+        symbol: this.symbol,
+        markPrice: this.markPrice,
+        startPrice: this.startPrice,
+        thresholdPercent: threshold.toFixed(4),
+        emptyLevels: emptyLevels.length,
+        eligible: eligibleCount,
+        // Cap detail spam: first 8 non-eligible + all eligible
+        levels: [
+          ...diagnostics.filter((d) => d.result === 'ELIGIBLE'),
+          ...diagnostics.filter((d) => d.result !== 'ELIGIBLE').slice(0, 8),
+        ],
+      });
+
+      const snapshots = emptyLevels.map((l) => ({
         level: l.plan.level,
         levelPrice: l.plan.levelPrice,
         status: l.status,
@@ -743,7 +833,8 @@ export class NearPriceDirectionalTrader extends EventEmitter implements IManaged
         if (this.exiting || this.isDestroyed) break;
         if (!this.capitalScalingEnabled && !this.hasFreeEqualMargin()) break;
         const level = this.levels.get(e.key);
-        if (level == null) continue;
+        if (level == null || level.status !== 'EMPTY') continue;
+        if (this.justClosedLevelKeys.has(e.key)) continue;
         await this.activateLevel(level);
       }
     } finally {
@@ -753,11 +844,24 @@ export class NearPriceDirectionalTrader extends EventEmitter implements IManaged
 
   private async activateLevel(level: LevelState): Promise<void> {
     if (this.symbolInfo == null) return;
-    if (level.status !== 'EMPTY' && level.status !== 'PENDING') return;
+    // Only EMPTY levels may receive a new entry order (PENDING = order already placed)
+    if (level.status !== 'EMPTY') return;
     if (level.clientOrderId != null) return;
     const key = levelKey(level.plan.level);
-    if (this.activePositions.has(key) || this.finalizedLevelKeys.has(key)) return;
+    // One current position/order per level; never a permanent side or permanent finalized lock
+    if (this.activePositions.has(key)) return;
+    if (this.justClosedLevelKeys.has(key)) return;
     if (!this.capitalScalingEnabled && !this.hasFreeEqualMargin()) return;
+
+    // Re-check activation vs CURRENT mark (not start)
+    if (!isWithinActivationZone(
+      this.markPrice,
+      level.plan.levelPrice,
+      this.spacingPercent,
+      this.activationMultiplier,
+    )) {
+      return;
+    }
 
     const side = assignSideForLevel(this.markPrice, level.plan.levelPrice);
     const sized = sizeNearPriceLevel({
@@ -1089,19 +1193,20 @@ export class NearPriceDirectionalTrader extends EventEmitter implements IManaged
     if (this.exiting || this.isDestroyed) return;
     const level = this.levels.get(key);
     if (level == null || level.direction == null) return;
-    if (this.finalizedLevelKeys.has(key)) {
+    const active = this.activePositions.get(key);
+    if (active == null || !active.filled) return;
+    if (active.closing && this.handledFillIds.has(`${update.clientOrderId}:TP`)) {
       this.activePositions.delete(key);
       this.recomputeUnrealized();
       return;
     }
-    const active = this.activePositions.get(key);
-    if (active == null || !active.filled) return;
 
     const fillKey = `${update.clientOrderId}:TP`;
     if (this.handledFillIds.has(fillKey)) return;
     this.handledFillIds.add(fillKey);
 
     active.closing = true;
+    const closedSide = active.direction;
     const exit = update.avgFillPrice ?? level.tpPrice ?? this.markPrice;
     const qty = update.filledQuantity || active.quantity;
     const exitFee = resolveExecutionFee({
@@ -1111,18 +1216,29 @@ export class NearPriceDirectionalTrader extends EventEmitter implements IManaged
       rates: feeRatesFromConfig(this.traderConfig),
       liquidity: 'TAKER',
     });
-    const gross = calcGrossPnl(active.direction, active.entryPrice, exit, qty);
+    const gross = calcGrossPnl(closedSide, active.entryPrice, exit, qty);
     const net = gross.minus(active.entryFee).minus(exitFee);
 
-    this.finalizedLevelKeys.add(key);
+    // Remove from active accounting — release margin for this instance
     this.activePositions.delete(key);
+    this.finalizedLevelKeys.delete(key);
+    this.justClosedLevelKeys.add(key);
     this.recomputeUnrealized();
 
-    level.status = 'TP_HIT';
+    // Position instance history (level remains reusable)
+    level.lastSide = closedSide;
+    level.lastExitPrice = exit;
+    level.lastRealizedNetPnl = net.toFixed(8);
+    level.lastCompletionReason = 'TP';
+    level.positionsCompleted += 1;
     level.completionReason = 'TP';
     level.exitPrice = exit;
     level.realizedNetPnl = net.toFixed(8);
     level.fees = active.entryFee.plus(exitFee).toFixed(8);
+
+    // Reset level to EMPTY/AVAILABLE — no permanent DEAD/TP_HIT
+    Object.assign(level, resetLevelAfterTpClose());
+
     this.realizedPnl = this.realizedPnl.plus(net);
     this.grossRealizedPnl = this.grossRealizedPnl.plus(gross);
     this.totalFees = this.totalFees.plus(exitFee);
@@ -1134,6 +1250,16 @@ export class NearPriceDirectionalTrader extends EventEmitter implements IManaged
       capital: this.currentCapital.toFixed(8),
       event: 'TP',
       netPnl: net.toFixed(8),
+    });
+
+    log.info('[LIFECYCLE] NEAR_PRICE_LEVEL_AVAILABLE', {
+      traderId: this.id,
+      level: level.plan.level,
+      levelPrice: level.plan.levelPrice,
+      closedSide,
+      exit,
+      netPnl: net.toFixed(8),
+      positionsCompleted: level.positionsCompleted,
     });
 
     await this.persistLevel(level);
@@ -1151,7 +1277,7 @@ export class NearPriceDirectionalTrader extends EventEmitter implements IManaged
     });
 
     this.emitSnapshot();
-    await this.tryActivateEligibleLevels();
+    // Do NOT re-activate in the same TP event — next mark evaluation decides eligibility
   }
 
   private recomputeUnrealized(): void {

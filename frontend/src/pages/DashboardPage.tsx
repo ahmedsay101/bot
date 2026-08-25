@@ -215,10 +215,19 @@ function buildPriceLadder(grid: GridTraderView, markPrice: string): LadderRow[] 
   });
 }
 
-function statusLabel(s: string): string {
-  if (s === 'PENDING') return 'PENDING';
+function statusLabel(s: string, opts?: { lastSide?: string | null; lastReason?: string | null }): string {
+  if (s === 'EMPTY') {
+    if (opts?.lastReason === 'TP' && opts.lastSide) {
+      return `AVAILABLE · Last ${opts.lastSide} TP`;
+    }
+    if (opts?.lastReason) {
+      return `AVAILABLE · Last ${opts.lastReason}`;
+    }
+    return 'AVAILABLE';
+  }
+  if (s === 'PENDING') return 'ORDER PENDING';
   if (s === 'ACTIVE') return 'ACTIVE';
-  if (s === 'TP_HIT') return '✓ TP / DEAD';
+  if (s === 'TP_HIT') return '✓ TP (legacy)';
   if (s === 'SL_HIT') return '✕ SL / DEAD';
   if (s === 'CANCELLED' || s === 'CANCELED') return 'CANCELLED';
   if (s === 'TRIGGERED') return 'LIMIT LIVE';
@@ -231,6 +240,7 @@ function GridLadder({ grid, markPrice }: { grid: GridTraderView; markPrice: stri
   const mark = parseFloat(markPrice) || 0;
   const longActive = grid.longActive ?? grid.longFilled;
   const shortActive = grid.shortActive ?? grid.shortFilled;
+  const isNearPrice = (grid as any).nearPrice === true;
 
   return (
     <Box>
@@ -239,7 +249,9 @@ function GridLadder({ grid, markPrice }: { grid: GridTraderView; markPrice: stri
           PRICE LADDER
         </Typography>
         <Typography variant="caption" color="text.secondary">
-          SHORT above · LONG below · {longActive}/{grid.levelsPerSide}L · {shortActive}/{grid.levelsPerSide}S
+          {isNearPrice
+            ? `near-price · available ${(grid as any).levelsAvailable ?? (grid as any).levelsEmpty ?? 0} · active ${grid.levelsActive ?? 0}`
+            : `SHORT above · LONG below · ${longActive}/${grid.levelsPerSide}L · ${shortActive}/${grid.levelsPerSide}S`}
         </Typography>
       </Box>
       <Stack
@@ -301,21 +313,36 @@ function GridLadder({ grid, markPrice }: { grid: GridTraderView; markPrice: stri
           }
 
           const l = row.level;
-          const accent = l.direction === 'LONG' ? LONG : SHORT;
+          const nearStatus = (l as any).nearPriceStatus ?? l.status;
+          const isEmpty = nearStatus === 'EMPTY' || l.status === 'EMPTY';
+          const assignedSide = (l as any).assignedSide as string | null | undefined;
+          const lastSide = (l as any).lastSide as string | null | undefined;
+          const lastReason = ((l as any).lastCompletionReason ?? l.completionReason) as string | null | undefined;
+          const positionsCompleted = Number((l as any).positionsCompleted ?? 0);
+          const accent = isEmpty
+            ? BORDER
+            : (assignedSide ?? l.direction) === 'LONG' ? LONG : SHORT;
           const active = l.status === 'ACTIVE';
-          const dead = l.status === 'TP_HIT' || l.status === 'SL_HIT';
+          // Near-price: TP does not kill the level. Classic grid still uses TP_HIT as dead.
+          const dead = !isNearPrice && (l.status === 'TP_HIT' || l.status === 'SL_HIT');
           const cancelled = l.status === 'CANCELLED' || l.status === 'CANCELED';
           const crossedPending = l.status === 'PENDING' && l.crossed === true;
+          const distPct = (l as any).distancePercent as string | undefined;
           const entryPx = parseFloat(l.entryPrice ?? l.triggerPrice) || 0;
           const tpPx = parseFloat(l.tpPrice ?? '') || 0;
-          const tpSlInvalid = entryPx > 0 && tpPx > 0 && (
-            l.direction === 'LONG' ? !(tpPx > entryPx) : !(tpPx < entryPx)
+          const tpSlInvalid = !isEmpty && entryPx > 0 && tpPx > 0 && (
+            (assignedSide ?? l.direction) === 'LONG' ? !(tpPx > entryPx) : !(tpPx < entryPx)
           );
+          const labelSide = isEmpty
+            ? `LEVEL #${l.level}`
+            : `${assignedSide ?? l.direction} #${l.level}`;
           const statusText = dead
             ? `${statusLabel(l.status)} · Realized ${pnl(l.realizedPnl ?? '0')}`
-            : crossedPending
-              ? `PENDING · CROSSED${l.reasonNotActivated === 'INSUFFICIENT_CAPITAL' ? ' · WAITING (insufficient capital)' : l.reasonNotActivated === 'ACTIVE_POSITION_LIMIT' ? ' · WAITING (max 1 active)' : l.reasonNotActivated != null ? ` · ${l.reasonNotActivated}` : ''}`
-              : statusLabel(l.status);
+            : isEmpty
+              ? `${statusLabel('EMPTY', { lastSide, lastReason })}${distPct != null ? ` · dist ${distPct}%` : ''}${(l as any).activationEligible ? ' · IN ZONE' : ''}${positionsCompleted > 0 ? ` · ×${positionsCompleted}` : ''}`
+              : crossedPending
+                ? `PENDING · CROSSED${l.reasonNotActivated === 'INSUFFICIENT_CAPITAL' ? ' · WAITING (insufficient capital)' : l.reasonNotActivated === 'ACTIVE_POSITION_LIMIT' ? ' · WAITING (max 1 active)' : l.reasonNotActivated != null ? ` · ${l.reasonNotActivated}` : ''}`
+                : statusLabel(l.status);
           return (
             <Box
               key={`${l.direction}-${l.level}`}
@@ -326,28 +353,39 @@ function GridLadder({ grid, markPrice }: { grid: GridTraderView; markPrice: stri
                 py: 0.55,
                 px: 1,
                 borderRadius: 1.25,
-                bgcolor: active ? `${accent}22` : crossedPending ? `${accent}10` : dead ? 'rgba(255,255,255,0.03)' : 'transparent',
+                bgcolor: active ? `${accent}22` : isEmpty ? 'transparent' : crossedPending ? `${accent}10` : dead ? 'rgba(255,255,255,0.03)' : 'transparent',
                 border: '1px solid',
                 borderColor: tpSlInvalid ? '#ff9800' : active ? accent : crossedPending ? `${accent}88` : dead ? (l.status === 'TP_HIT' ? LONG : SHORT) : BORDER,
-                opacity: cancelled ? 0.45 : dead ? 0.72 : 1,
+                opacity: cancelled ? 0.45 : isEmpty ? 0.55 : dead ? 0.72 : 1,
               }}
             >
               <Box sx={{ width: 3, alignSelf: 'stretch', borderRadius: 99, bgcolor: accent, flexShrink: 0 }} />
               <Box sx={{ flex: 1, minWidth: 0 }}>
                 <Typography fontFamily="monospace" fontWeight={800} sx={{ fontSize: 12 }}>
-                  {l.direction} #{l.level}
-                  {l.weight != null ? ` · w${l.weight}` : ''}
+                  {labelSide}
+                  {l.weight != null && !isEmpty ? ` · w${l.weight}` : ''}
                   {tpSlInvalid ? ' · ⚠ TP ORIENTATION' : ''}
                 </Typography>
                 <Typography variant="caption" color="text.secondary" display="block" sx={{ fontSize: 10 }}>
-                  Entry {l.entryPrice != null ? `$${px(l.entryPrice)}` : '—'}
-                  {' · '}
-                  TP {l.tpPrice != null && l.tpPrice !== '' ? `$${px(l.tpPrice)}` : '—'}
-                  {' · '}
-                  {dead ? 'Hist margin' : 'Margin'} {money(l.allocatedMargin)}
-                  {' · '}
-                  {statusText}
-                  {tpSlInvalid ? ' · ⚠ INVALID TP' : ''}
+                  {isEmpty ? (
+                    <>
+                      Level ${px(l.triggerPrice)}
+                      {distPct != null ? ` · Dist ${distPct}%` : ''}
+                      {' · '}
+                      {statusText}
+                    </>
+                  ) : (
+                    <>
+                      Entry {l.entryPrice != null ? `$${px(l.entryPrice)}` : '—'}
+                      {' · '}
+                      TP {l.tpPrice != null && l.tpPrice !== '' ? `$${px(l.tpPrice)}` : '—'}
+                      {' · '}
+                      {dead ? 'Hist margin' : 'Margin'} {money(l.allocatedMargin)}
+                      {' · '}
+                      {statusText}
+                      {tpSlInvalid ? ' · ⚠ INVALID TP' : ''}
+                    </>
+                  )}
                 </Typography>
               </Box>
               <Typography fontFamily="monospace" fontWeight={700} sx={{ fontSize: 12, color: accent }}>
@@ -574,18 +612,32 @@ function GridTraderCard({
                   value={`${grid.activeOpenCount ?? 0} / ${grid.maxActivePositions ?? n * 2}`}
                 />
                 <Stat label="Grid levels" value={String(grid.totalLevels ?? grid.levelsPerSide * 2)} />
-                <Stat
-                  label="Pending / Active"
-                  value={`${grid.levelsPending ?? 0} / ${grid.levelsActive ?? 0}`}
-                />
-                <Stat
-                  label="TP (dead)"
-                  value={`${grid.levelsTp ?? 0}`}
-                />
-                <Stat
-                  label="Dead / Tradable"
-                  value={`${grid.levelsDead ?? (grid.levelsTp ?? 0)} / ${grid.levelsTradable ?? (grid.levelsPending ?? 0) + (grid.levelsActive ?? 0)}`}
-                />
+                {(grid as any).nearPrice === true ? (
+                  <>
+                    <Stat label="Empty / Available" value={String((grid as any).levelsAvailable ?? (grid as any).levelsEmpty ?? 0)} />
+                    <Stat
+                      label="Order pending"
+                      value={String((grid as any).levelsOrderPending ?? grid.levelsPending ?? 0)}
+                    />
+                    <Stat label="Active levels" value={String(grid.levelsActive ?? 0)} />
+                    <Stat label="TPs closed" value={String(grid.levelsTp ?? 0)} />
+                  </>
+                ) : (
+                  <>
+                    <Stat
+                      label="Pending / Active"
+                      value={`${grid.levelsPending ?? 0} / ${grid.levelsActive ?? 0}`}
+                    />
+                    <Stat
+                      label="TP (dead)"
+                      value={`${grid.levelsTp ?? 0}`}
+                    />
+                    <Stat
+                      label="Dead / Tradable"
+                      value={`${grid.levelsDead ?? (grid.levelsTp ?? 0)} / ${grid.levelsTradable ?? (grid.levelsPending ?? 0) + (grid.levelsActive ?? 0)}`}
+                    />
+                  </>
+                )}
                 {grid.capitalScalingEnabled !== false && (
                   <>
                     <Stat label="LONG pool" value={money(grid.longSideCapital)} color={LONG} />

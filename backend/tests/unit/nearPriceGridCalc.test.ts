@@ -14,6 +14,8 @@ import {
   calcNearPriceTp,
   calcStopLimitPrices,
   activationDistancePercent,
+  isNearPriceLevelTerminal,
+  resetLevelAfterTpClose,
 } from '../../src/modules/trader/near-price/nearPriceGridCalc';
 import type { SymbolInfo } from '../../src/types';
 
@@ -143,5 +145,84 @@ describe('nearPriceGridCalc', () => {
     ];
     const hit = findEligibleEmptyLevels(levels, '100', 2, 2);
     expect(hit.map((l) => l.level)).toEqual([2]);
+  });
+
+  it('40 levels exist but only nearby are eligible at start (not all 40)', () => {
+    const plans = buildNearPriceLevelPlans({
+      startPrice: '100',
+      boundaryPercent: 40,
+      spacingPercent: 2,
+      symbolInfo: info,
+    });
+    expect(plans).toHaveLength(40);
+    expect(plans.every((p) => p.status === 'EMPTY')).toBe(true);
+    const eligible = findEligibleEmptyLevels(plans, '100', 2, 2);
+    expect(eligible.length).toBeGreaterThan(0);
+    expect(eligible.length).toBeLessThan(40);
+    // Far levels outside 4% stay empty/not eligible
+    const far = plans.find((p) => Math.abs(parseFloat(p.levelPrice) - 100) / parseFloat(p.levelPrice) * 100 > 4);
+    expect(far).toBeTruthy();
+    expect(eligible.some((e) => e.level === far!.level)).toBe(false);
+  });
+
+  it('activation uses CURRENT mark, not start price', () => {
+    const plans = buildNearPriceLevelPlans({
+      startPrice: '100',
+      boundaryPercent: 40,
+      spacingPercent: 2,
+      symbolInfo: info,
+    });
+    // Mark moved up — levels near 110 become eligible; levels near 100 may drop out
+    const atStart = findEligibleEmptyLevels(plans, '100', 2, 2).map((e) => e.levelPrice);
+    const at110 = findEligibleEmptyLevels(plans, '110', 2, 2).map((e) => e.levelPrice);
+    expect(at110.length).toBeGreaterThan(0);
+    // A level around 114 should be nearer to 110 than to 100
+    const near114 = plans.find((p) => Math.abs(parseFloat(p.levelPrice) - 114) < 1);
+    if (near114 != null) {
+      const inAt110 = at110.includes(near114.levelPrice);
+      const inAt100 = atStart.includes(near114.levelPrice);
+      expect(inAt110 || !inAt100).toBe(true);
+    }
+  });
+
+  it('TP_HIT status alone is not eligible (must be EMPTY); EMPTY after TP is eligible', () => {
+    const levels = [
+      { level: 1, levelPrice: '102', status: 'TP_HIT', clientOrderId: null },
+      { level: 2, levelPrice: '98', status: 'EMPTY', clientOrderId: null },
+    ];
+    const hit = findEligibleEmptyLevels(levels, '100', 2, 2);
+    expect(hit.map((l) => l.level)).toEqual([2]);
+
+    // After reusable reset, same price level becomes EMPTY and can trade again
+    const reused = findEligibleEmptyLevels(
+      [{ level: 1, levelPrice: '102', status: 'EMPTY', clientOrderId: null }],
+      '100',
+      2,
+      2,
+    );
+    expect(reused.map((l) => l.level)).toEqual([1]);
+  });
+
+  it('isNearPriceLevelTerminal: TP_HIT is not terminal (levels are reusable)', () => {
+    expect(isNearPriceLevelTerminal('TP_HIT')).toBe(false);
+    expect(isNearPriceLevelTerminal('EMPTY')).toBe(false);
+    expect(isNearPriceLevelTerminal('ACTIVE')).toBe(false);
+    expect(isNearPriceLevelTerminal('CANCELLED')).toBe(true);
+    expect(isNearPriceLevelTerminal('SKIPPED')).toBe(true);
+  });
+
+  it('resetLevelAfterTpClose returns EMPTY with cleared live fields', () => {
+    const reset = resetLevelAfterTpClose();
+    expect(reset.status).toBe('EMPTY');
+    expect(reset.direction).toBeNull();
+    expect(reset.clientOrderId).toBeNull();
+    expect(reset.tpPrice).toBeNull();
+    expect(reset.allocatedMargin).toBe('0');
+  });
+
+  it('same level can flip LONG then SHORT based on current mark', () => {
+    expect(assignSideForLevel('98', '100')).toBe('LONG');
+    expect(assignSideForLevel('102', '100')).toBe('SHORT');
+    expect(assignSideForLevel('99.5', '100')).toBe('LONG');
   });
 });

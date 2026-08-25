@@ -293,7 +293,7 @@ export interface GridLevelView {
   notional: string;
   leverage?: number;
   quantity: string;
-  /** PENDING | ACTIVE | TP_HIT | SL_HIT | CANCELLED */
+  /** PENDING | ACTIVE | TP_HIT | SL_HIT | CANCELLED | EMPTY */
   status: string;
   entryPrice: string | null;
   exitPrice?: string | null;
@@ -307,6 +307,14 @@ export interface GridLevelView {
   crossed?: boolean;
   eligible?: boolean;
   reasonNotActivated?: string | null;
+  /** Near-price: side of last closed position (level itself is reusable). */
+  lastSide?: 'LONG' | 'SHORT' | null;
+  lastCompletionReason?: string | null;
+  lastExitPrice?: string | null;
+  lastRealizedPnl?: string | null;
+  positionsCompleted?: number;
+  nearPriceStatus?: string;
+  assignedSide?: 'LONG' | 'SHORT' | null;
 }
 
 export interface GridTraderView {
