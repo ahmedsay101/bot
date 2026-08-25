@@ -1,10 +1,13 @@
 /**
  * Near-price directional grid trader.
- * - Levels are price anchors; side assigned at activation (mark < level → LONG, else SHORT)
- * - Activate when mark within spacing×multiplier % of level (ref = level price)
+ * - Levels are permanent price anchors; side assigned at activation from CURRENT mark
+ * - Target: up to 2 nearest eligible EMPTY levels ABOVE mark → LONG,
+ *           up to 2 nearest eligible EMPTY levels BELOW mark → SHORT
+ * - Activation distance: spacing × multiplier (ref = level price)
  * - Entry: STOP_LIMIT; TP: TAKE_PROFIT_MARKET at ±spacing% from fill; no SL
- * - Multi-position; capital via existing sizeLevelPosition (equal/triangular)
- * - Destroy: MAX_LIFETIME | GRID_BOUNDARY_PASSED (strictly outside ±boundary%)
+ * - After TP: level → EMPTY and immediately re-reconciled (may flip LONG↔SHORT)
+ * - Existing positions are NOT flipped when mark crosses their level
+ * - Destroy: MAX_LIFETIME | GRID_BOUNDARY_PASSED
  */
 import { EventEmitter } from 'events';
 import { v4 as uuidv4 } from 'uuid';
@@ -24,7 +27,6 @@ import type {
 } from '../../../types';
 import {
   buildNearPriceLevelPlans,
-  findEligibleEmptyLevels,
   assignSideForLevel,
   calcUpperBound,
   calcLowerBound,
@@ -40,6 +42,9 @@ import {
   equalCapitalPerLevel,
   totalGridLevels,
   resetLevelAfterTpClose,
+  selectNearestTargetLevels,
+  nearestGridLevelsByMark,
+  NEAR_PRICE_MAX_PER_SIDE,
   type NearPriceLevelPlan,
   type NearPriceLevelStatus,
 } from './nearPriceGridCalc';
@@ -171,9 +176,9 @@ export class NearPriceDirectionalTrader extends EventEmitter implements IManaged
   private levels = new Map<string, LevelState>();
   private activePositions = new Map<string, ActivePosition>();
   private finalizedLevelKeys = new Set<string>();
-  /** Levels that closed via TP in the current price tick — skip re-entry until the next evaluation. */
-  private justClosedLevelKeys = new Set<string>();
   private handledFillIds = new Set<string>();
+  /** When TP closes during an in-flight reconcile, run one more pass after. */
+  private reconcileAgain = false;
   private capitalHistory: Array<{ at: string; capital: string; event: string; netPnl?: string }> = [];
 
   constructor(
@@ -458,8 +463,6 @@ export class NearPriceDirectionalTrader extends EventEmitter implements IManaged
         return;
       }
       await this.tryActivateEligibleLevels();
-      // Allow just-closed levels to be considered on the *next* mark evaluation only
-      this.justClosedLevelKeys.clear();
     });
   }
 
@@ -715,6 +718,9 @@ export class NearPriceDirectionalTrader extends EventEmitter implements IManaged
         remainingAvailableCapital: Decimal.max(0, this.initialCapital.minus(activeMargin)).toFixed(8),
         perPositionNotional: perLevel.mul(this.traderConfig.leverage).toFixed(8),
         maxActivePositions: totalGridLevels(this.levelsPerSide),
+        targetNearbyPositions: NEAR_PRICE_MAX_PER_SIDE * 2,
+        targetLongAbove: NEAR_PRICE_MAX_PER_SIDE,
+        targetShortBelow: NEAR_PRICE_MAX_PER_SIDE,
         totalLevels: totalGridLevels(this.levelsPerSide),
         levelsPending: orderPendingCount,
         levelsActive: activeCount,
@@ -783,63 +789,72 @@ export class NearPriceDirectionalTrader extends EventEmitter implements IManaged
     this.activating = true;
     try {
       const threshold = activationDistancePercent(this.spacingPercent, this.activationMultiplier);
-      const emptyLevels = [...this.levels.values()].filter((l) => l.status === 'EMPTY');
-      const diagnostics: Array<Record<string, unknown>> = [];
-      for (const l of emptyLevels) {
-        const dist = distancePercentFromLevel(this.markPrice, l.plan.levelPrice);
-        const inZone = dist.lte(threshold);
-        const side = inZone ? assignSideForLevel(this.markPrice, l.plan.levelPrice) : null;
-        diagnostics.push({
-          level: l.plan.level,
-          levelPrice: l.plan.levelPrice,
-          currentPrice: this.markPrice,
-          distancePercent: dist.toFixed(4),
-          activationThresholdPercent: threshold.toFixed(4),
-          result: inZone ? 'ELIGIBLE' : 'NOT_ELIGIBLE',
-          reason: inZone ? null : 'OUTSIDE_ACTIVATION_ZONE',
-          side,
-        });
-      }
-      const eligibleCount = diagnostics.filter((d) => d.result === 'ELIGIBLE').length;
-      log.info('[LIFECYCLE] GRID_ACTIVATION_CHECK', {
-        traderId: this.id,
-        symbol: this.symbol,
-        markPrice: this.markPrice,
-        startPrice: this.startPrice,
-        thresholdPercent: threshold.toFixed(4),
-        emptyLevels: emptyLevels.length,
-        eligible: eligibleCount,
-        // Cap detail spam: first 8 non-eligible + all eligible
-        levels: [
-          ...diagnostics.filter((d) => d.result === 'ELIGIBLE'),
-          ...diagnostics.filter((d) => d.result !== 'ELIGIBLE').slice(0, 8),
-        ],
-      });
-
-      const snapshots = emptyLevels.map((l) => ({
+      const allSnapshots = [...this.levels.values()].map((l) => ({
         level: l.plan.level,
         levelPrice: l.plan.levelPrice,
         status: l.status,
         clientOrderId: l.clientOrderId,
         key: levelKey(l.plan.level),
+        direction: l.direction,
       }));
-      const eligible = findEligibleEmptyLevels(
-        snapshots,
+
+      const geometric = nearestGridLevelsByMark(allSnapshots, this.markPrice, NEAR_PRICE_MAX_PER_SIDE);
+      const selection = selectNearestTargetLevels(
+        allSnapshots,
         this.markPrice,
         this.spacingPercent,
         this.activationMultiplier,
+        NEAR_PRICE_MAX_PER_SIDE,
       );
-      for (const e of eligible) {
+
+      const existingSummary = allSnapshots
+        .filter((l) => l.status === 'PENDING' || l.status === 'ACTIVE')
+        .map((l) => ({
+          level: l.level,
+          levelPrice: l.levelPrice,
+          status: l.status,
+          side: l.direction,
+        }));
+
+      log.info('[LIFECYCLE] GRID_RECONCILIATION', {
+        traderId: this.id,
+        symbol: this.symbol,
+        currentPrice: this.markPrice,
+        activationThresholdPercent: threshold.toFixed(4),
+        nearestLevelsAbove: geometric.above.map((l) => l.levelPrice),
+        nearestLevelsBelow: geometric.below.map((l) => l.levelPrice),
+        desiredAvailableAssignments: selection.targets.map((t) => ({
+          level: t.level.level,
+          levelPrice: t.level.levelPrice,
+          side: t.side,
+        })),
+        existing: existingSummary,
+        action: selection.targets.map((t) => `Create ${t.side} for ${t.level.levelPrice}`),
+      });
+
+      for (const t of selection.targets) {
         if (this.exiting || this.isDestroyed) break;
         if (!this.capitalScalingEnabled && !this.hasFreeEqualMargin()) break;
-        const level = this.levels.get(e.key);
+        const level = this.levels.get(levelKey(t.level.level));
         if (level == null || level.status !== 'EMPTY') continue;
-        if (this.justClosedLevelKeys.has(e.key)) continue;
         await this.activateLevel(level);
       }
     } finally {
       this.activating = false;
     }
+    if (this.reconcileAgain && !this.exiting && !this.isDestroyed) {
+      this.reconcileAgain = false;
+      await this.tryActivateEligibleLevels();
+    }
+  }
+
+  /** Reconcile now, or queue another pass if already reconciling (e.g. TP mid-activate). */
+  private async requestGridReconcile(): Promise<void> {
+    if (this.activating) {
+      this.reconcileAgain = true;
+      return;
+    }
+    await this.tryActivateEligibleLevels();
   }
 
   private async activateLevel(level: LevelState): Promise<void> {
@@ -850,7 +865,6 @@ export class NearPriceDirectionalTrader extends EventEmitter implements IManaged
     const key = levelKey(level.plan.level);
     // One current position/order per level; never a permanent side or permanent finalized lock
     if (this.activePositions.has(key)) return;
-    if (this.justClosedLevelKeys.has(key)) return;
     if (!this.capitalScalingEnabled && !this.hasFreeEqualMargin()) return;
 
     // Re-check activation vs CURRENT mark (not start)
@@ -1222,7 +1236,6 @@ export class NearPriceDirectionalTrader extends EventEmitter implements IManaged
     // Remove from active accounting — release margin for this instance
     this.activePositions.delete(key);
     this.finalizedLevelKeys.delete(key);
-    this.justClosedLevelKeys.add(key);
     this.recomputeUnrealized();
 
     // Position instance history (level remains reusable)
@@ -1276,8 +1289,20 @@ export class NearPriceDirectionalTrader extends EventEmitter implements IManaged
       } as any,
     });
 
+    const newSide = assignSideForLevel(this.markPrice, level.plan.levelPrice);
+    log.info('[LIFECYCLE] NEAR_PRICE_LEVEL_REASSIGN', {
+      traderId: this.id,
+      level: level.plan.level,
+      levelPrice: level.plan.levelPrice,
+      previous: closedSide,
+      currentPrice: this.markPrice,
+      newSide,
+      positionsCompleted: level.positionsCompleted,
+    });
+
     this.emitSnapshot();
-    // Do NOT re-activate in the same TP event — next mark evaluation decides eligibility
+    // Immediately reconcile: reuse level if it is among nearest eligible targets
+    await this.requestGridReconcile();
   }
 
   private recomputeUnrealized(): void {

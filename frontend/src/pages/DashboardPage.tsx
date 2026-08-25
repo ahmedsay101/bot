@@ -336,13 +336,16 @@ function GridLadder({ grid, markPrice }: { grid: GridTraderView; markPrice: stri
           const labelSide = isEmpty
             ? `LEVEL #${l.level}`
             : `${assignedSide ?? l.direction} #${l.level}`;
+          const prevHint = isNearPrice && lastSide && (isEmpty || positionsCompleted > 0)
+            ? ` · Prev ${lastSide}${lastReason === 'TP' ? ' TP' : lastReason ? ` ${lastReason}` : ''}`
+            : '';
           const statusText = dead
             ? `${statusLabel(l.status)} · Realized ${pnl(l.realizedPnl ?? '0')}`
             : isEmpty
               ? `${statusLabel('EMPTY', { lastSide, lastReason })}${distPct != null ? ` · dist ${distPct}%` : ''}${(l as any).activationEligible ? ' · IN ZONE' : ''}${positionsCompleted > 0 ? ` · ×${positionsCompleted}` : ''}`
               : crossedPending
                 ? `PENDING · CROSSED${l.reasonNotActivated === 'INSUFFICIENT_CAPITAL' ? ' · WAITING (insufficient capital)' : l.reasonNotActivated === 'ACTIVE_POSITION_LIMIT' ? ' · WAITING (max 1 active)' : l.reasonNotActivated != null ? ` · ${l.reasonNotActivated}` : ''}`
-                : statusLabel(l.status);
+                : `${statusLabel(l.status)}${prevHint}`;
           return (
             <Box
               key={`${l.direction}-${l.level}`}
@@ -614,6 +617,7 @@ function GridTraderCard({
                 <Stat label="Grid levels" value={String(grid.totalLevels ?? grid.levelsPerSide * 2)} />
                 {(grid as any).nearPrice === true ? (
                   <>
+                    <Stat label="Target (2↑L + 2↓S)" value={String((grid as any).targetNearbyPositions ?? 4)} />
                     <Stat label="Empty / Available" value={String((grid as any).levelsAvailable ?? (grid as any).levelsEmpty ?? 0)} />
                     <Stat
                       label="Order pending"

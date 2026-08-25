@@ -1,7 +1,9 @@
 /**
  * Near-price directional grid — pure math.
  *
- * Levels are price anchors (not pre-assigned LONG/SHORT).
+ * Levels are permanent price anchors (not pre-assigned LONG/SHORT).
+ * Target reconcile: up to 2 nearest EMPTY+in-zone levels ABOVE mark → LONG,
+ *                   up to 2 nearest EMPTY+in-zone levels BELOW mark → SHORT.
  * Activation: mark within (spacing% × activationMultiplier) of levelPrice,
  *   distancePercent = abs(mark - level) / level × 100  (reference = level price).
  * Side rule (counter-directional):
@@ -9,6 +11,7 @@
  *   mark >= level → SHORT  (exact equality is SHORT — deterministic)
  * Boundaries: start × (1 ± boundary%/100); destroy when mark is strictly outside.
  * TP: ± spacing% from actual entry; no SL.
+ * After TP the level returns to EMPTY and may be reassigned immediately.
  */
 import Decimal from 'decimal.js';
 import type { SymbolInfo, TradeSide } from '../../../types';
@@ -282,6 +285,103 @@ export function findEligibleEmptyLevels<T extends {
       && isWithinActivationZone(markPrice, l.levelPrice, spacingPercent, activationMultiplier),
   );
   return sortEligibleByProximity(eligible, markPrice);
+}
+
+/** Default target: 2 nearest eligible above (LONG) + 2 nearest eligible below (SHORT). */
+export const NEAR_PRICE_MAX_PER_SIDE = 2;
+
+export interface NearPriceTargetLevel<T> {
+  level: T;
+  side: TradeSide;
+  /** Absolute distance from mark to level price. */
+  distanceAbs: Decimal;
+}
+
+export interface NearPriceTargetSelection<T> {
+  markPrice: string;
+  above: NearPriceTargetLevel<T>[];
+  below: NearPriceTargetLevel<T>[];
+  /** above + below in activation order (above nearest-first, then below nearest-first). */
+  targets: NearPriceTargetLevel<T>[];
+}
+
+/**
+ * Select up to `maxPerSide` nearest EMPTY+in-zone levels ABOVE mark → LONG,
+ * and up to `maxPerSide` nearest EMPTY+in-zone levels BELOW (or equal) mark → SHORT.
+ *
+ * Does not include PENDING/ACTIVE levels (those keep their existing position until TP).
+ * Distant / out-of-zone empties are omitted.
+ */
+export function selectNearestTargetLevels<T extends {
+  level: number;
+  levelPrice: string;
+  status: string;
+  clientOrderId?: string | null;
+}>(
+  levels: T[],
+  markPrice: string | Decimal,
+  spacingPercent: string | number,
+  activationMultiplier: string | number,
+  maxPerSide: number = NEAR_PRICE_MAX_PER_SIDE,
+): NearPriceTargetSelection<T> {
+  const mark = new Decimal(markPrice);
+  const markStr = mark.toFixed();
+  const eligible = levels.filter(
+    (l) =>
+      l.status === 'EMPTY'
+      && l.clientOrderId == null
+      && isWithinActivationZone(mark, l.levelPrice, spacingPercent, activationMultiplier),
+  );
+
+  const aboveRaw = eligible
+    .filter((l) => new Decimal(l.levelPrice).gt(mark))
+    .sort((a, b) => new Decimal(a.levelPrice).cmp(new Decimal(b.levelPrice)))
+    .slice(0, Math.max(0, maxPerSide));
+
+  // mark >= level → SHORT (includes exact equality)
+  const belowRaw = eligible
+    .filter((l) => new Decimal(l.levelPrice).lte(mark))
+    .sort((a, b) => new Decimal(b.levelPrice).cmp(new Decimal(a.levelPrice)))
+    .slice(0, Math.max(0, maxPerSide));
+
+  const above: NearPriceTargetLevel<T>[] = aboveRaw.map((l) => ({
+    level: l,
+    side: 'LONG' as const,
+    distanceAbs: mark.minus(l.levelPrice).abs(),
+  }));
+  const below: NearPriceTargetLevel<T>[] = belowRaw.map((l) => ({
+    level: l,
+    side: 'SHORT' as const,
+    distanceAbs: mark.minus(l.levelPrice).abs(),
+  }));
+
+  return {
+    markPrice: markStr,
+    above,
+    below,
+    targets: [...above, ...below],
+  };
+}
+
+/**
+ * Geometric nearest grid levels by mark (any status) — for audit/desired-side logging.
+ * Side = assignSideForLevel(mark, levelPrice). Does not filter EMPTY/activation.
+ */
+export function nearestGridLevelsByMark<T extends { level: number; levelPrice: string }>(
+  levels: T[],
+  markPrice: string | Decimal,
+  maxPerSide: number = NEAR_PRICE_MAX_PER_SIDE,
+): { above: T[]; below: T[] } {
+  const mark = new Decimal(markPrice);
+  const above = [...levels]
+    .filter((l) => new Decimal(l.levelPrice).gt(mark))
+    .sort((a, b) => new Decimal(a.levelPrice).cmp(new Decimal(b.levelPrice)))
+    .slice(0, Math.max(0, maxPerSide));
+  const below = [...levels]
+    .filter((l) => new Decimal(l.levelPrice).lte(mark))
+    .sort((a, b) => new Decimal(b.levelPrice).cmp(new Decimal(a.levelPrice)))
+    .slice(0, Math.max(0, maxPerSide));
+  return { above, below };
 }
 
 export function calcNearPriceTp(
