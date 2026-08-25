@@ -2,8 +2,8 @@
 
 export type TraderStatus = 'INITIALIZING' | 'ACTIVE' | 'PAUSED' | 'COMPLETING' | 'COMPLETED' | 'FAILED';
 export type TraderMode = 'LIVE' | 'SIMULATION';
-/** Strategy behavior — this branch is grid-only. */
-export type TraderBehavior = 'grid_directional';
+/** Strategy behavior — grid_directional (legacy) or near_price_directional (new). */
+export type TraderBehavior = 'grid_directional' | 'near_price_directional';
 export type OrderSide = 'BUY' | 'SELL';
 export type OrderType = 'MARKET' | 'LIMIT' | 'STOP_LIMIT' | 'TAKE_PROFIT' | 'STOP_MARKET' | 'TAKE_PROFIT_MARKET';
 export type OrderStatus =
@@ -119,17 +119,25 @@ export interface TraderConfig {
    * When false (default): TP → same side, SL → opposite (legacy).
    */
   switchPositionOnTakeProfit: boolean;
-  /** Strategy behavior — always grid directional on this branch. */
+  /** Strategy behavior — grid_directional | near_price_directional. */
   traderBehavior: TraderBehavior;
-  /** Grid levels above and below start price (default 10). */
+  /** Grid levels above and below start price (default 10). Used by grid_directional. */
   gridLevelsPerSide: number;
   /** Distance between grid levels in percent points (e.g. '5' = 5%). Also used for per-level TP/SL. */
   gridDistancePercent: string;
   /**
    * When true (default): triangular capital scaling within each side pool.
-   * When false: trader capital ÷ (longLevels + shortLevels) equally per level.
+   * When false: trader capital ÷ totalGridLevels equally per level.
    */
   gridCapitalScalingEnabled?: boolean;
+  /** Near-price: boundary % from start (e.g. '40'). */
+  gridBoundaryPercent?: string;
+  /** Near-price: spacing % between levels (defaults to gridDistancePercent). */
+  gridSpacingPercent?: string;
+  /** Near-price: activation distance = spacing × multiplier (default '2'). */
+  gridActivationMultiplier?: string;
+  /** Near-price: STOP_LIMIT limit offset from stop in percent points (default '0.05'). */
+  stopLimitOffsetPercent?: string;
   /** Grid directional take-profit in percent points (e.g. '10' = 10%). */
   traderTakeProfitPercent: string;
   /** Max lifetime for grid directional traders in hours (default 12). */
@@ -443,7 +451,7 @@ export interface TraderSummaryView {
   }>;
   /** Strategy label — e.g. grid_directional */
   behavior?: string;
-  /** Present when behavior is grid_directional */
+  /** Present when behavior is grid_directional or near_price_directional */
   grid?: GridTraderView;
 }
 

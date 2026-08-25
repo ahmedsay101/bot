@@ -1,0 +1,338 @@
+/**
+ * Near-price directional grid — pure math.
+ *
+ * Levels are price anchors (not pre-assigned LONG/SHORT).
+ * Activation: mark within (spacing% × activationMultiplier) of levelPrice,
+ *   distancePercent = abs(mark - level) / level × 100  (reference = level price).
+ * Side rule (counter-directional):
+ *   mark < level  → LONG
+ *   mark >= level → SHORT  (exact equality is SHORT — deterministic)
+ * Boundaries: start × (1 ± boundary%/100); destroy when mark is strictly outside.
+ * TP: ± spacing% from actual entry; no SL.
+ */
+import Decimal from 'decimal.js';
+import type { SymbolInfo, TradeSide } from '../../../types';
+import { adjustPrice } from '../../utils/precision';
+import { calcQuantityFromNotional } from '../../calc/allocation';
+import { calcPositionNotional } from '../../calc/leverage';
+import { equalCapitalPerLevel, sizeLevelPosition, totalGridLevels } from '../grid/gridCalc';
+
+export type NearPriceLevelStatus =
+  | 'EMPTY'
+  | 'PENDING'
+  | 'ACTIVE'
+  | 'TP_HIT'
+  | 'CANCELLED'
+  | 'SKIPPED';
+
+export interface NearPriceGridConfig {
+  boundaryPercent: string | number;
+  spacingPercent: string | number;
+  /** Activation distance = spacing × multiplier (default 2 → 4% when spacing=2%). */
+  activationMultiplier: string | number;
+  /** Limit offset from stop for STOP_LIMIT (percent points). */
+  stopLimitOffsetPercent: string | number;
+}
+
+export interface NearPriceLevelPlan {
+  /** 1-based index in price-sorted grid (lowest price = 1). */
+  level: number;
+  /** Geometric side relative to start at creation. */
+  geometry: 'ABOVE' | 'BELOW';
+  /** Steps from start (1 = nearest). */
+  step: number;
+  levelPrice: string;
+  status: NearPriceLevelStatus;
+}
+
+export function parsePositivePercent(value: string | number, name: string): Decimal {
+  const d = new Decimal(value);
+  if (!d.isFinite() || d.lte(0)) {
+    throw new Error(`${name} must be > 0 (got ${value})`);
+  }
+  return d;
+}
+
+/** Levels per side = floor(boundary% / spacing%). */
+export function levelsPerSideFromConfig(
+  boundaryPercent: string | number,
+  spacingPercent: string | number,
+): number {
+  const b = parsePositivePercent(boundaryPercent, 'GRID_BOUNDARY_PERCENT');
+  const s = parsePositivePercent(spacingPercent, 'GRID_SPACING_PERCENT');
+  const n = Math.floor(b.div(s).toNumber());
+  if (n < 1) {
+    throw new Error(
+      `Invalid near-price grid: boundary ${b}% / spacing ${s}% yields ${n} levels per side`,
+    );
+  }
+  return n;
+}
+
+export function calcUpperBound(startPrice: string | Decimal, boundaryPercent: string | number): Decimal {
+  const start = new Decimal(startPrice);
+  const b = parsePositivePercent(boundaryPercent, 'GRID_BOUNDARY_PERCENT').div(100);
+  return start.mul(new Decimal(1).plus(b));
+}
+
+export function calcLowerBound(startPrice: string | Decimal, boundaryPercent: string | number): Decimal {
+  const start = new Decimal(startPrice);
+  const b = parsePositivePercent(boundaryPercent, 'GRID_BOUNDARY_PERCENT').div(100);
+  return start.mul(new Decimal(1).minus(b));
+}
+
+/** Strictly past upper bound (touch == does NOT destroy). */
+export function isPastUpperBound(markPrice: string | Decimal, upperBound: string | Decimal): boolean {
+  return new Decimal(markPrice).gt(upperBound);
+}
+
+/** Strictly past lower bound (touch == does NOT destroy). */
+export function isPastLowerBound(markPrice: string | Decimal, lowerBound: string | Decimal): boolean {
+  return new Decimal(markPrice).lt(lowerBound);
+}
+
+export function isOutsideGridBoundary(
+  markPrice: string | Decimal,
+  lowerBound: string | Decimal,
+  upperBound: string | Decimal,
+): boolean {
+  return isPastUpperBound(markPrice, upperBound) || isPastLowerBound(markPrice, lowerBound);
+}
+
+/**
+ * Gap-safe boundary breach: current is outside, OR jump crossed the bound
+ * between previous and current.
+ */
+export function didCrossOutsideBoundary(
+  previousPrice: string | Decimal,
+  currentPrice: string | Decimal,
+  lowerBound: string | Decimal,
+  upperBound: string | Decimal,
+): boolean {
+  if (isOutsideGridBoundary(currentPrice, lowerBound, upperBound)) return true;
+  const prev = new Decimal(previousPrice);
+  const curr = new Decimal(currentPrice);
+  const lo = new Decimal(lowerBound);
+  const hi = new Decimal(upperBound);
+  // Crossed upper upward
+  if (prev.lte(hi) && curr.gt(hi)) return true;
+  // Crossed lower downward
+  if (prev.gte(lo) && curr.lt(lo)) return true;
+  return false;
+}
+
+export function calcLevelPrice(
+  startPrice: string | Decimal,
+  step: number,
+  geometry: 'ABOVE' | 'BELOW',
+  spacingPercent: string | number,
+): Decimal {
+  const start = new Decimal(startPrice);
+  const s = parsePositivePercent(spacingPercent, 'GRID_SPACING_PERCENT').div(100);
+  const factor = s.mul(step);
+  return geometry === 'ABOVE'
+    ? start.mul(new Decimal(1).plus(factor))
+    : start.mul(new Decimal(1).minus(factor));
+}
+
+export function activationDistancePercent(
+  spacingPercent: string | number,
+  activationMultiplier: string | number,
+): Decimal {
+  const s = parsePositivePercent(spacingPercent, 'GRID_SPACING_PERCENT');
+  const m = parsePositivePercent(activationMultiplier, 'GRID_ACTIVATION_MULTIPLIER');
+  return s.mul(m);
+}
+
+/**
+ * Percent distance from level price: abs(mark - level) / level × 100.
+ * Reference price = levelPrice (documented).
+ */
+export function distancePercentFromLevel(
+  markPrice: string | Decimal,
+  levelPrice: string | Decimal,
+): Decimal {
+  const level = new Decimal(levelPrice);
+  if (level.isZero()) return new Decimal(Infinity);
+  return new Decimal(markPrice).minus(level).abs().div(level).mul(100);
+}
+
+export function isWithinActivationZone(
+  markPrice: string | Decimal,
+  levelPrice: string | Decimal,
+  spacingPercent: string | number,
+  activationMultiplier: string | number,
+): boolean {
+  const dist = distancePercentFromLevel(markPrice, levelPrice);
+  const max = activationDistancePercent(spacingPercent, activationMultiplier);
+  return dist.lte(max);
+}
+
+/**
+ * Counter-directional side assignment.
+ * mark < level → LONG; mark >= level → SHORT.
+ */
+export function assignSideForLevel(
+  markPrice: string | Decimal,
+  levelPrice: string | Decimal,
+): TradeSide {
+  return new Decimal(markPrice).lt(levelPrice) ? 'LONG' : 'SHORT';
+}
+
+export function isNearPriceLevelTerminal(status: string): boolean {
+  return status === 'TP_HIT' || status === 'CANCELLED' || status === 'SKIPPED';
+}
+
+export function buildNearPriceLevelPlans(params: {
+  startPrice: string;
+  boundaryPercent: string | number;
+  spacingPercent: string | number;
+  symbolInfo: SymbolInfo;
+}): NearPriceLevelPlan[] {
+  const n = levelsPerSideFromConfig(params.boundaryPercent, params.spacingPercent);
+  const startAdj = adjustPrice(params.startPrice, params.symbolInfo);
+  const rows: NearPriceLevelPlan[] = [];
+  let idx = 0;
+  // Build below (far → near) then above (near → far) later sorted by price
+  for (let step = n; step >= 1; step--) {
+    idx += 1;
+    const raw = calcLevelPrice(startAdj, step, 'BELOW', params.spacingPercent);
+    rows.push({
+      level: idx,
+      geometry: 'BELOW',
+      step,
+      levelPrice: adjustPrice(raw.toFixed(8), params.symbolInfo),
+      status: 'EMPTY',
+    });
+  }
+  for (let step = 1; step <= n; step++) {
+    idx += 1;
+    const raw = calcLevelPrice(startAdj, step, 'ABOVE', params.spacingPercent);
+    rows.push({
+      level: idx,
+      geometry: 'ABOVE',
+      step,
+      levelPrice: adjustPrice(raw.toFixed(8), params.symbolInfo),
+      status: 'EMPTY',
+    });
+  }
+  // Re-number 1..N by ascending price for stable display
+  rows.sort((a, b) => new Decimal(a.levelPrice).cmp(new Decimal(b.levelPrice)));
+  return rows.map((r, i) => ({ ...r, level: i + 1 }));
+}
+
+/** Closest-to-mark first; tie-break by lower level number. */
+export function sortEligibleByProximity<T extends { levelPrice: string; level: number }>(
+  levels: T[],
+  markPrice: string | Decimal,
+): T[] {
+  const mark = new Decimal(markPrice);
+  return [...levels].sort((a, b) => {
+    const da = mark.minus(a.levelPrice).abs();
+    const db = mark.minus(b.levelPrice).abs();
+    const cmp = da.cmp(db);
+    if (cmp !== 0) return cmp;
+    return a.level - b.level;
+  });
+}
+
+export function findEligibleEmptyLevels<T extends {
+  level: number;
+  levelPrice: string;
+  status: string;
+  clientOrderId?: string | null;
+}>(
+  levels: T[],
+  markPrice: string | Decimal,
+  spacingPercent: string | number,
+  activationMultiplier: string | number,
+): T[] {
+  const eligible = levels.filter(
+    (l) =>
+      (l.status === 'EMPTY' || l.status === 'PENDING')
+      && l.clientOrderId == null
+      && isWithinActivationZone(markPrice, l.levelPrice, spacingPercent, activationMultiplier),
+  );
+  return sortEligibleByProximity(eligible, markPrice);
+}
+
+export function calcNearPriceTp(
+  entryPrice: string | Decimal,
+  side: TradeSide,
+  spacingPercent: string | number,
+  symbolInfo: SymbolInfo,
+): string {
+  const entry = new Decimal(entryPrice);
+  const s = parsePositivePercent(spacingPercent, 'GRID_SPACING_PERCENT').div(100);
+  const raw = side === 'LONG'
+    ? entry.mul(new Decimal(1).plus(s))
+    : entry.mul(new Decimal(1).minus(s));
+  return adjustPrice(raw.toFixed(8), symbolInfo);
+}
+
+/**
+ * STOP_LIMIT prices for entry.
+ * LONG (BUY STOP): stop = level; limit = level × (1 + offset%)
+ * SHORT (SELL STOP): stop = level; limit = level × (1 - offset%)
+ */
+export function calcStopLimitPrices(
+  levelPrice: string | Decimal,
+  side: TradeSide,
+  offsetPercent: string | number,
+  symbolInfo: SymbolInfo,
+): { stopPrice: string; limitPrice: string } {
+  const level = new Decimal(levelPrice);
+  const off = Decimal.max(new Decimal(0), new Decimal(offsetPercent)).div(100);
+  const rawLimit = side === 'LONG'
+    ? level.mul(new Decimal(1).plus(off))
+    : level.mul(new Decimal(1).minus(off));
+  return {
+    stopPrice: adjustPrice(level.toFixed(8), symbolInfo),
+    limitPrice: adjustPrice(rawLimit.toFixed(8), symbolInfo),
+  };
+}
+
+export function sizeNearPriceLevel(params: {
+  traderAllocation: string | Decimal;
+  levelsPerSide: number;
+  /** Geometric step from start (1 = nearest) — used for triangular scaling. */
+  step: number;
+  leverage: number;
+  entryPrice: string;
+  symbolInfo: SymbolInfo;
+  capitalScalingEnabled: boolean;
+}): { allocatedMargin: string; notional: string; quantity: string } {
+  if (!params.capitalScalingEnabled) {
+    const sized = sizeLevelPosition({
+      traderAllocation: params.traderAllocation,
+      level: 1,
+      levelsPerSide: params.levelsPerSide,
+      leverage: params.leverage,
+      entryPrice: params.entryPrice,
+      symbolInfo: params.symbolInfo,
+      capitalScalingEnabled: false,
+    });
+    return {
+      allocatedMargin: sized.allocatedMargin,
+      notional: sized.notional,
+      quantity: sized.quantity,
+    };
+  }
+  const sideCap = new Decimal(params.traderAllocation).div(2);
+  const sized = sizeLevelPosition({
+    sideCapital: sideCap,
+    level: params.step,
+    levelsPerSide: params.levelsPerSide,
+    leverage: params.leverage,
+    entryPrice: params.entryPrice,
+    symbolInfo: params.symbolInfo,
+    capitalScalingEnabled: true,
+  });
+  return {
+    allocatedMargin: sized.allocatedMargin,
+    notional: sized.notional,
+    quantity: sized.quantity,
+  };
+}
+
+export { totalGridLevels, equalCapitalPerLevel, calcPositionNotional, calcQuantityFromNotional };

@@ -1,0 +1,1291 @@
+/**
+ * Near-price directional grid trader.
+ * - Levels are price anchors; side assigned at activation (mark < level → LONG, else SHORT)
+ * - Activate when mark within spacing×multiplier % of level (ref = level price)
+ * - Entry: STOP_LIMIT; TP: TAKE_PROFIT_MARKET at ±spacing% from fill; no SL
+ * - Multi-position; capital via existing sizeLevelPosition (equal/triangular)
+ * - Destroy: MAX_LIFETIME | GRID_BOUNDARY_PASSED (strictly outside ±boundary%)
+ */
+import { EventEmitter } from 'events';
+import { v4 as uuidv4 } from 'uuid';
+import Decimal from 'decimal.js';
+import type { IExecutionProvider } from '../../execution/IExecutionProvider';
+import type { AccountLedger } from '../../calc/AccountLedger';
+import type { IManagedTrader } from '../IManagedTrader';
+import type {
+  TraderConfig,
+  TraderMode,
+  TraderStatus,
+  TraderSummaryView,
+  OrderUpdate,
+  SymbolInfo,
+  TradeSide,
+  CurrentPositionView,
+} from '../../../types';
+import {
+  buildNearPriceLevelPlans,
+  findEligibleEmptyLevels,
+  assignSideForLevel,
+  calcUpperBound,
+  calcLowerBound,
+  didCrossOutsideBoundary,
+  calcNearPriceTp,
+  calcStopLimitPrices,
+  sizeNearPriceLevel,
+  levelsPerSideFromConfig,
+  activationDistancePercent,
+  isNearPriceLevelTerminal,
+  equalCapitalPerLevel,
+  totalGridLevels,
+  type NearPriceLevelPlan,
+  type NearPriceLevelStatus,
+} from './nearPriceGridCalc';
+import { isTpTriggeredByMark } from '../grid/gridCalc';
+import {
+  calcPositionUnrealizedPnl,
+} from '../../calc/strategy';
+import {
+  calcGrossPnl,
+  estimateOpenExitFee,
+  feeRatesFromConfig,
+  resolveExecutionFee,
+} from '../../calc/fees';
+import {
+  calcActualNotional,
+  reconcilePositionNotional,
+} from '../../calc/leverage';
+import { createContextLogger } from '../../logger';
+import { withRetry } from '../../utils/retry';
+import type { PrismaClient } from '@prisma/client';
+
+const log = createContextLogger('NearPriceDirectionalTrader');
+
+type ExitReason = 'MAX_LIFETIME' | 'GRID_BOUNDARY_PASSED' | 'FORCE' | 'ERROR';
+
+interface ActivePosition {
+  key: string;
+  direction: TradeSide;
+  level: number;
+  entryPrice: string;
+  quantity: string;
+  allocatedMargin: string;
+  actualNotional: string;
+  entryFee: Decimal;
+  entryClientOrderId: string | null;
+  tpClientOrderId: string | null;
+  filled: boolean;
+  closing: boolean;
+}
+
+interface LevelState {
+  plan: NearPriceLevelPlan;
+  /** Assigned at activation; null while EMPTY. */
+  direction: TradeSide | null;
+  status: NearPriceLevelStatus;
+  clientOrderId: string | null;
+  exchangeOrderId: string | null;
+  entryPrice: string | null;
+  filledQuantity: string | null;
+  fees: string | null;
+  tpPrice: string | null;
+  completionReason: string | null;
+  realizedNetPnl: string | null;
+  exitPrice: string | null;
+  allocatedMargin: string;
+  notional: string;
+  quantity: string;
+}
+
+function levelKey(level: number): string {
+  return `L:${level}`;
+}
+
+export class NearPriceDirectionalTrader extends EventEmitter implements IManagedTrader {
+  readonly id: string;
+  readonly symbol: string;
+  readonly mode: TraderMode;
+
+  private status: TraderStatus = 'INITIALIZING';
+  private isDestroyed = false;
+  private isPaused = false;
+  private exiting = false;
+  private activating = false;
+  private symbolInfo: SymbolInfo | null = null;
+  private markPrice = '0';
+  private previousMarkPrice: string | null = null;
+  private startPrice: string | null = null;
+  private upperBound: string | null = null;
+  private lowerBound: string | null = null;
+  private levelsPerSide = 10;
+  private spacingPercent = '2';
+  private boundaryPercent = '40';
+  private activationMultiplier = '2';
+  private stopLimitOffsetPercent = '0.05';
+  private capitalScalingEnabled = true;
+  private initialCapital = new Decimal(0);
+  private currentCapital = new Decimal(0);
+  private realizedPnl = new Decimal(0);
+  private unrealizedPnl = new Decimal(0);
+  private grossRealizedPnl = new Decimal(0);
+  private totalFees = new Decimal(0);
+  private startedAt: Date | null = null;
+  private endsAt: Date | null = null;
+  private exitReason: ExitReason | null = null;
+  private positionsOpened = 0;
+  private positionsClosed = 0;
+  private takeProfits = 0;
+  private levels = new Map<string, LevelState>();
+  private activePositions = new Map<string, ActivePosition>();
+  private finalizedLevelKeys = new Set<string>();
+  private handledFillIds = new Set<string>();
+  private capitalHistory: Array<{ at: string; capital: string; event: string; netPnl?: string }> = [];
+
+  constructor(
+    id: string,
+    symbol: string,
+    mode: TraderMode,
+    private readonly executionProvider: IExecutionProvider,
+    private readonly traderConfig: TraderConfig,
+    private readonly db: PrismaClient,
+    private readonly accountLedger: AccountLedger,
+  ) {
+    super();
+    this.id = id;
+    this.symbol = symbol;
+    this.mode = mode;
+    this.boundaryPercent = String(traderConfig.gridBoundaryPercent ?? '40');
+    this.spacingPercent = String(traderConfig.gridSpacingPercent ?? traderConfig.gridDistancePercent ?? '2');
+    this.activationMultiplier = String(traderConfig.gridActivationMultiplier ?? '2');
+    this.stopLimitOffsetPercent = String(traderConfig.stopLimitOffsetPercent ?? '0.05');
+    this.capitalScalingEnabled = traderConfig.gridCapitalScalingEnabled !== false;
+    this.levelsPerSide = levelsPerSideFromConfig(this.boundaryPercent, this.spacingPercent);
+  }
+
+  getStatus(): TraderStatus { return this.status; }
+  isActive(): boolean { return this.status === 'ACTIVE' && !this.isDestroyed; }
+  hasOpenPosition(): boolean {
+    for (const a of this.activePositions.values()) {
+      if (a.filled && !a.closing && !this.finalizedLevelKeys.has(a.key)) return true;
+    }
+    return false;
+  }
+  getOpenLegCount(): number {
+    let n = 0;
+    for (const a of this.activePositions.values()) {
+      if (a.filled && !a.closing && !this.finalizedLevelKeys.has(a.key)) n += 1;
+    }
+    return n;
+  }
+  getId(): string { return this.id; }
+  getSymbol(): string { return this.symbol; }
+  getRealizedPnl(): string { return this.realizedPnl.toFixed(8); }
+  getUnrealizedPnl(): string {
+    this.recomputeUnrealized();
+    return this.unrealizedPnl.toFixed(8);
+  }
+  getOpenNotional(): string | null {
+    let sum = new Decimal(0);
+    for (const a of this.activePositions.values()) {
+      if (!a.filled || a.closing || this.finalizedLevelKeys.has(a.key)) continue;
+      sum = sum.plus(a.actualNotional);
+    }
+    return sum.isZero() ? null : sum.toFixed(8);
+  }
+
+  async initialize(): Promise<void> {
+    log.info(`Initializing near-price trader ${this.id} for ${this.symbol}`, {
+      boundaryPercent: this.boundaryPercent,
+      spacingPercent: this.spacingPercent,
+      activationMultiplier: this.activationMultiplier,
+      levelsPerSide: this.levelsPerSide,
+    });
+    this.symbolInfo = await withRetry(
+      () => this.executionProvider.getSymbolInfo(this.symbol),
+      { maxAttempts: 3, delayMs: 1000 },
+    );
+    await withRetry(() => this.executionProvider.setHedgeMode(true), { maxAttempts: 3, delayMs: 1000 });
+    await withRetry(
+      () => this.executionProvider.setLeverage(this.symbol, this.traderConfig.leverage),
+      { maxAttempts: 3, delayMs: 1000 },
+    );
+    await withRetry(
+      () => this.executionProvider.setMarginMode(this.symbol, this.traderConfig.marginMode),
+      { maxAttempts: 3, delayMs: 1000 },
+    );
+
+    this.markPrice = await this.executionProvider.getMarkPrice(this.symbol);
+    this.previousMarkPrice = this.markPrice;
+    this.startedAt = new Date();
+    const hours = Math.max(0.001, this.traderConfig.traderMaxLifetimeHours ?? 12);
+    this.endsAt = new Date(this.startedAt.getTime() + hours * 3600_000);
+
+    const allocation = await this.accountLedger.getAllocation(
+      this.traderConfig.maxTraders,
+      this.traderConfig.leverage,
+    );
+    this.initialCapital = allocation.traderEquity;
+    this.currentCapital = allocation.traderEquity;
+    this.capitalHistory.push({
+      at: new Date().toISOString(),
+      capital: this.currentCapital.toFixed(8),
+      event: 'INIT',
+    });
+
+    this.startPrice = this.markPrice;
+    this.upperBound = calcUpperBound(this.startPrice, this.boundaryPercent).toFixed(8);
+    this.lowerBound = calcLowerBound(this.startPrice, this.boundaryPercent).toFixed(8);
+
+    const plans = buildNearPriceLevelPlans({
+      startPrice: this.startPrice,
+      boundaryPercent: this.boundaryPercent,
+      spacingPercent: this.spacingPercent,
+      symbolInfo: this.symbolInfo,
+    });
+    for (const plan of plans) {
+      this.levels.set(levelKey(plan.level), {
+        plan,
+        direction: null,
+        status: 'EMPTY',
+        clientOrderId: null,
+        exchangeOrderId: null,
+        entryPrice: null,
+        filledQuantity: null,
+        fees: null,
+        tpPrice: null,
+        completionReason: null,
+        realizedNetPnl: null,
+        exitPrice: null,
+        allocatedMargin: '0',
+        notional: '0',
+        quantity: '0',
+      });
+    }
+
+    await this.db.trader.update({
+      where: { id: this.id },
+      data: {
+        behavior: 'near_price_directional',
+        startPrice: this.startPrice,
+        gridLevelsPerSide: this.levelsPerSide,
+        gridDistancePercent: this.spacingPercent,
+        traderAllocatedAmount: this.initialCapital.toFixed(8),
+        currentCapital: this.currentCapital.toFixed(8),
+        initialCapital: this.initialCapital.toFixed(8),
+        status: 'ACTIVE',
+        startedAt: this.startedAt,
+        endsAt: this.endsAt,
+      } as any,
+    });
+
+    for (const level of this.levels.values()) {
+      await this.persistLevel(level);
+    }
+
+    this.status = 'ACTIVE';
+    this.emit('traderEvent', { type: 'STATUS_CHANGED', traderId: this.id, status: this.status });
+    log.info('[LIFECYCLE] NEAR_PRICE_GRID_ACTIVE', {
+      traderId: this.id,
+      symbol: this.symbol,
+      startPrice: this.startPrice,
+      lowerBound: this.lowerBound,
+      upperBound: this.upperBound,
+      levels: this.levels.size,
+      activationDistancePct: activationDistancePercent(this.spacingPercent, this.activationMultiplier).toFixed(4),
+    });
+
+    // Immediately activate levels already in zone
+    await this.tryActivateEligibleLevels();
+    this.emitSnapshot();
+  }
+
+  async restore(state: any): Promise<void> {
+    this.status = state.status ?? 'ACTIVE';
+    this.realizedPnl = new Decimal(state.realizedPnl ?? '0');
+    this.unrealizedPnl = new Decimal(state.unrealizedPnl ?? '0');
+    this.totalFees = new Decimal(state.totalFees ?? '0');
+    this.initialCapital = new Decimal(state.traderAllocatedAmount ?? state.initialCapital ?? '0');
+    this.currentCapital = new Decimal(state.currentCapital ?? this.initialCapital);
+    this.startPrice = state.startPrice ?? null;
+    this.spacingPercent = String(state.gridDistancePercent ?? this.spacingPercent);
+    this.levelsPerSide = state.gridLevelsPerSide ?? this.levelsPerSide;
+    if (this.startPrice != null) {
+      this.upperBound = calcUpperBound(this.startPrice, this.boundaryPercent).toFixed(8);
+      this.lowerBound = calcLowerBound(this.startPrice, this.boundaryPercent).toFixed(8);
+    }
+    this.endsAt = state.endsAt != null ? new Date(state.endsAt) : null;
+    this.startedAt = state.startedAt != null ? new Date(state.startedAt) : null;
+    this.symbolInfo = await this.executionProvider.getSymbolInfo(this.symbol);
+    this.markPrice = await this.executionProvider.getMarkPrice(this.symbol);
+    this.previousMarkPrice = this.markPrice;
+
+    const rows: any[] = state.gridLevels ?? [];
+    if (rows.length === 0 && this.startPrice != null && this.symbolInfo != null) {
+      const plans = buildNearPriceLevelPlans({
+        startPrice: this.startPrice,
+        boundaryPercent: this.boundaryPercent,
+        spacingPercent: this.spacingPercent,
+        symbolInfo: this.symbolInfo,
+      });
+      for (const plan of plans) {
+        this.levels.set(levelKey(plan.level), {
+          plan,
+          direction: null,
+          status: 'EMPTY',
+          clientOrderId: null,
+          exchangeOrderId: null,
+          entryPrice: null,
+          filledQuantity: null,
+          fees: null,
+          tpPrice: null,
+          completionReason: null,
+          realizedNetPnl: null,
+          exitPrice: null,
+          allocatedMargin: '0',
+          notional: '0',
+          quantity: '0',
+        });
+      }
+    } else {
+      for (const row of rows) {
+        const dir = row.direction === 'LONG' || row.direction === 'SHORT' ? row.direction as TradeSide : null;
+        const status = (row.status === 'PENDING' && dir == null ? 'EMPTY' : row.status) as NearPriceLevelStatus;
+        const lvl = Number(row.level);
+        this.levels.set(levelKey(lvl), {
+          plan: {
+            level: lvl,
+            geometry: new Decimal(row.triggerPrice).gte(this.startPrice ?? '0') ? 'ABOVE' : 'BELOW',
+            step: lvl,
+            levelPrice: row.triggerPrice,
+            status,
+          },
+          direction: dir,
+          status,
+          clientOrderId: row.clientOrderId ?? null,
+          exchangeOrderId: row.exchangeOrderId ?? null,
+          entryPrice: row.entryPrice ?? null,
+          filledQuantity: row.filledQuantity ?? null,
+          fees: row.fees ?? null,
+          tpPrice: row.tpPrice ?? null,
+          completionReason: row.completionReason ?? null,
+          realizedNetPnl: null,
+          exitPrice: null,
+          allocatedMargin: row.allocatedMargin ?? '0',
+          notional: row.notional ?? '0',
+          quantity: row.quantity ?? '0',
+        });
+        if (isNearPriceLevelTerminal(status)) {
+          this.finalizedLevelKeys.add(levelKey(lvl));
+        }
+      }
+    }
+
+    const openPos: any[] = state.openPositions ?? [];
+    for (const p of openPos) {
+      const key = levelKey(Number(p.hedgeLevel));
+      const level = this.levels.get(key);
+      if (level == null) continue;
+      const direction = (p.side === 'SHORT' ? 'SHORT' : 'LONG') as TradeSide;
+      level.direction = direction;
+      level.status = 'ACTIVE';
+      level.entryPrice = p.entryPrice;
+      this.activePositions.set(key, {
+        key,
+        direction,
+        level: Number(p.hedgeLevel),
+        entryPrice: p.entryPrice,
+        quantity: p.quantity,
+        allocatedMargin: level.allocatedMargin || new Decimal(p.quantity).mul(p.entryPrice).div(this.traderConfig.leverage).toFixed(8),
+        actualNotional: new Decimal(p.quantity).mul(p.entryPrice).toFixed(8),
+        entryFee: new Decimal(0),
+        entryClientOrderId: p.clientOrderId ?? null,
+        tpClientOrderId: null,
+        filled: true,
+        closing: false,
+      });
+    }
+
+    if (this.status === 'ACTIVE') {
+      await this.tryActivateEligibleLevels();
+    }
+    this.emitSnapshot();
+  }
+
+  async resumeCompleting(): Promise<void> {
+    if (this.isDestroyed) return;
+    await this.beginExit(this.exitReason ?? 'FORCE');
+  }
+
+  onPriceUpdate(price: string): void {
+    if (this.isDestroyed || this.isPaused) return;
+    const previous = this.previousMarkPrice ?? this.markPrice;
+    this.previousMarkPrice = this.markPrice;
+    this.markPrice = price;
+    this.recomputeUnrealized();
+    this.emitSnapshot();
+    if (this.status !== 'ACTIVE' || this.exiting) return;
+    if (this.endsAt != null && Date.now() >= this.endsAt.getTime()) {
+      void this.beginExit('MAX_LIFETIME');
+      return;
+    }
+    void this.reconcileProtectiveByMark(previous, price).then(async () => {
+      if (this.exiting || this.isDestroyed || this.status !== 'ACTIVE') return;
+      if (
+        this.lowerBound != null
+        && this.upperBound != null
+        && didCrossOutsideBoundary(previous, price, this.lowerBound, this.upperBound)
+      ) {
+        await this.beginExit('GRID_BOUNDARY_PASSED');
+        return;
+      }
+      await this.tryActivateEligibleLevels();
+    });
+  }
+
+  async onOrderUpdate(update: OrderUpdate): Promise<void> {
+    if (this.isDestroyed) return;
+    for (const active of this.activePositions.values()) {
+      if (update.clientOrderId === active.entryClientOrderId) {
+        if (update.status === 'FILLED') await this.handleEntryFill(active.key, update);
+        return;
+      }
+      if (
+        active.tpClientOrderId != null
+        && update.clientOrderId === active.tpClientOrderId
+        && update.status === 'FILLED'
+      ) {
+        await this.handleProtectiveFill(active.key, update);
+        return;
+      }
+    }
+  }
+
+  async pause(): Promise<void> {
+    this.isPaused = true;
+    this.status = 'PAUSED';
+    this.emit('traderEvent', { type: 'STATUS_CHANGED', traderId: this.id, status: this.status });
+  }
+
+  async resume(): Promise<void> {
+    this.isPaused = false;
+    if (this.status === 'PAUSED') {
+      this.status = 'ACTIVE';
+      this.emit('traderEvent', { type: 'STATUS_CHANGED', traderId: this.id, status: this.status });
+    }
+  }
+
+  destroy(): void {
+    this.isDestroyed = true;
+    this.removeAllListeners();
+  }
+
+  async emergencyStop(): Promise<void> {
+    await this.beginExit('FORCE');
+  }
+
+  toSummary(): TraderSummaryView {
+    this.recomputeUnrealized();
+    const remainingMs = this.endsAt != null ? Math.max(0, this.endsAt.getTime() - Date.now()) : 0;
+    const runtimeMs = this.startedAt != null ? Date.now() - this.startedAt.getTime() : 0;
+    const rates = feeRatesFromConfig(this.traderConfig);
+    const currentPositions: CurrentPositionView[] = [];
+    for (const a of this.activePositions.values()) {
+      if (!a.filled || a.closing || this.finalizedLevelKeys.has(a.key)) continue;
+      const gross = calcPositionUnrealizedPnl(a.direction, a.entryPrice, this.markPrice, a.quantity);
+      const estExit = estimateOpenExitFee(this.markPrice, a.quantity, rates);
+      const netU = gross.minus(a.entryFee).minus(estExit);
+      const lvl = this.levels.get(a.key);
+      currentPositions.push({
+        number: a.level,
+        side: a.direction,
+        capitalStep: a.level,
+        entryPrice: a.entryPrice,
+        quantity: a.quantity,
+        tpPrice: lvl?.tpPrice ?? '',
+        slPrice: '',
+        stepAmount: a.allocatedMargin,
+        positionNotional: a.actualNotional,
+        unrealizedPnl: gross.toFixed(8),
+        estimatedExitFee: estExit.toFixed(8),
+        netUnrealizedPnl: netU.toFixed(8),
+        entryFee: a.entryFee.toFixed(8),
+        roiPercent: a.allocatedMargin !== '0'
+          ? netU.div(a.allocatedMargin).mul(100).toFixed(4)
+          : '0',
+        status: 'OPEN',
+      });
+    }
+
+    const gridLevels = [...this.levels.values()]
+      .sort((a, b) => new Decimal(b.plan.levelPrice).cmp(new Decimal(a.plan.levelPrice)))
+      .map((l) => {
+        const terminal = isNearPriceLevelTerminal(l.status);
+        const active = this.activePositions.get(levelKey(l.plan.level));
+        let uPnl: string | null = null;
+        if (active != null && active.filled && !terminal && !active.closing) {
+          uPnl = calcPositionUnrealizedPnl(
+            active.direction,
+            active.entryPrice,
+            this.markPrice,
+            active.quantity,
+          ).toFixed(8);
+        }
+        const displayStatus = l.status === 'EMPTY' ? 'PENDING' : l.status;
+        return {
+          level: l.plan.level,
+          direction: (l.direction ?? 'LONG') as TradeSide,
+          triggerPrice: l.plan.levelPrice,
+          limitPrice: l.plan.levelPrice,
+          allocatedMargin: active != null && !terminal ? active.allocatedMargin : l.allocatedMargin,
+          notional: active != null && !terminal ? active.actualNotional : l.notional,
+          leverage: this.traderConfig.leverage,
+          quantity: active != null && !terminal ? active.quantity : l.quantity,
+          status: displayStatus,
+          entryPrice: l.entryPrice,
+          exitPrice: l.exitPrice,
+          unrealizedPnl: terminal ? '0' : uPnl,
+          realizedPnl: l.realizedNetPnl,
+          tpPrice: l.tpPrice,
+          slPrice: null,
+          completionReason: l.completionReason,
+          geometry: l.plan.geometry,
+          nearPriceStatus: l.status,
+          assignedSide: l.direction,
+        };
+      });
+
+    const activeOpen = [...this.activePositions.values()].filter(
+      (a) => a.filled && !a.closing && !this.finalizedLevelKeys.has(a.key),
+    );
+    let activeMargin = new Decimal(0);
+    let activeNotional = new Decimal(0);
+    for (const a of activeOpen) {
+      activeMargin = activeMargin.plus(a.allocatedMargin);
+      activeNotional = activeNotional.plus(a.actualNotional);
+    }
+    const perLevel = equalCapitalPerLevel(this.initialCapital, this.levelsPerSide);
+    const empty = [...this.levels.values()].filter((l) => l.status === 'EMPTY' || l.status === 'PENDING').length;
+    const activeCount = [...this.levels.values()].filter((l) => l.status === 'ACTIVE').length;
+    const tpCount = [...this.levels.values()].filter((l) => l.status === 'TP_HIT').length;
+
+    return {
+      id: this.id,
+      symbol: this.symbol,
+      status: this.status,
+      realizedPnl: this.realizedPnl.toFixed(8),
+      unrealizedPnl: this.unrealizedPnl.toFixed(8),
+      totalPnl: this.realizedPnl.plus(this.unrealizedPnl).toFixed(8),
+      grossRealizedPnl: this.grossRealizedPnl.toFixed(8),
+      totalFees: this.totalFees.toFixed(8),
+      markPrice: this.markPrice,
+      leverage: this.traderConfig.leverage,
+      capital: {
+        traderAllocatedAmount: this.initialCapital.toFixed(8),
+        totalSteps: this.levelsPerSide,
+        capitalSteps: this.levelsPerSide,
+        currentStep: 0,
+        currentStepAllocation: '0',
+        currentStepAmount: this.currentCapital.toFixed(8),
+        positionNotional: this.getOpenNotional() ?? '0',
+        steps: [],
+        highestStepReached: 0,
+        lowestStepReached: 1,
+        stepIncreases: 0,
+        stepDecreases: 0,
+        stepResets: 0,
+        step1Trades: 0,
+        maxStepTrades: 0,
+      },
+      currentPosition: currentPositions[0] ?? null,
+      currentPositions,
+      stats: {
+        startedAt: this.startedAt?.toISOString() ?? null,
+        endsAt: this.endsAt?.toISOString() ?? null,
+        remainingMs,
+        runtimeMs,
+        currentPositionNumber: 0,
+        positionsOpened: this.positionsOpened,
+        positionsClosed: this.positionsClosed,
+        winningPositions: 0,
+        losingPositions: 0,
+        takeProfits: this.takeProfits,
+        stopLosses: 0,
+        longPositions: activeOpen.filter((a) => a.direction === 'LONG').length,
+        shortPositions: activeOpen.filter((a) => a.direction === 'SHORT').length,
+        winRate: '0.00',
+        grossRealizedPnl: this.grossRealizedPnl.toFixed(8),
+        totalFees: this.totalFees.toFixed(8),
+        netRealizedPnl: this.realizedPnl.toFixed(8),
+        currentStep: 0,
+        highestStepReached: 0,
+        lowestStepReached: 1,
+        stepIncreases: 0,
+        stepDecreases: 0,
+        stepResets: 0,
+        step1Trades: 0,
+        maxStepTrades: 0,
+      },
+      timeline: [],
+      distanceToTpPct: null,
+      distanceToTpAbs: null,
+      distanceToSlPct: null,
+      distanceToSlAbs: null,
+      openOrders: this.activePositions.size,
+      pendingOrders: empty,
+      closedOrders: 0,
+      orders: [],
+      behavior: 'near_price_directional',
+      grid: {
+        startPrice: this.startPrice ?? '0',
+        levelsPerSide: this.levelsPerSide,
+        distancePercent: this.spacingPercent,
+        takeProfitPercent: this.spacingPercent,
+        longFilled: activeOpen.filter((a) => a.direction === 'LONG').length,
+        shortFilled: activeOpen.filter((a) => a.direction === 'SHORT').length,
+        levels: gridLevels as any,
+        profitPercent: this.initialCapital.isZero()
+          ? '0'
+          : this.realizedPnl.plus(this.unrealizedPnl).div(this.initialCapital).mul(100).toFixed(4),
+        exitReason: this.exitReason,
+        currentCapital: this.currentCapital.toFixed(8),
+        initialCapital: this.initialCapital.toFixed(8),
+        equity: this.currentCapital.plus(this.unrealizedPnl).toFixed(8),
+        capitalHistory: this.capitalHistory,
+        maxPerSide: this.levelsPerSide,
+        maxOpenPositions: totalGridLevels(this.levelsPerSide),
+        activeOpenCount: activeOpen.length,
+        longOpen: activeOpen.filter((a) => a.direction === 'LONG').length,
+        shortOpen: activeOpen.filter((a) => a.direction === 'SHORT').length,
+        capitalScalingEnabled: this.capitalScalingEnabled,
+        capitalPerLevel: perLevel.toFixed(8),
+        activePositionMargin: activeMargin.toFixed(8),
+        activePositionNotional: activeNotional.toFixed(8),
+        remainingAvailableCapital: Decimal.max(0, this.initialCapital.minus(activeMargin)).toFixed(8),
+        perPositionNotional: perLevel.mul(this.traderConfig.leverage).toFixed(8),
+        maxActivePositions: totalGridLevels(this.levelsPerSide),
+        totalLevels: totalGridLevels(this.levelsPerSide),
+        levelsPending: empty,
+        levelsActive: activeCount,
+        levelsTp: tpCount,
+        levelsSl: 0,
+        levelsDead: tpCount,
+        levelsTradable: empty + activeCount,
+        lastLongLevel: this.lowerBound,
+        lastShortLevel: this.upperBound,
+        upperDestroyPrice: this.upperBound,
+        lowerDestroyPrice: this.lowerBound,
+        lifetimeRemaining: remainingMs,
+        destroyConditions: {
+          lifetimeExpired: this.endsAt != null && Date.now() >= this.endsAt.getTime(),
+          pastFinalLong: this.lowerBound != null
+            && new Decimal(this.markPrice).lt(this.lowerBound),
+          pastFinalShort: this.upperBound != null
+            && new Decimal(this.markPrice).gt(this.upperBound),
+          remainingMs,
+        },
+        // Near-price specific
+        nearPrice: true,
+        boundaryPercent: this.boundaryPercent,
+        spacingPercent: this.spacingPercent,
+        activationMultiplier: this.activationMultiplier,
+        activationDistancePercent: activationDistancePercent(
+          this.spacingPercent,
+          this.activationMultiplier,
+        ).toFixed(4),
+        upperBound: this.upperBound,
+        lowerBound: this.lowerBound,
+      } as any,
+    };
+  }
+
+  private getEqualMarginPerLevel(): Decimal {
+    return equalCapitalPerLevel(this.initialCapital, this.levelsPerSide);
+  }
+
+  private getActiveMarginUsed(): Decimal {
+    let used = new Decimal(0);
+    for (const a of this.activePositions.values()) {
+      if (a.closing || this.finalizedLevelKeys.has(a.key)) continue;
+      used = used.plus(a.allocatedMargin);
+    }
+    return used;
+  }
+
+  private hasFreeEqualMargin(): boolean {
+    if (this.capitalScalingEnabled) return true;
+    const needed = this.getEqualMarginPerLevel();
+    if (needed.lte(0)) return false;
+    if (this.initialCapital.minus(this.getActiveMarginUsed()).lt(needed)) return false;
+    if (this.currentCapital.lt(needed)) return false;
+    return true;
+  }
+
+  private async tryActivateEligibleLevels(): Promise<void> {
+    if (this.activating || this.exiting || this.isDestroyed) return;
+    if (this.status !== 'ACTIVE' || this.isPaused) return;
+    if (this.symbolInfo == null || this.startPrice == null) return;
+
+    this.activating = true;
+    try {
+      const snapshots = [...this.levels.values()].map((l) => ({
+        level: l.plan.level,
+        levelPrice: l.plan.levelPrice,
+        status: l.status,
+        clientOrderId: l.clientOrderId,
+        key: levelKey(l.plan.level),
+      }));
+      const eligible = findEligibleEmptyLevels(
+        snapshots,
+        this.markPrice,
+        this.spacingPercent,
+        this.activationMultiplier,
+      );
+      for (const e of eligible) {
+        if (this.exiting || this.isDestroyed) break;
+        if (!this.capitalScalingEnabled && !this.hasFreeEqualMargin()) break;
+        const level = this.levels.get(e.key);
+        if (level == null) continue;
+        await this.activateLevel(level);
+      }
+    } finally {
+      this.activating = false;
+    }
+  }
+
+  private async activateLevel(level: LevelState): Promise<void> {
+    if (this.symbolInfo == null) return;
+    if (level.status !== 'EMPTY' && level.status !== 'PENDING') return;
+    if (level.clientOrderId != null) return;
+    const key = levelKey(level.plan.level);
+    if (this.activePositions.has(key) || this.finalizedLevelKeys.has(key)) return;
+    if (!this.capitalScalingEnabled && !this.hasFreeEqualMargin()) return;
+
+    const side = assignSideForLevel(this.markPrice, level.plan.levelPrice);
+    const sized = sizeNearPriceLevel({
+      traderAllocation: this.initialCapital,
+      levelsPerSide: this.levelsPerSide,
+      step: level.plan.step,
+      leverage: this.traderConfig.leverage,
+      entryPrice: level.plan.levelPrice,
+      symbolInfo: this.symbolInfo,
+      capitalScalingEnabled: this.capitalScalingEnabled,
+    });
+    if (new Decimal(sized.quantity).lte(0)) {
+      level.status = 'SKIPPED';
+      await this.persistLevel(level);
+      return;
+    }
+
+    level.direction = side;
+    level.allocatedMargin = sized.allocatedMargin;
+    level.notional = sized.notional;
+    level.quantity = sized.quantity;
+    level.status = 'PENDING';
+
+    const { stopPrice, limitPrice } = calcStopLimitPrices(
+      level.plan.levelPrice,
+      side,
+      this.stopLimitOffsetPercent,
+      this.symbolInfo,
+    );
+
+    // Already through stop → market entry
+    const mark = new Decimal(this.markPrice);
+    const alreadyThrough = side === 'LONG' ? mark.gte(stopPrice) : mark.lte(stopPrice);
+    const shortId = this.id.replace(/-/g, '').slice(0, 8);
+    const clientOrderId = `np-${shortId}-${side[0]}${level.plan.level}-e-${uuidv4().slice(0, 6)}`;
+    const orderSide = side === 'LONG' ? 'BUY' as const : 'SELL' as const;
+
+    try {
+      const res = alreadyThrough
+        ? await this.executionProvider.placeOrder({
+          traderId: this.id,
+          clientOrderId,
+          symbol: this.symbol,
+          side: orderSide,
+          type: 'MARKET',
+          role: side,
+          hedgeLevel: level.plan.level,
+          quantity: sized.quantity,
+          positionSide: side,
+        } as any)
+        : await this.executionProvider.placeOrder({
+          traderId: this.id,
+          clientOrderId,
+          symbol: this.symbol,
+          side: orderSide,
+          type: 'STOP_LIMIT',
+          role: side,
+          hedgeLevel: level.plan.level,
+          quantity: sized.quantity,
+          price: limitPrice,
+          stopPrice,
+          positionSide: side,
+        } as any);
+
+      level.clientOrderId = res.clientOrderId;
+      level.exchangeOrderId = res.exchangeOrderId;
+      await this.db.order.upsert({
+        where: { clientOrderId: res.clientOrderId },
+        update: { status: res.status, exchangeOrderId: res.exchangeOrderId },
+        create: {
+          traderId: this.id,
+          exchangeOrderId: res.exchangeOrderId,
+          clientOrderId: res.clientOrderId,
+          symbol: this.symbol,
+          side: res.side,
+          type: alreadyThrough ? 'MARKET' : 'STOP_LIMIT',
+          status: res.status,
+          role: side,
+          hedgeLevel: level.plan.level,
+          quantity: res.quantity,
+          price: alreadyThrough ? null : limitPrice,
+          stopPrice: alreadyThrough ? null : stopPrice,
+          filledQuantity: res.filledQuantity,
+          avgFillPrice: res.avgFillPrice,
+          fee: res.fee,
+          feeCurrency: res.feeCurrency,
+        },
+      });
+
+      this.activePositions.set(key, {
+        key,
+        direction: side,
+        level: level.plan.level,
+        entryPrice: level.plan.levelPrice,
+        quantity: sized.quantity,
+        allocatedMargin: sized.allocatedMargin,
+        actualNotional: sized.notional,
+        entryFee: new Decimal(0),
+        entryClientOrderId: res.clientOrderId,
+        tpClientOrderId: null,
+        filled: false,
+        closing: false,
+      });
+      await this.persistLevel(level);
+
+      log.info('[LIFECYCLE] NEAR_PRICE_LEVEL_ORDERED', {
+        traderId: this.id,
+        key,
+        side,
+        levelPrice: level.plan.levelPrice,
+        stopPrice,
+        limitPrice,
+        alreadyThrough,
+        type: alreadyThrough ? 'MARKET' : 'STOP_LIMIT',
+      });
+
+      if (res.status === 'FILLED') {
+        await this.handleEntryFill(key, {
+          clientOrderId: res.clientOrderId,
+          exchangeOrderId: res.exchangeOrderId,
+          symbol: this.symbol,
+          status: 'FILLED',
+          filledQuantity: res.filledQuantity || sized.quantity,
+          avgFillPrice: res.avgFillPrice ?? level.plan.levelPrice,
+          fee: res.fee,
+          feeCurrency: res.feeCurrency,
+          timestamp: Date.now(),
+        });
+      }
+    } catch (err) {
+      log.error('Failed activating near-price level', { key, error: String(err) });
+      level.status = 'EMPTY';
+      level.direction = null;
+      level.clientOrderId = null;
+      this.activePositions.delete(key);
+      await this.persistLevel(level);
+    }
+  }
+
+  private async handleEntryFill(key: string, update: OrderUpdate): Promise<void> {
+    const level = this.levels.get(key);
+    const active = this.activePositions.get(key);
+    if (level == null || active == null) return;
+    if (active.filled || this.finalizedLevelKeys.has(key)) return;
+    if (level.direction == null) return;
+
+    const fillKey = `${update.clientOrderId}:ENTRY`;
+    if (this.handledFillIds.has(fillKey)) return;
+    this.handledFillIds.add(fillKey);
+
+    const entry = update.avgFillPrice ?? level.plan.levelPrice;
+    const qty = update.filledQuantity || active.quantity;
+    const fee = resolveExecutionFee({
+      price: entry,
+      quantity: qty,
+      actualFee: update.fee,
+      rates: feeRatesFromConfig(this.traderConfig),
+      liquidity: 'TAKER',
+    });
+
+    active.filled = true;
+    active.entryPrice = entry;
+    active.quantity = qty;
+    active.entryFee = fee;
+    active.actualNotional = calcActualNotional(entry, qty).toFixed(8);
+    reconcilePositionNotional({
+      traderId: this.id,
+      symbol: this.symbol,
+      positionId: active.key,
+      allocatedMargin: active.allocatedMargin,
+      leverage: this.traderConfig.leverage,
+      actualNotional: active.actualNotional,
+      quantity: qty,
+      entryPrice: entry,
+    });
+    // Keep allocatedMargin as planned; notional from fill
+    active.allocatedMargin = new Decimal(active.actualNotional)
+      .div(Math.max(1, this.traderConfig.leverage))
+      .toFixed(8);
+
+    const tp = calcNearPriceTp(entry, level.direction, this.spacingPercent, this.symbolInfo!);
+    level.status = 'ACTIVE';
+    level.entryPrice = entry;
+    level.filledQuantity = qty;
+    level.fees = fee.toFixed(8);
+    level.tpPrice = tp;
+    level.allocatedMargin = active.allocatedMargin;
+    level.notional = active.actualNotional;
+    level.quantity = qty;
+    this.positionsOpened += 1;
+    this.totalFees = this.totalFees.plus(fee);
+    await this.persistLevel(level);
+
+    await this.db.position.create({
+      data: {
+        traderId: this.id,
+        symbol: this.symbol,
+        side: level.direction,
+        role: level.direction,
+        hedgeLevel: level.plan.level,
+        entryPrice: entry,
+        quantity: qty,
+        leverage: this.traderConfig.leverage,
+        isOpen: true,
+        markPrice: this.markPrice,
+      },
+    });
+
+    await this.placeTp(active, tp);
+    this.recomputeUnrealized();
+    this.emitSnapshot();
+  }
+
+  private async placeTp(active: ActivePosition, tpPrice: string): Promise<void> {
+    if (this.symbolInfo == null || this.exiting || this.isDestroyed) return;
+    if (this.finalizedLevelKeys.has(active.key) || active.closing) return;
+    const shortId = this.id.replace(/-/g, '').slice(0, 8);
+    const tpClientOrderId = `np-${shortId}-${active.direction[0]}${active.level}-tp-${uuidv4().slice(0, 6)}`;
+    const exitSide = active.direction === 'LONG' ? 'SELL' as const : 'BUY' as const;
+
+    if (isTpTriggeredByMark(active.direction, this.markPrice, tpPrice)) {
+      await this.handleProtectiveFill(active.key, {
+        clientOrderId: `mark-tp-immediate-${active.key}`,
+        exchangeOrderId: `mark-tp-immediate-${active.key}`,
+        symbol: this.symbol,
+        status: 'FILLED',
+        filledQuantity: active.quantity,
+        avgFillPrice: tpPrice,
+        fee: null,
+        feeCurrency: null,
+        timestamp: Date.now(),
+      });
+      return;
+    }
+
+    try {
+      const tpRes = await this.executionProvider.placeOrder({
+        traderId: this.id,
+        clientOrderId: tpClientOrderId,
+        symbol: this.symbol,
+        side: exitSide,
+        type: 'TAKE_PROFIT_MARKET',
+        role: active.direction,
+        hedgeLevel: active.level,
+        quantity: active.quantity,
+        stopPrice: tpPrice,
+        positionSide: active.direction,
+        reduceOnly: true,
+      } as any);
+      active.tpClientOrderId = tpRes.clientOrderId;
+      await this.db.order.upsert({
+        where: { clientOrderId: tpRes.clientOrderId },
+        update: { status: tpRes.status, exchangeOrderId: tpRes.exchangeOrderId },
+        create: {
+          traderId: this.id,
+          exchangeOrderId: tpRes.exchangeOrderId,
+          clientOrderId: tpRes.clientOrderId,
+          symbol: this.symbol,
+          side: tpRes.side,
+          type: 'TAKE_PROFIT_MARKET',
+          status: tpRes.status,
+          role: active.direction,
+          hedgeLevel: active.level,
+          quantity: tpRes.quantity,
+          stopPrice: tpPrice,
+          filledQuantity: tpRes.filledQuantity,
+          avgFillPrice: tpRes.avgFillPrice,
+          fee: tpRes.fee,
+          feeCurrency: tpRes.feeCurrency,
+        },
+      });
+      if (tpRes.status === 'FILLED') {
+        await this.handleProtectiveFill(active.key, {
+          clientOrderId: tpRes.clientOrderId,
+          exchangeOrderId: tpRes.exchangeOrderId,
+          symbol: this.symbol,
+          status: 'FILLED',
+          filledQuantity: tpRes.filledQuantity || active.quantity,
+          avgFillPrice: tpRes.avgFillPrice ?? tpPrice,
+          fee: tpRes.fee,
+          feeCurrency: tpRes.feeCurrency,
+          timestamp: Date.now(),
+        });
+      }
+    } catch (err) {
+      log.error('Failed placing near-price TP', { key: active.key, error: String(err) });
+    }
+  }
+
+  private async reconcileProtectiveByMark(previousPrice: string, currentPrice: string): Promise<void> {
+    if (this.exiting || this.isDestroyed || this.status !== 'ACTIVE') return;
+    for (const active of [...this.activePositions.values()]) {
+      if (!active.filled || active.closing) continue;
+      if (this.finalizedLevelKeys.has(active.key)) {
+        this.activePositions.delete(active.key);
+        continue;
+      }
+      const level = this.levels.get(active.key);
+      if (level == null || isNearPriceLevelTerminal(level.status)) {
+        this.activePositions.delete(active.key);
+        continue;
+      }
+      const tp = level.tpPrice;
+      if (tp == null || tp === '') continue;
+      if (!isTpTriggeredByMark(active.direction, currentPrice, tp)) continue;
+      if (active.tpClientOrderId != null) {
+        try {
+          await this.executionProvider.cancelOrder({
+            symbol: this.symbol,
+            clientOrderId: active.tpClientOrderId,
+          } as any);
+        } catch { /* best-effort */ }
+      }
+      await this.handleProtectiveFill(active.key, {
+        clientOrderId: `mark-tp-${active.key}-${Date.now()}`,
+        exchangeOrderId: `mark-tp-${active.key}`,
+        symbol: this.symbol,
+        status: 'FILLED',
+        filledQuantity: active.quantity,
+        avgFillPrice: tp,
+        fee: null,
+        feeCurrency: null,
+        timestamp: Date.now(),
+      });
+    }
+  }
+
+  private async handleProtectiveFill(key: string, update: OrderUpdate): Promise<void> {
+    if (this.exiting || this.isDestroyed) return;
+    const level = this.levels.get(key);
+    if (level == null || level.direction == null) return;
+    if (this.finalizedLevelKeys.has(key)) {
+      this.activePositions.delete(key);
+      this.recomputeUnrealized();
+      return;
+    }
+    const active = this.activePositions.get(key);
+    if (active == null || !active.filled) return;
+
+    const fillKey = `${update.clientOrderId}:TP`;
+    if (this.handledFillIds.has(fillKey)) return;
+    this.handledFillIds.add(fillKey);
+
+    active.closing = true;
+    const exit = update.avgFillPrice ?? level.tpPrice ?? this.markPrice;
+    const qty = update.filledQuantity || active.quantity;
+    const exitFee = resolveExecutionFee({
+      price: exit,
+      quantity: qty,
+      actualFee: update.fee,
+      rates: feeRatesFromConfig(this.traderConfig),
+      liquidity: 'TAKER',
+    });
+    const gross = calcGrossPnl(active.direction, active.entryPrice, exit, qty);
+    const net = gross.minus(active.entryFee).minus(exitFee);
+
+    this.finalizedLevelKeys.add(key);
+    this.activePositions.delete(key);
+    this.recomputeUnrealized();
+
+    level.status = 'TP_HIT';
+    level.completionReason = 'TP';
+    level.exitPrice = exit;
+    level.realizedNetPnl = net.toFixed(8);
+    level.fees = active.entryFee.plus(exitFee).toFixed(8);
+    this.realizedPnl = this.realizedPnl.plus(net);
+    this.grossRealizedPnl = this.grossRealizedPnl.plus(gross);
+    this.totalFees = this.totalFees.plus(exitFee);
+    this.currentCapital = Decimal.max(0, this.currentCapital.plus(net));
+    this.positionsClosed += 1;
+    this.takeProfits += 1;
+    this.capitalHistory.push({
+      at: new Date().toISOString(),
+      capital: this.currentCapital.toFixed(8),
+      event: 'TP',
+      netPnl: net.toFixed(8),
+    });
+
+    await this.persistLevel(level);
+    await this.db.position.updateMany({
+      where: { traderId: this.id, hedgeLevel: active.level, isOpen: true },
+      data: { isOpen: false, closedAt: new Date(), realizedPnl: net.toFixed(8) },
+    });
+    await this.db.trader.update({
+      where: { id: this.id },
+      data: {
+        realizedPnl: this.realizedPnl.toFixed(8),
+        currentCapital: this.currentCapital.toFixed(8),
+        totalFees: this.totalFees.toFixed(8),
+      } as any,
+    });
+
+    this.emitSnapshot();
+    await this.tryActivateEligibleLevels();
+  }
+
+  private recomputeUnrealized(): void {
+    const rates = feeRatesFromConfig(this.traderConfig);
+    let sum = new Decimal(0);
+    for (const a of this.activePositions.values()) {
+      if (!a.filled || a.closing || this.finalizedLevelKeys.has(a.key)) continue;
+      const gross = calcPositionUnrealizedPnl(a.direction, a.entryPrice, this.markPrice, a.quantity);
+      const estExit = estimateOpenExitFee(this.markPrice, a.quantity, rates);
+      sum = sum.plus(gross.minus(a.entryFee).minus(estExit));
+    }
+    this.unrealizedPnl = sum;
+  }
+
+  private async persistLevel(level: LevelState): Promise<void> {
+    const direction = level.direction ?? 'EMPTY';
+    const data = {
+      traderId: this.id,
+      level: level.plan.level,
+      direction,
+      triggerPrice: level.plan.levelPrice,
+      limitPrice: level.plan.levelPrice,
+      weight: level.plan.step,
+      allocatedMargin: level.allocatedMargin,
+      notional: level.notional,
+      quantity: level.quantity,
+      status: level.status,
+      clientOrderId: level.clientOrderId,
+      exchangeOrderId: level.exchangeOrderId,
+      entryPrice: level.entryPrice,
+      filledQuantity: level.filledQuantity,
+      fees: level.fees,
+      tpPrice: level.tpPrice,
+      slPrice: null,
+      completionReason: level.completionReason,
+    };
+    try {
+      const api = (this.db as any).gridLevel;
+      if (api?.upsert == null) return;
+      // Prefer update by traderId+level when direction may have changed EMPTY→LONG/SHORT
+      const existing = await api.findFirst({
+        where: { traderId: this.id, level: level.plan.level },
+      });
+      if (existing != null) {
+        await api.update({ where: { id: existing.id }, data });
+      } else {
+        await api.create({ data });
+      }
+    } catch (err) {
+      log.warn('persistLevel failed', { level: level.plan.level, error: String(err) });
+    }
+  }
+
+  private emitSnapshot(): void {
+    this.emit('traderEvent', {
+      type: 'TRADER_SNAPSHOT',
+      trader: this.toSummary(),
+    });
+  }
+
+  private async beginExit(reason: ExitReason): Promise<void> {
+    if (this.exiting || this.isDestroyed) return;
+    this.exiting = true;
+    this.exitReason = reason;
+    this.status = 'COMPLETING';
+    log.info('[LIFECYCLE] NEAR_PRICE_EXIT', { traderId: this.id, reason });
+
+    for (const active of [...this.activePositions.values()]) {
+      if (active.entryClientOrderId != null && !active.filled) {
+        try {
+          await this.executionProvider.cancelOrder({
+            symbol: this.symbol,
+            clientOrderId: active.entryClientOrderId,
+          } as any);
+        } catch { /* best-effort */ }
+      }
+      if (active.tpClientOrderId != null) {
+        try {
+          await this.executionProvider.cancelOrder({
+            symbol: this.symbol,
+            clientOrderId: active.tpClientOrderId,
+          } as any);
+        } catch { /* best-effort */ }
+      }
+      if (active.filled && !active.closing && !this.finalizedLevelKeys.has(active.key)) {
+        try {
+          const exitSide = active.direction === 'LONG' ? 'SELL' as const : 'BUY' as const;
+          const cid = `np-force-${active.key}-${uuidv4().slice(0, 6)}`;
+          const res = await this.executionProvider.placeOrder({
+            traderId: this.id,
+            clientOrderId: cid,
+            symbol: this.symbol,
+            side: exitSide,
+            type: 'MARKET',
+            role: active.direction,
+            hedgeLevel: active.level,
+            quantity: active.quantity,
+            positionSide: active.direction,
+            reduceOnly: true,
+          } as any);
+          if (res.status === 'FILLED') {
+            await this.handleProtectiveFill(active.key, {
+              clientOrderId: res.clientOrderId,
+              exchangeOrderId: res.exchangeOrderId,
+              symbol: this.symbol,
+              status: 'FILLED',
+              filledQuantity: res.filledQuantity || active.quantity,
+              avgFillPrice: res.avgFillPrice ?? this.markPrice,
+              fee: res.fee,
+              feeCurrency: res.feeCurrency,
+              timestamp: Date.now(),
+            });
+          }
+        } catch (err) {
+          log.warn('Force close failed', { key: active.key, error: String(err) });
+        }
+      }
+    }
+
+    this.status = 'COMPLETED';
+    await this.db.trader.update({
+      where: { id: this.id },
+      data: {
+        status: 'COMPLETED',
+        exitReason: reason,
+        realizedPnl: this.realizedPnl.toFixed(8),
+        currentCapital: this.currentCapital.toFixed(8),
+      } as any,
+    });
+    this.emit('traderEvent', {
+      type: 'COMPLETED',
+      traderId: this.id,
+      symbol: this.symbol,
+      reason,
+    });
+  }
+}

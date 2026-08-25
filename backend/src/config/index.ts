@@ -44,13 +44,17 @@ interface AppConfig {
     capitalSteps: number;
     /** TP→opposite / SL→same when true; default false = legacy. */
     switchPositionOnTakeProfit: boolean;
-    /** Always grid directional on this branch. */
-    traderBehavior: 'grid_directional';
+    /** grid_directional | near_price_directional */
+    traderBehavior: 'grid_directional' | 'near_price_directional';
     gridLevelsPerSide: number;
     /** Percent points, e.g. '5' = 5%. */
     gridDistancePercent: string;
     /** true = triangular scaling; false = equal margin across all levels. */
     gridCapitalScalingEnabled: boolean;
+    gridBoundaryPercent?: string;
+    gridSpacingPercent?: string;
+    gridActivationMultiplier?: string;
+    stopLimitOffsetPercent?: string;
     /** Percent points, e.g. '10' = 10%. */
     traderTakeProfitPercent: string;
     traderMaxLifetimeHours: number;
@@ -127,6 +131,11 @@ const schema = Joi.object({
   GRID_DISTANCE_PERCENT: Joi.string().default('2'),
   /** true = triangular side-pool scaling; false = equal margin across all levels (both sides). */
   GRID_CAPITAL_SCALING_ENABLED: Joi.boolean().default(true),
+  TRADER_BEHAVIOR: Joi.string().valid('grid_directional', 'near_price_directional').default('grid_directional'),
+  GRID_BOUNDARY_PERCENT: Joi.string().default('40'),
+  GRID_SPACING_PERCENT: Joi.string().optional().allow(''),
+  GRID_ACTIVATION_MULTIPLIER: Joi.string().default('2'),
+  STOP_LIMIT_OFFSET_PERCENT: Joi.string().default('0.05'),
   TRADER_TAKE_PROFIT_PERCENT: Joi.string().default('10'),
   TRADER_MAX_LIFETIME_HOURS: Joi.number().min(0.001).max(720).default(12),
   TREND_DETECTION_ENABLED: Joi.boolean().default(false),
@@ -217,10 +226,14 @@ function loadConfig(): AppConfig {
       startingSide: env.STARTING_SIDE as 'LONG' | 'SHORT',
       capitalSteps: env.CAPITAL_STEPS as number,
       switchPositionOnTakeProfit: env.SWITCH_POSITION_ON_TAKE_PROFIT as boolean,
-      traderBehavior: 'grid_directional',
+      traderBehavior: env.TRADER_BEHAVIOR as 'grid_directional' | 'near_price_directional',
       gridLevelsPerSide: env.GRID_LEVELS_PER_SIDE as number,
       gridDistancePercent: env.GRID_DISTANCE_PERCENT as string,
       gridCapitalScalingEnabled: env.GRID_CAPITAL_SCALING_ENABLED as boolean,
+      gridBoundaryPercent: env.GRID_BOUNDARY_PERCENT as string,
+      gridSpacingPercent: (env.GRID_SPACING_PERCENT as string) || (env.GRID_DISTANCE_PERCENT as string),
+      gridActivationMultiplier: env.GRID_ACTIVATION_MULTIPLIER as string,
+      stopLimitOffsetPercent: env.STOP_LIMIT_OFFSET_PERCENT as string,
       traderTakeProfitPercent: env.TRADER_TAKE_PROFIT_PERCENT as string,
       traderMaxLifetimeHours: env.TRADER_MAX_LIFETIME_HOURS as number,
       trendDetectionEnabled: env.TREND_DETECTION_ENABLED as boolean,

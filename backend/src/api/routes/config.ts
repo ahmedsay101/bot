@@ -19,7 +19,7 @@ export function createConfigRouter(db: PrismaClient, traderManager?: TraderManag
           maxTraders: runtime.maxTraders,
           leverage: runtime.leverage,
           traderLifetimeHours: runtime.traderLifetimeHours,
-          traderBehavior: 'grid_directional',
+          traderBehavior: runtime.traderBehavior ?? 'grid_directional',
           gridLevelsPerSide: runtime.gridLevelsPerSide,
           gridDistancePercent: runtime.gridDistancePercent,
           gridCapitalScalingEnabled: runtime.gridCapitalScalingEnabled,

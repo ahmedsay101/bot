@@ -2,6 +2,7 @@ import { EventEmitter } from 'events';
 import { v4 as uuidv4 } from 'uuid';
 import Decimal from 'decimal.js';
 import { GridDirectionalTrader } from '../trader/grid/GridDirectionalTrader';
+import { NearPriceDirectionalTrader } from '../trader/near-price/NearPriceDirectionalTrader';
 import type { IManagedTrader } from '../trader/IManagedTrader';
 import type { IExecutionProvider } from '../execution/IExecutionProvider';
 import type { WebSocketManager } from '../websocket/manager';
@@ -276,22 +277,34 @@ export class TraderManager extends EventEmitter {
       }
 
       try {
-        const behavior = (dbTrader as { behavior?: string | null }).behavior ?? 'grid_directional';
-        if (behavior !== 'grid_directional') {
+        const behavior = (dbTrader as { behavior?: string | null }).behavior
+          ?? this.traderConfig.traderBehavior
+          ?? 'grid_directional';
+        if (behavior !== 'grid_directional' && behavior !== 'near_price_directional') {
           await this.retireNonGridTrader(dbTrader);
           continue;
         }
 
         const orders = dbTrader.orders;
-        const trader: IManagedTrader = new GridDirectionalTrader(
-          dbTrader.id,
-          dbTrader.symbol,
-          dbTrader.mode as TraderMode,
-          this.executionProvider,
-          this.traderConfig,
-          this.db,
-          this.accountLedger,
-        );
+        const trader: IManagedTrader = behavior === 'near_price_directional'
+          ? new NearPriceDirectionalTrader(
+            dbTrader.id,
+            dbTrader.symbol,
+            dbTrader.mode as TraderMode,
+            this.executionProvider,
+            this.traderConfig,
+            this.db,
+            this.accountLedger,
+          )
+          : new GridDirectionalTrader(
+            dbTrader.id,
+            dbTrader.symbol,
+            dbTrader.mode as TraderMode,
+            this.executionProvider,
+            this.traderConfig,
+            this.db,
+            this.accountLedger,
+          );
 
         let gridLevels: unknown[] = [];
         try {
@@ -741,6 +754,7 @@ export class TraderManager extends EventEmitter {
       this.traderConfig.leverage,
     );
 
+    const behavior = this.traderConfig.traderBehavior ?? 'grid_directional';
     const dbTrader = await this.db.trader.create({
       data: {
         id: traderId,
@@ -751,22 +765,34 @@ export class TraderManager extends EventEmitter {
         marginMode: this.traderConfig.marginMode,
         initialCapital: allocation.traderEquity.toFixed(8),
         positionSize: allocation.positionNotional.toFixed(8),
-        behavior: 'grid_directional',
+        behavior,
         gridLevelsPerSide: this.traderConfig.gridLevelsPerSide ?? 10,
-        gridDistancePercent: this.traderConfig.gridDistancePercent ?? '2',
+        gridDistancePercent: behavior === 'near_price_directional'
+          ? (this.traderConfig.gridSpacingPercent ?? this.traderConfig.gridDistancePercent ?? '2')
+          : (this.traderConfig.gridDistancePercent ?? '2'),
         traderTakeProfitPercent: this.traderConfig.traderTakeProfitPercent ?? '10',
       } as any,
     });
 
-    const trader: IManagedTrader = new GridDirectionalTrader(
-      dbTrader.id,
-      symbol,
-      this.mode,
-      this.executionProvider,
-      this.traderConfig,
-      this.db,
-      this.accountLedger,
-    );
+    const trader: IManagedTrader = behavior === 'near_price_directional'
+      ? new NearPriceDirectionalTrader(
+        dbTrader.id,
+        symbol,
+        this.mode,
+        this.executionProvider,
+        this.traderConfig,
+        this.db,
+        this.accountLedger,
+      )
+      : new GridDirectionalTrader(
+        dbTrader.id,
+        symbol,
+        this.mode,
+        this.executionProvider,
+        this.traderConfig,
+        this.db,
+        this.accountLedger,
+      );
 
     this.wireTraderEvents(trader);
     this.symbolToTrader.set(symbol, traderId);
@@ -915,7 +941,7 @@ export class TraderManager extends EventEmitter {
           trendCandidates: this.trendCandidates as any,
           tradingMode: this.mode,
           botStatus: this.isPaused ? 'PAUSED' : this.isRunning ? 'RUNNING' : 'STOPPED',
-          traderBehavior: 'grid_directional',
+          traderBehavior: this.traderConfig.traderBehavior ?? 'grid_directional',
           currentBalance: snap.currentBalance ?? snap.balance,
           highestBalance24h: snap.highestBalance24h ?? snap.balance,
           lowestBalance24h: snap.lowestBalance24h ?? snap.balance,

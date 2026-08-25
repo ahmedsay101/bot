@@ -532,6 +532,16 @@ function GridTraderCard({
               <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1, mb: 1.25 }}>
                 <Stat label="Start" value={`$${px(grid.startPrice)}`} color={START} />
                 <Stat label="Mark" value={`$${px(trader.markPrice)}`} color={MARK} />
+                {(grid as any).nearPrice === true && (
+                  <>
+                    <Stat label="Strategy" value="near-price grid" color={MARK} />
+                    <Stat label="Boundary %" value={String((grid as any).boundaryPercent ?? '—')} />
+                    <Stat label="Spacing %" value={String((grid as any).spacingPercent ?? grid.distancePercent)} />
+                    <Stat label="Activation %" value={String((grid as any).activationDistancePercent ?? '—')} />
+                    <Stat label="Upper bound" value={`$${px((grid as any).upperBound)}`} color={SHORT} />
+                    <Stat label="Lower bound" value={`$${px((grid as any).lowerBound)}`} color={LONG} />
+                  </>
+                )}
                 <Stat
                   label="Capital scaling"
                   value={grid.capitalScalingEnabled === false ? 'DISABLED (equal)' : 'ENABLED'}
