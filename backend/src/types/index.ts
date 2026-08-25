@@ -358,15 +358,20 @@ export interface GridTraderView {
   /** Informational last-level ± spacing (not a destroy trigger). */
   upperDestroyPrice?: string | null;
   lowerDestroyPrice?: string | null;
-  /** true = triangular side-pool scaling; false = 100% current capital, max 1 active. */
+  /** true = triangular side-pool scaling; false = equal split across all levels, multi-position. */
   capitalScalingEnabled?: boolean;
   /**
-   * Scaled OFF only: current trader capital (100% for active position).
-   * Do not interpret as capital÷levels.
+   * Equal margin per level = initialCapital / totalLevels (both modes expose the equal slice for display).
    */
   capitalPerLevel?: string | null;
+  /** Sum of margins on currently open positions. */
   activePositionMargin?: string | null;
+  /** Sum of notionals on currently open positions. */
   activePositionNotional?: string | null;
+  /** initialCapital − activePositionMargin */
+  remainingAvailableCapital?: string | null;
+  /** capitalPerLevel × leverage (theoretical equal notional). */
+  perPositionNotional?: string | null;
   maxActivePositions?: number;
   totalLevels?: number;
   levelsPending?: number;

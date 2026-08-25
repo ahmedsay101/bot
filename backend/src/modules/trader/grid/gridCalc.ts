@@ -1,7 +1,7 @@
 ﻿/**
  * Pure directional-grid math (Decimal.js).
  * Capital MODE A: scaled (50/50 sides + L/triangular).
- * Capital MODE B: 100% of current trader capital for the single active position.
+ * Capital MODE B: equal margin = traderAllocation / totalGridLevels; multi-position.
  * Per-level TP only (no stop loss) = +/− configured grid spacing % from entry.
  */
 import Decimal from 'decimal.js';
@@ -20,7 +20,7 @@ export type GridLevelStatus =
   | 'CANCELLED'
   | 'SKIPPED';
 
-/** When true: triangular side-pool scaling. When false: 100% current capital, max 1 active. */
+/** When true: triangular side-pool scaling. When false: equal allocation across all levels. */
 export type GridCapitalScaling = boolean;
 
 /** Trader capital is split equally across LONG and SHORT pools (scaled mode). */
@@ -58,12 +58,12 @@ export interface GridPlanResult {
   leverage: number;
   capitalScalingEnabled: boolean;
   /**
-   * Scaled ON: unused (null conceptually; may echo side unit).
-   * Scaled OFF: full trader capital preview (100% for the single active position) — not capital÷levels.
+   * Scaled ON: unused for equal-split display.
+   * Scaled OFF: traderAllocation / totalGridLevels (fixed equal margin per level).
    */
   capitalPerLevel: string;
   totalLevels: number;
-  /** Max simultaneous opens: levels*2 when scaled, 1 when not. */
+  /** Max simultaneous opens: always totalGridLevels (both modes can open every level). */
   maxActivePositions: number;
   levels: GridLevelPlan[];
 }
@@ -97,7 +97,7 @@ export function sideCapitalFromTrader(traderAllocation: string | Decimal): Decim
 /**
  * Fraction of capital for level L.
  * Scaled ON: of **side** capital → L / triangular(N)
- * Scaled OFF: full current trader capital (entry opportunity, not a reserved slice) → 1
+ * Scaled OFF: equal share of full trader capital → 1 / totalGridLevels
  */
 export function levelAllocationFraction(
   level: number,
@@ -106,7 +106,7 @@ export function levelAllocationFraction(
 ): Decimal {
   const n = Math.max(1, Math.floor(levelsPerSide));
   if (!capitalScalingEnabled) {
-    return new Decimal(1);
+    return new Decimal(1).div(totalGridLevels(n));
   }
   const total = triangularWeight(n);
   if (total <= 0) return new Decimal(0);
@@ -116,7 +116,7 @@ export function levelAllocationFraction(
 /**
  * Margin for a level.
  * Scaled ON: sideCapital × (L / triangular(N))
- * Scaled OFF: pool is treated as **current trader capital** → 100% of pool
+ * Scaled OFF: traderAllocation / totalGridLevels (equal; denominator never shrinks)
  */
 export function calculatePositionAllocation(
   pool: string | Decimal,
@@ -126,15 +126,14 @@ export function calculatePositionAllocation(
 ): Decimal {
   const capital = Decimal.max(new Decimal(0), new Decimal(pool));
   if (!capitalScalingEnabled) {
-    return capital;
+    return equalCapitalPerLevel(capital, levelsPerSide);
   }
   return capital.mul(levelAllocationFraction(level, levelsPerSide, true));
 }
 
 /**
- * @deprecated Equal-split was an incorrect OFF-mode formula.
- * OFF mode uses 100% of current trader capital for the single active position.
- * Kept for any external callers; prefer calculatePositionAllocation(..., false).
+ * Equal margin per grid level from full trader allocation.
+ * Denominator = original total grid positions (LONG + SHORT).
  */
 export function equalCapitalPerLevel(
   traderAllocation: string | Decimal,
@@ -479,7 +478,7 @@ export function buildGridPlan(params: {
 
   const levels: GridLevelPlan[] = [];
   for (const row of priceRows) {
-    // Scaled ON: triangular from side pool. Scaled OFF: 100% trader capital (entry opportunity; actual size at activate uses currentCapital).
+    // Scaled ON: triangular from side pool. Scaled OFF: equal slice of full trader allocation.
     const theoreticalMargin = scaling
       ? calculatePositionAllocation(
         row.direction === 'LONG' ? longSide : shortSide,
@@ -487,7 +486,7 @@ export function buildGridPlan(params: {
         n,
         true,
       )
-      : allocation;
+      : equalCapitalPerLevel(allocation, n);
     const theoreticalNotional = calcPositionNotional(theoreticalMargin, lev);
     let quantity: string;
     try {
@@ -514,6 +513,7 @@ export function buildGridPlan(params: {
     });
   }
 
+  const perLevel = equalCapitalPerLevel(allocation, n).toFixed(8);
   return {
     startPrice: startAdj,
     levelsPerSide: n,
@@ -525,10 +525,9 @@ export function buildGridPlan(params: {
     shortSideCapital: shortSide.toFixed(8),
     leverage: lev,
     capitalScalingEnabled: scaling,
-    // OFF: show full capital (100% active), never capital÷levels
-    capitalPerLevel: scaling ? '0' : allocation.toFixed(8),
+    capitalPerLevel: perLevel,
     totalLevels: totalGridLevels(n),
-    maxActivePositions: scaling ? totalGridLevels(n) : 1,
+    maxActivePositions: totalGridLevels(n),
     levels,
   };
 }
@@ -537,13 +536,13 @@ export function sizeLevelPosition(params: {
   /** Side capital pool when capitalScalingEnabled=true. */
   sideCapital?: string | Decimal;
   /**
-   * Current trader capital when capitalScalingEnabled=false.
-   * Active position receives 100% of this amount (not divided by level count).
+   * Original trader allocation when capitalScalingEnabled=false.
+   * Margin = allocation / totalGridLevels (equal; fixed for trader lifetime).
    */
-  currentTraderCapital?: string | Decimal;
-  /** @deprecated alias for currentTraderCapital / sideCapital */
   traderAllocation?: string | Decimal;
-  /** @deprecated use sideCapital */
+  /** @deprecated prefer traderAllocation for OFF equal-split */
+  currentTraderCapital?: string | Decimal;
+  /** @deprecated use sideCapital / traderAllocation */
   currentCapital?: string | Decimal;
   level: number;
   levelsPerSide: number;
@@ -558,18 +557,14 @@ export function sizeLevelPosition(params: {
   let margin: Decimal;
   let frac: Decimal;
   if (!scaling) {
-    // MODE B: 100% of current trader capital — grid levels are entry opportunities only
-    margin = Decimal.max(
-      new Decimal(0),
-      new Decimal(
-        params.currentTraderCapital
-        ?? params.traderAllocation
-        ?? params.currentCapital
-        ?? params.sideCapital
-        ?? '0',
-      ),
-    );
-    frac = new Decimal(1);
+    // MODE B: equal share of original trader allocation across ALL grid levels
+    const alloc = params.traderAllocation
+      ?? params.currentTraderCapital
+      ?? params.currentCapital
+      ?? params.sideCapital
+      ?? '0';
+    margin = equalCapitalPerLevel(alloc, params.levelsPerSide);
+    frac = levelAllocationFraction(params.level, params.levelsPerSide, false);
   } else {
     // MODE A: existing triangular side-pool scaling (unchanged)
     const pool = params.sideCapital ?? params.currentCapital ?? '0';

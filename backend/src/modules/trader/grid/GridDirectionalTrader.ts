@@ -3,7 +3,7 @@
  * - LONG entries BELOW start; SHORT entries ABOVE start
  * - TP only (± spacing % from actual entry); NO stop loss
  * - Capital MODE A: triangular side-pool scaling (GRID_CAPITAL_SCALING_ENABLED=true)
- * - Capital MODE B: 100% current capital, max 1 active (GRID_CAPITAL_SCALING_ENABLED=false)
+ * - Capital MODE B: equal split across all levels, multi-position (GRID_CAPITAL_SCALING_ENABLED=false)
  * - Destroy ONLY for MAX_LIFETIME or GRID_BOUNDARY_PASSED (FORCE for emergency)
  */
 import { EventEmitter } from 'events';
@@ -34,6 +34,7 @@ import {
   levelWeight,
   calcLevelTpSlPrices,
   totalGridLevels,
+  equalCapitalPerLevel,
   isTpTriggeredByMark,
   isEntryTriggered,
   isValidDirectionalTp,
@@ -720,15 +721,15 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
       return { crossed, eligible: false, reasonNotActivated: null };
     }
 
-    const blockedByMaxOne = !this.capitalScalingEnabled && this.hasInFlightOrActivePosition();
+    const blockedByCapital = !this.capitalScalingEnabled && !this.hasFreeEqualMargin();
     if (!crossed) {
       return { crossed: false, eligible: false, reasonNotActivated: 'NOT_CROSSED' };
     }
     if (l.clientOrderId != null) {
       return { crossed: true, eligible: false, reasonNotActivated: 'ENTRY_ORDER_IN_FLIGHT' };
     }
-    if (blockedByMaxOne) {
-      return { crossed: true, eligible: false, reasonNotActivated: 'ACTIVE_POSITION_LIMIT' };
+    if (blockedByCapital) {
+      return { crossed: true, eligible: false, reasonNotActivated: 'INSUFFICIENT_CAPITAL' };
     }
     return { crossed: true, eligible: true, reasonNotActivated: null };
   }
@@ -1030,7 +1031,7 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
         equity: this.currentCapital.plus(this.unrealizedPnl).toFixed(8),
         capitalHistory: this.capitalHistory,
         maxPerSide: this.levelsPerSide,
-        maxOpenPositions: this.capitalScalingEnabled ? this.levelsPerSide * 2 : 1,
+        maxOpenPositions: totalGridLevels(this.levelsPerSide),
         activeOpenCount: [...this.activePositions.values()].filter(
           (a) => a.filled && !a.closing && !this.finalizedLevelKeys.has(a.key),
         ).length,
@@ -1047,11 +1048,15 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
         longActive,
         shortActive,
         capitalScalingEnabled: this.capitalScalingEnabled,
-        // OFF: 100% current capital for the single active slot — never capital÷levels
-        capitalPerLevel: this.capitalScalingEnabled ? undefined : this.currentCapital.toFixed(8),
-        activePositionMargin: this.getFirstActive()?.allocatedMargin ?? null,
-        activePositionNotional: this.getFirstActive()?.actualNotional ?? null,
-        maxActivePositions: this.capitalScalingEnabled ? this.levelsPerSide * 2 : 1,
+        // OFF: equal slice of original allocation; ON: unused for equal-split display
+        capitalPerLevel: this.getEqualMarginPerLevel().toFixed(8),
+        activePositionMargin: this.getActiveMarginUsed().toFixed(8),
+        activePositionNotional: this.getActiveNotionalUsed().toFixed(8),
+        remainingAvailableCapital: this.getRemainingAvailableCapital().toFixed(8),
+        perPositionNotional: this.getEqualMarginPerLevel()
+          .mul(Math.max(1, this.traderConfig.leverage))
+          .toFixed(8),
+        maxActivePositions: totalGridLevels(this.levelsPerSide),
         totalLevels: totalGridLevels(this.levelsPerSide),
         levelsPending: this.countByStatus('PENDING'),
         levelsActive: this.countByStatus('ACTIVE'),
@@ -1149,14 +1154,54 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
       gridSpacingPercent: this.distancePercent,
       capitalScalingEnabled: this.capitalScalingEnabled,
       currentCapital: this.currentCapital.toFixed(8),
-      maxActivePositions: this.capitalScalingEnabled ? this.levelsPerSide * 2 : 1,
+      initialCapital: this.initialCapital.toFixed(8),
+      capitalPerLevel: this.getEqualMarginPerLevel().toFixed(8),
+      maxActivePositions: totalGridLevels(this.levelsPerSide),
       totalLevels: totalGridLevels(this.levelsPerSide),
       lastLongLevel: b.lastLong,
       lastShortLevel: b.lastShort,
       note: this.capitalScalingEnabled
         ? 'Scaled capital (triangular side pools)'
-        : 'OFF: 100% currentCapital, max 1 active — grid bounds informational',
+        : 'OFF: equal allocation across all levels, multi-position allowed',
     });
+  }
+
+  /** Fixed equal margin from original trader allocation (never rebased on dead levels). */
+  private getEqualMarginPerLevel(): Decimal {
+    return equalCapitalPerLevel(this.initialCapital, this.levelsPerSide);
+  }
+
+  /** Sum of margins on open (non-finalized) positions. */
+  private getActiveMarginUsed(): Decimal {
+    let used = new Decimal(0);
+    for (const a of this.activePositions.values()) {
+      if (a.closing || this.finalizedLevelKeys.has(a.key)) continue;
+      used = used.plus(a.allocatedMargin);
+    }
+    return used;
+  }
+
+  private getActiveNotionalUsed(): Decimal {
+    let used = new Decimal(0);
+    for (const a of this.activePositions.values()) {
+      if (a.closing || this.finalizedLevelKeys.has(a.key)) continue;
+      used = used.plus(a.actualNotional);
+    }
+    return used;
+  }
+
+  private getRemainingAvailableCapital(): Decimal {
+    return Decimal.max(0, this.initialCapital.minus(this.getActiveMarginUsed()));
+  }
+
+  /** Equal mode: enough unreserved original allocation + enough current equity for one slot. */
+  private hasFreeEqualMargin(): boolean {
+    const needed = this.getEqualMarginPerLevel();
+    if (needed.lte(0)) return false;
+    if (this.getRemainingAvailableCapital().lt(needed)) return false;
+    // Insolvent / heavily underwater — do not open new equal slots
+    if (this.currentCapital.lt(needed)) return false;
+    return true;
   }
 
   private sideCapital(direction: TradeSide): Decimal {
@@ -1182,11 +1227,6 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
     if (this.status !== 'ACTIVE' || this.isPaused) return;
     if (this.symbolInfo == null || this.startPrice == null) return;
 
-    // MODE B: at most one active/in-flight position — wait until fully closed
-    if (!this.capitalScalingEnabled && this.hasInFlightOrActivePosition()) {
-      return;
-    }
-
     this.activating = true;
     try {
       while (
@@ -1195,7 +1235,8 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
         && this.status === 'ACTIVE'
         && !this.isPaused
       ) {
-        if (!this.capitalScalingEnabled && this.hasInFlightOrActivePosition()) {
+        // Equal mode: stop when no free margin left for another equal slot
+        if (!this.capitalScalingEnabled && !this.hasFreeEqualMargin()) {
           break;
         }
 
@@ -1220,15 +1261,14 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
 
         if (candidate == null) break;
         await this.activateLevel(candidate);
-        // MODE B: only one activation per pass (even if mark crossed several levels)
-        if (!this.capitalScalingEnabled) break;
+        // Both modes: continue while more crossed levels remain (multi-position)
       }
     } finally {
       this.activating = false;
     }
   }
 
-  /** Entry ordered or filled — blocks another activation when scaling is OFF. */
+  /** Any open/in-flight leg (used for diagnostics; no longer blocks equal-mode multi-open). */
   private hasInFlightOrActivePosition(): boolean {
     if ([...this.activePositions.values()].some((a) => !a.closing && !this.finalizedLevelKeys.has(a.key))) {
       return true;
@@ -1249,19 +1289,22 @@ export class GridDirectionalTrader extends EventEmitter implements IManagedTrade
     const key = levelKey(level.plan.direction, level.plan.level);
     if (this.activePositions.has(key)) return;
 
-    if (!this.capitalScalingEnabled && this.hasInFlightOrActivePosition()) {
-      log.info('[LIFECYCLE] SKIP_ACTIVATE_MAX_ONE', {
+    if (!this.capitalScalingEnabled && !this.hasFreeEqualMargin()) {
+      log.info('[LIFECYCLE] SKIP_ACTIVATE_INSUFFICIENT_CAPITAL', {
         traderId: this.id,
         key,
-        reason: 'capitalScalingEnabled=false requires max 1 active position',
+        needed: this.getEqualMarginPerLevel().toFixed(8),
+        remaining: this.getRemainingAvailableCapital().toFixed(8),
+        currentCapital: this.currentCapital.toFixed(8),
       });
       return;
     }
 
     const sized = sizeLevelPosition({
       sideCapital: this.sideCapital(level.plan.direction),
-      currentTraderCapital: this.currentCapital,
-      traderAllocation: this.currentCapital,
+      // Equal mode sizes from original allocation so dead levels never inflate remaining slots
+      traderAllocation: this.initialCapital,
+      currentTraderCapital: this.initialCapital,
       level: level.plan.level,
       levelsPerSide: this.levelsPerSide,
       leverage: this.traderConfig.leverage,

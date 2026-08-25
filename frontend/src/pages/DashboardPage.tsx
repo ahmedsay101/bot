@@ -314,7 +314,7 @@ function GridLadder({ grid, markPrice }: { grid: GridTraderView; markPrice: stri
           const statusText = dead
             ? `${statusLabel(l.status)} · Realized ${pnl(l.realizedPnl ?? '0')}`
             : crossedPending
-              ? `PENDING · CROSSED${l.reasonNotActivated === 'ACTIVE_POSITION_LIMIT' ? ' · WAITING (max 1 active)' : l.reasonNotActivated != null ? ` · ${l.reasonNotActivated}` : ''}`
+              ? `PENDING · CROSSED${l.reasonNotActivated === 'INSUFFICIENT_CAPITAL' ? ' · WAITING (insufficient capital)' : l.reasonNotActivated === 'ACTIVE_POSITION_LIMIT' ? ' · WAITING (max 1 active)' : l.reasonNotActivated != null ? ` · ${l.reasonNotActivated}` : ''}`
               : statusLabel(l.status);
           return (
             <Box
@@ -503,6 +503,7 @@ function GridTraderCard({
                         <Stat label="Mark" value={`$${px(trader.markPrice)}`} color={MARK} />
                         <Stat label="Status" value={pos.status} />
                         <Stat label="Margin" value={money(pos.stepAmount)} />
+                        <Stat label="Leverage" value={`${trader.leverage}x`} color={MARK} />
                         <Stat label="Notional" value={money(pos.positionNotional)} />
                         <Stat
                           label="uPnL"
@@ -533,18 +534,26 @@ function GridTraderCard({
                 <Stat label="Mark" value={`$${px(trader.markPrice)}`} color={MARK} />
                 <Stat
                   label="Capital scaling"
-                  value={grid.capitalScalingEnabled === false ? 'DISABLED' : 'ENABLED'}
+                  value={grid.capitalScalingEnabled === false ? 'DISABLED (equal)' : 'ENABLED'}
                 />
                 {grid.capitalScalingEnabled === false ? (
                   <>
-                    <Stat label="Active allocation" value="100%" />
+                    <Stat label="Per-position margin" value={money(grid.capitalPerLevel)} />
                     <Stat
-                      label="Active position margin"
-                      value={money(grid.activePositionMargin ?? grid.currentCapital ?? grid.capitalPerLevel)}
+                      label="Per-position notional"
+                      value={money(grid.perPositionNotional)}
                     />
                     <Stat
-                      label="Pending levels"
-                      value={`${grid.levelsPending ?? 0} (no capital reserved)`}
+                      label="Active margin"
+                      value={money(grid.activePositionMargin ?? '0')}
+                    />
+                    <Stat
+                      label="Active notional"
+                      value={money(grid.activePositionNotional ?? '0')}
+                    />
+                    <Stat
+                      label="Remaining available"
+                      value={money(grid.remainingAvailableCapital)}
                     />
                   </>
                 ) : (
@@ -552,7 +561,7 @@ function GridTraderCard({
                 )}
                 <Stat
                   label="Active positions"
-                  value={`${grid.activeOpenCount ?? 0} / ${grid.maxActivePositions ?? (grid.capitalScalingEnabled === false ? 1 : n * 2)}`}
+                  value={`${grid.activeOpenCount ?? 0} / ${grid.maxActivePositions ?? n * 2}`}
                 />
                 <Stat label="Grid levels" value={String(grid.totalLevels ?? grid.levelsPerSide * 2)} />
                 <Stat
@@ -576,17 +585,18 @@ function GridTraderCard({
                 <Stat label="Current capital" value={money(grid.currentCapital)} />
                 <Stat label="Allocated" value={money(grid.initialCapital ?? trader.capital?.traderAllocatedAmount)} />
                 <Stat label="Leverage" value={`${trader.leverage}x`} color={MARK} />
-                {grid.capitalScalingEnabled === false && grid.activePositionNotional != null && (
-                  <Stat label="Active notional" value={money(grid.activePositionNotional)} />
-                )}
                 <Stat
                   label="LONG used"
-                  value={`${money(grid.longSideUsed)} / ${money(grid.longSideCapital)}`}
+                  value={grid.capitalScalingEnabled === false
+                    ? money(grid.longSideUsed)
+                    : `${money(grid.longSideUsed)} / ${money(grid.longSideCapital)}`}
                   color={LONG}
                 />
                 <Stat
                   label="SHORT used"
-                  value={`${money(grid.shortSideUsed)} / ${money(grid.shortSideCapital)}`}
+                  value={grid.capitalScalingEnabled === false
+                    ? money(grid.shortSideUsed)
+                    : `${money(grid.shortSideUsed)} / ${money(grid.shortSideCapital)}`}
                   color={SHORT}
                 />
                 <Stat label="Equity" value={money(grid.equity)} />

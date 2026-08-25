@@ -1,5 +1,5 @@
 /**
- * Grid capital: MODE A triangular scaling vs MODE B 100% current capital.
+ * Grid capital: MODE A triangular scaling vs MODE B equal allocation.
  */
 import Decimal from 'decimal.js';
 import {
@@ -7,6 +7,7 @@ import {
   calcGridTriggerPrice,
   calcGridDistanceAbs,
   calculatePositionAllocation,
+  equalCapitalPerLevel,
   levelWeight,
   levelAllocationFraction,
   sizeLevelPosition,
@@ -105,25 +106,42 @@ describe('gridCalc — MODE A scaled (triangular) capital — UNCHANGED', () => 
   });
 });
 
-describe('gridCalc — MODE B scaling OFF (100% current capital)', () => {
-  it('margin = currentTraderCapital, NOT capital÷levels', () => {
+describe('gridCalc — MODE B scaling OFF (equal allocation, multi-position)', () => {
+  it('TEST 1/2: $500 / 40 levels → $12.50 margin, $125 notional at 10x', () => {
     const sized = sizeLevelPosition({
-      currentTraderCapital: '1000',
+      traderAllocation: '500',
       level: 1,
-      levelsPerSide: 10,
+      levelsPerSide: 20,
       leverage: 10,
       entryPrice: '100',
       symbolInfo: info,
       capitalScalingEnabled: false,
     });
-    expect(parseFloat(sized.allocatedMargin)).toBeCloseTo(1000, 0);
-    expect(parseFloat(sized.notional)).toBeCloseTo(10000, 0);
-    expect(sized.allocationPct).toBe('1.00000000');
+    expect(parseFloat(sized.allocatedMargin)).toBeCloseTo(12.5, 4);
+    expect(parseFloat(sized.notional)).toBeCloseTo(125, 2);
+  });
+
+  it('TEST 3: all LONG and SHORT levels have identical margin', () => {
+    const plan = buildGridPlan({
+      startPrice: '100',
+      traderAllocation: '500',
+      leverage: 10,
+      levelsPerSide: 20,
+      distancePercent: 1,
+      symbolInfo: info,
+      capitalScalingEnabled: false,
+    });
+    expect(plan.totalLevels).toBe(40);
+    expect(plan.maxActivePositions).toBe(40);
+    expect(parseFloat(plan.capitalPerLevel)).toBeCloseTo(12.5, 4);
+    for (const l of plan.levels) {
+      expect(parseFloat(l.theoreticalMargin)).toBeCloseTo(12.5, 4);
+    }
   });
 
   it('level number does not change margin when OFF', () => {
     const a = sizeLevelPosition({
-      currentTraderCapital: '1000',
+      traderAllocation: '1000',
       level: 1,
       levelsPerSide: 10,
       leverage: 10,
@@ -132,7 +150,7 @@ describe('gridCalc — MODE B scaling OFF (100% current capital)', () => {
       capitalScalingEnabled: false,
     });
     const b = sizeLevelPosition({
-      currentTraderCapital: '1000',
+      traderAllocation: '1000',
       level: 10,
       levelsPerSide: 10,
       leverage: 10,
@@ -141,11 +159,12 @@ describe('gridCalc — MODE B scaling OFF (100% current capital)', () => {
       capitalScalingEnabled: false,
     });
     expect(a.allocatedMargin).toBe(b.allocatedMargin);
+    expect(parseFloat(a.allocatedMargin)).toBeCloseTo(50, 4); // 1000/20
   });
 
-  it('grid size does not affect OFF margin', () => {
+  it('grid size changes equal margin (denominator = 2N)', () => {
     const a = sizeLevelPosition({
-      currentTraderCapital: '500',
+      traderAllocation: '500',
       level: 1,
       levelsPerSide: 3,
       leverage: 10,
@@ -154,7 +173,7 @@ describe('gridCalc — MODE B scaling OFF (100% current capital)', () => {
       capitalScalingEnabled: false,
     });
     const b = sizeLevelPosition({
-      currentTraderCapital: '500',
+      traderAllocation: '500',
       level: 1,
       levelsPerSide: 10,
       leverage: 10,
@@ -162,12 +181,11 @@ describe('gridCalc — MODE B scaling OFF (100% current capital)', () => {
       symbolInfo: info,
       capitalScalingEnabled: false,
     });
-    expect(parseFloat(a.allocatedMargin)).toBeCloseTo(500, 0);
-    expect(parseFloat(b.allocatedMargin)).toBeCloseTo(500, 0);
-    expect(parseFloat(a.notional)).toBeCloseTo(5000, 0);
+    expect(parseFloat(a.allocatedMargin)).toBeCloseTo(500 / 6, 2);
+    expect(parseFloat(b.allocatedMargin)).toBeCloseTo(25, 2);
   });
 
-  it('buildGridPlan OFF: theoretical = full capital; maxActive=1', () => {
+  it('buildGridPlan OFF: equal capitalPerLevel; maxActive = totalLevels', () => {
     const plan = buildGridPlan({
       startPrice: '100',
       traderAllocation: '1000',
@@ -178,16 +196,22 @@ describe('gridCalc — MODE B scaling OFF (100% current capital)', () => {
       capitalScalingEnabled: false,
     });
     expect(plan.capitalScalingEnabled).toBe(false);
-    expect(plan.maxActivePositions).toBe(1);
-    expect(plan.capitalPerLevel).toBe('1000.00000000');
+    expect(plan.maxActivePositions).toBe(20);
+    expect(parseFloat(plan.capitalPerLevel)).toBeCloseTo(50, 4);
     for (const l of plan.levels) {
-      expect(l.theoreticalMargin).toBe('1000.00000000');
-      expect(l.allocationPct).toBe('1.00000000');
+      expect(parseFloat(l.theoreticalMargin)).toBeCloseTo(50, 4);
+      expect(parseFloat(l.allocationPct)).toBeCloseTo(1 / 20, 6);
     }
   });
 
-  it('calculatePositionAllocation OFF returns full pool', () => {
-    expect(calculatePositionAllocation('1000', 5, 10, false).toFixed(2)).toBe('1000.00');
+  it('calculatePositionAllocation OFF returns equal slice', () => {
+    expect(calculatePositionAllocation('500', 5, 20, false).toFixed(2)).toBe('12.50');
+  });
+
+  it('TEST 11/12: equalCapitalPerLevel ignores dead-level count (denominator fixed)', () => {
+    expect(equalCapitalPerLevel('500', 20).toFixed(2)).toBe('12.50');
+    // Still /40 even if caller imagines 10 dead — API has no dead param by design
+    expect(equalCapitalPerLevel('500', 20).toFixed(2)).toBe('12.50');
   });
 });
 

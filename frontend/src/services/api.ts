@@ -341,10 +341,14 @@ export interface GridTraderView {
   upperDestroyPrice?: string | null;
   lowerDestroyPrice?: string | null;
   capitalScalingEnabled?: boolean;
-  /** Scaled OFF: current trader capital for 100% active allocation (not ÷ levels). */
+  /** Equal margin = initialCapital / totalLevels. */
   capitalPerLevel?: string | null;
+  /** Sum of open position margins. */
   activePositionMargin?: string | null;
+  /** Sum of open position notionals. */
   activePositionNotional?: string | null;
+  remainingAvailableCapital?: string | null;
+  perPositionNotional?: string | null;
   maxActivePositions?: number;
   totalLevels?: number;
   levelsPending?: number;
