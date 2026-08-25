@@ -95,6 +95,8 @@ export function useWebSocket(): void {
               totalPnl: d.totalPnl ?? prev?.totalPnl ?? '0',
               totalRealizedPnl: d.totalRealizedPnl ?? prev?.totalRealizedPnl ?? '0',
               totalUnrealizedPnl: d.totalUnrealizedPnl ?? prev?.totalUnrealizedPnl ?? '0',
+              totalFees: (d as any).totalFees ?? prev?.totalFees ?? '0',
+              netRealizedPnl: (d as any).netRealizedPnl ?? d.totalRealizedPnl ?? prev?.netRealizedPnl ?? '0',
               tradingMode: d.tradingMode ?? prev?.tradingMode,
               botStatus: d.botStatus ?? prev?.botStatus,
               traderBehavior: d.traderBehavior ?? prev?.traderBehavior,

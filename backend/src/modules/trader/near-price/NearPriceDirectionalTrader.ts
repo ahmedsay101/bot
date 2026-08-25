@@ -62,6 +62,7 @@ import {
   calcActualNotional,
   reconcilePositionNotional,
 } from '../../calc/leverage';
+import { reconcileTraderAccounting } from '../../calc/accounting';
 import { createContextLogger } from '../../logger';
 import { withRetry } from '../../utils/retry';
 import type { PrismaClient } from '@prisma/client';
@@ -516,8 +517,9 @@ export class NearPriceDirectionalTrader extends EventEmitter implements IManaged
     for (const a of this.activePositions.values()) {
       if (!a.filled || a.closing || this.finalizedLevelKeys.has(a.key)) continue;
       const gross = calcPositionUnrealizedPnl(a.direction, a.entryPrice, this.markPrice, a.quantity);
+      // Entry fee already in trader.realizedPnl; only estimate remaining exit fee for "close now" net.
       const estExit = estimateOpenExitFee(this.markPrice, a.quantity, rates);
-      const netU = gross.minus(a.entryFee).minus(estExit);
+      const netU = gross.minus(estExit);
       const lvl = this.levels.get(a.key);
       currentPositions.push({
         number: a.level,
@@ -1067,6 +1069,10 @@ export class NearPriceDirectionalTrader extends EventEmitter implements IManaged
     level.quantity = qty;
     this.positionsOpened += 1;
     this.totalFees = this.totalFees.plus(fee);
+    // Book entry fee immediately into realized + global ledger (same as GridDirectionalTrader).
+    // Trader currentCapital is adjusted by full net (gross − entry − exit) only at close.
+    this.realizedPnl = this.realizedPnl.minus(fee);
+    await this.accountLedger.recordFee(fee);
     await this.persistLevel(level);
 
     await this.db.position.create({
@@ -1082,6 +1088,13 @@ export class NearPriceDirectionalTrader extends EventEmitter implements IManaged
         isOpen: true,
         markPrice: this.markPrice,
       },
+    });
+    await this.db.trader.update({
+      where: { id: this.id },
+      data: {
+        realizedPnl: this.realizedPnl.toFixed(8),
+        totalFees: this.totalFees.toFixed(8),
+      } as any,
     });
 
     await this.placeTp(active, tp);
@@ -1204,7 +1217,8 @@ export class NearPriceDirectionalTrader extends EventEmitter implements IManaged
   }
 
   private async handleProtectiveFill(key: string, update: OrderUpdate): Promise<void> {
-    if (this.exiting || this.isDestroyed) return;
+    // Allow settlement while COMPLETING (force-close). Block only after destroy.
+    if (this.isDestroyed) return;
     const level = this.levels.get(key);
     if (level == null || level.direction == null) return;
     const active = this.activePositions.get(key);
@@ -1252,9 +1266,11 @@ export class NearPriceDirectionalTrader extends EventEmitter implements IManaged
     // Reset level to EMPTY/AVAILABLE — no permanent DEAD/TP_HIT
     Object.assign(level, resetLevelAfterTpClose());
 
-    this.realizedPnl = this.realizedPnl.plus(net);
+    // Entry fee already booked into realized/totalFees/ledger at entry.
+    // TP books gross − exitFee into realized; capital moves by full net (gross − entry − exit).
     this.grossRealizedPnl = this.grossRealizedPnl.plus(gross);
     this.totalFees = this.totalFees.plus(exitFee);
+    this.realizedPnl = this.realizedPnl.plus(gross.minus(exitFee));
     this.currentCapital = Decimal.max(0, this.currentCapital.plus(net));
     this.positionsClosed += 1;
     this.takeProfits += 1;
@@ -1271,23 +1287,57 @@ export class NearPriceDirectionalTrader extends EventEmitter implements IManaged
       levelPrice: level.plan.levelPrice,
       closedSide,
       exit,
+      grossPnl: gross.toFixed(8),
+      entryFee: active.entryFee.toFixed(8),
+      exitFee: exitFee.toFixed(8),
       netPnl: net.toFixed(8),
       positionsCompleted: level.positionsCompleted,
     });
 
-    await this.persistLevel(level);
-    await this.db.position.updateMany({
-      where: { traderId: this.id, hedgeLevel: active.level, isOpen: true },
-      data: { isOpen: false, closedAt: new Date(), realizedPnl: net.toFixed(8) },
+    try {
+      // Propagate to global AccountLedger (was missing — caused global realized/fees = 0)
+      await this.accountLedger.recordRealized(gross, exitFee);
+      await this.persistLevel(level);
+      await this.db.position.updateMany({
+        where: { traderId: this.id, hedgeLevel: active.level, isOpen: true },
+        data: { isOpen: false, closedAt: new Date(), realizedPnl: net.toFixed(8) },
+      });
+      await this.db.trader.update({
+        where: { id: this.id },
+        data: {
+          realizedPnl: this.realizedPnl.toFixed(8),
+          unrealizedPnl: this.unrealizedPnl.toFixed(8),
+          currentCapital: this.currentCapital.toFixed(8),
+          totalFees: this.totalFees.toFixed(8),
+        } as any,
+      });
+    } catch (err) {
+      log.error('[LIFECYCLE] NEAR_PRICE_CLOSE_PERSIST_FAILED (in-memory close kept)', {
+        traderId: this.id,
+        key,
+        error: String(err),
+      });
+    }
+
+    const openEntryFees = [...this.activePositions.values()]
+      .filter((a) => a.filled && !a.closing)
+      .reduce((s, a) => s.plus(a.entryFee), new Decimal(0));
+    const recon = reconcileTraderAccounting({
+      initialCapital: this.initialCapital,
+      realizedNetPnl: this.realizedPnl,
+      unrealizedPnl: this.unrealizedPnl,
+      totalFees: this.totalFees,
+      actualCurrentCapital: this.currentCapital,
+      actualEquity: this.currentCapital.plus(this.unrealizedPnl),
+      openEntryFees,
     });
-    await this.db.trader.update({
-      where: { id: this.id },
-      data: {
-        realizedPnl: this.realizedPnl.toFixed(8),
-        currentCapital: this.currentCapital.toFixed(8),
-        totalFees: this.totalFees.toFixed(8),
-      } as any,
-    });
+    if (!recon.ok) {
+      log.warn('[LIFECYCLE] TRADER_ACCOUNTING_RECONCILIATION', {
+        traderId: this.id,
+        symbol: this.symbol,
+        ...recon,
+      });
+    }
 
     const newSide = assignSideForLevel(this.markPrice, level.plan.levelPrice);
     log.info('[LIFECYCLE] NEAR_PRICE_LEVEL_REASSIGN', {
@@ -1306,13 +1356,14 @@ export class NearPriceDirectionalTrader extends EventEmitter implements IManaged
   }
 
   private recomputeUnrealized(): void {
-    const rates = feeRatesFromConfig(this.traderConfig);
+    // Gross mark-to-market only (same as Grid). Entry fees live in realizedPnl;
+    // do NOT subtract them again here or totalPnl double-counts fees.
     let sum = new Decimal(0);
     for (const a of this.activePositions.values()) {
       if (!a.filled || a.closing || this.finalizedLevelKeys.has(a.key)) continue;
-      const gross = calcPositionUnrealizedPnl(a.direction, a.entryPrice, this.markPrice, a.quantity);
-      const estExit = estimateOpenExitFee(this.markPrice, a.quantity, rates);
-      sum = sum.plus(gross.minus(a.entryFee).minus(estExit));
+      sum = sum.plus(
+        calcPositionUnrealizedPnl(a.direction, a.entryPrice, this.markPrice, a.quantity),
+      );
     }
     this.unrealizedPnl = sum;
   }

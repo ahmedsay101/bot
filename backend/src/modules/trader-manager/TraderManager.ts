@@ -930,6 +930,8 @@ export class TraderManager extends EventEmitter {
           totalPnl: totalPnl.toFixed(8),
           totalRealizedPnl: snap.realizedPnl,
           totalUnrealizedPnl: snap.unrealizedPnl,
+          totalFees: snap.totalFees,
+          netRealizedPnl: snap.realizedPnl,
           dailyPnl: snap.dailyPnl,
           openPositionValue: snap.openPositionValue,
           usedMargin: snap.usedMargin,

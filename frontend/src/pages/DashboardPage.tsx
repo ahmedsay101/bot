@@ -650,6 +650,11 @@ function GridTraderCard({
                 )}
                 <Stat label="Current capital" value={money(grid.currentCapital)} />
                 <Stat label="Allocated" value={money(grid.initialCapital ?? trader.capital?.traderAllocatedAmount)} />
+                <Stat label="Equity" value={money(grid.equity)} />
+                <Stat label="Realized (net)" value={pnl(trader.realizedPnl)} color={col(trader.realizedPnl)} />
+                <Stat label="Unrealized" value={pnl(trader.unrealizedPnl)} color={col(trader.unrealizedPnl)} />
+                <Stat label="Net PnL" value={pnl(trader.totalPnl)} color={col(trader.totalPnl)} />
+                <Stat label="Fees (info)" value={pnl(`-${trader.totalFees ?? stats.totalFees ?? '0'}`)} color={SHORT} />
                 <Stat label="Leverage" value={`${trader.leverage}x`} color={MARK} />
                 <Stat
                   label="LONG used"
@@ -665,10 +670,6 @@ function GridTraderCard({
                     : `${money(grid.shortSideUsed)} / ${money(grid.shortSideCapital)}`}
                   color={SHORT}
                 />
-                <Stat label="Equity" value={money(grid.equity)} />
-                <Stat label="Unrealized" value={pnl(trader.unrealizedPnl)} color={col(trader.unrealizedPnl)} />
-                <Stat label="Net PnL" value={pnl(trader.totalPnl)} color={col(trader.totalPnl)} />
-                <Stat label="Fees" value={pnl(`-${trader.totalFees ?? stats.totalFees ?? '0'}`)} color={SHORT} />
               </Box>
 
               <FillMeter label="LONG ACTIVE" filled={longActive} total={n} color={LONG} />
@@ -738,7 +739,7 @@ function GridTraderCard({
               <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1 }}>
                 <Stat label="Opened" value={String(stats.positionsOpened)} />
                 <Stat label="Active L / S" value={`${longActive} / ${shortActive}`} />
-                <Stat label="Realized" value={pnl(trader.realizedPnl)} color={col(trader.realizedPnl)} />
+                <Stat label="TPs" value={String(stats.takeProfits ?? 0)} />
                 <Stat label="Runtime" value={formatDuration(stats.runtimeMs)} />
               </Box>
             </Box>
@@ -833,7 +834,14 @@ export function DashboardPage(): React.ReactElement {
           <Kpi label="Unrealized" value={pnl(summary?.totalUnrealizedPnl ?? '0')} color={col(summary?.totalUnrealizedPnl ?? '0')} />
         </Grid>
         <Grid item xs={6} sm={4} md={2}>
-          <Kpi label="Fees" value={pnl(`-${summary?.totalFees ?? '0'}`)} color={SHORT} />
+          <Kpi label="Fees (in realized)" value={pnl(`-${summary?.totalFees ?? '0'}`)} color={SHORT} />
+        </Grid>
+        <Grid item xs={6} sm={4} md={2}>
+          <Kpi
+            label="Net PnL"
+            value={pnl(summary?.totalPnl ?? '0')}
+            color={col(summary?.totalPnl ?? '0')}
+          />
         </Grid>
         <Grid item xs={6} sm={4} md={2}>
           <Kpi

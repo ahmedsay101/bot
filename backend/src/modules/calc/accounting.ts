@@ -5,13 +5,21 @@ import { calcTotalMaintenanceMargin } from './maintenanceMargin';
 /**
  * Single source of truth for account math (Decimal.js only).
  *
- * Balance     = wallet cash after realized trades (and fees)
- * Realized    = cumulative closed-trade PnL (net of fees)
- * Unrealized  = mark-to-market on open positions
- * Equity      = Balance + Unrealized
- * UsedMargin  = sum(notional / leverage) for open legs
- * Available   = Equity - UsedMargin
- * Maintenance = Binance-style bracket (notional × MMR − cum) per leg
+ * GLOBAL:
+ *   Balance     = wallet cash after realized trades (fees already netted in)
+ *   Realized    = cumulative closed-trade PnL (NET of fees)
+ *   Unrealized  = mark-to-market on OPEN positions only (gross Δprice × qty)
+ *   Equity      = Balance + Unrealized   (do NOT add realized again)
+ *   Fees        = cumulative commissions (informational; already inside Realized/Balance)
+ *   Net PnL     = Realized + Unrealized
+ *
+ * TRADER:
+ *   Initial allocation  = frozen slice at spawn
+ *   Realized            = net of fees (entry booked at fill; exit booked at TP)
+ *   Current capital     = initial + Σ(net closes)   [entry fee reduces realized immediately,
+ *                         capital catches up on close via net = gross − entry − exit]
+ *   Equity              = currentCapital + unrealized
+ *   Used margin         = Σ open position margins (EMPTY levels reserve 0)
  */
 export interface AccountSnapshot {
   balance: string;
@@ -108,5 +116,117 @@ export function applyRealizedTrade(
     realizedPnl: new Decimal(realizedPnl).plus(net),
     totalFees: new Decimal(totalFees).plus(feeD),
     netPnl: net,
+  };
+}
+
+export interface TraderAccountingReconciliation {
+  initialCapital: string;
+  realizedNetPnl: string;
+  unrealizedPnl: string;
+  totalFees: string;
+  actualCurrentCapital: string;
+  actualEquity: string;
+  expectedCurrentCapital: string;
+  expectedEquity: string;
+  capitalDiff: string;
+  equityDiff: string;
+  ok: boolean;
+}
+
+/**
+ * Trader identity (after all positions settled for the fee model):
+ *   expectedCurrentCapital ≈ initial + realizedNet
+ *   expectedEquity = expectedCurrentCapital + unrealized
+ *
+ * While positions are open, realized already includes −entryFees but currentCapital
+ * only moves by full net at close — so capitalDiff may equal open entry fees.
+ * Pass `openEntryFees` to account for that (optional).
+ */
+export function reconcileTraderAccounting(params: {
+  initialCapital: Decimal | string;
+  realizedNetPnl: Decimal | string;
+  unrealizedPnl: Decimal | string;
+  totalFees: Decimal | string;
+  actualCurrentCapital: Decimal | string;
+  actualEquity?: Decimal | string;
+  /** Sum of entry fees on still-open positions (already in realized, not yet in capital). */
+  openEntryFees?: Decimal | string;
+  tolerance?: Decimal | string;
+}): TraderAccountingReconciliation {
+  const tol = new Decimal(params.tolerance ?? '0.0001');
+  const initial = new Decimal(params.initialCapital);
+  const realized = new Decimal(params.realizedNetPnl);
+  const unrealized = new Decimal(params.unrealizedPnl);
+  const openFees = new Decimal(params.openEntryFees ?? '0');
+  // capital lags realized by open entry fees under Grid/NearPrice model
+  const expectedCapital = initial.plus(realized).plus(openFees);
+  const expectedEquity = expectedCapital.plus(unrealized);
+  const actualCapital = new Decimal(params.actualCurrentCapital);
+  const actualEquity = params.actualEquity != null
+    ? new Decimal(params.actualEquity)
+    : actualCapital.plus(unrealized);
+  const capitalDiff = actualCapital.minus(expectedCapital);
+  const equityDiff = actualEquity.minus(expectedEquity);
+  return {
+    initialCapital: initial.toFixed(8),
+    realizedNetPnl: realized.toFixed(8),
+    unrealizedPnl: unrealized.toFixed(8),
+    totalFees: new Decimal(params.totalFees).toFixed(8),
+    actualCurrentCapital: actualCapital.toFixed(8),
+    actualEquity: actualEquity.toFixed(8),
+    expectedCurrentCapital: expectedCapital.toFixed(8),
+    expectedEquity: expectedEquity.toFixed(8),
+    capitalDiff: capitalDiff.toFixed(8),
+    equityDiff: equityDiff.toFixed(8),
+    ok: capitalDiff.abs().lte(tol) && equityDiff.abs().lte(tol),
+  };
+}
+
+export interface GlobalAccountingReconciliation {
+  initialBalance: string;
+  realizedNetPnl: string;
+  totalFees: string;
+  unrealizedPnl: string;
+  actualBalance: string;
+  actualEquity: string;
+  expectedBalance: string;
+  expectedEquity: string;
+  balanceDiff: string;
+  equityDiff: string;
+  ok: boolean;
+}
+
+/** Global: balance = initial + netRealized; equity = balance + unrealized. */
+export function reconcileGlobalAccounting(params: {
+  initialBalance: Decimal | string;
+  realizedNetPnl: Decimal | string;
+  totalFees: Decimal | string;
+  unrealizedPnl: Decimal | string;
+  actualBalance: Decimal | string;
+  actualEquity: Decimal | string;
+  tolerance?: Decimal | string;
+}): GlobalAccountingReconciliation {
+  const tol = new Decimal(params.tolerance ?? '0.0001');
+  const initial = new Decimal(params.initialBalance);
+  const realized = new Decimal(params.realizedNetPnl);
+  const unrealized = new Decimal(params.unrealizedPnl);
+  const expectedBalance = initial.plus(realized);
+  const expectedEquity = expectedBalance.plus(unrealized);
+  const actualBalance = new Decimal(params.actualBalance);
+  const actualEquity = new Decimal(params.actualEquity);
+  const balanceDiff = actualBalance.minus(expectedBalance);
+  const equityDiff = actualEquity.minus(expectedEquity);
+  return {
+    initialBalance: initial.toFixed(8),
+    realizedNetPnl: realized.toFixed(8),
+    totalFees: new Decimal(params.totalFees).toFixed(8),
+    unrealizedPnl: unrealized.toFixed(8),
+    actualBalance: actualBalance.toFixed(8),
+    actualEquity: actualEquity.toFixed(8),
+    expectedBalance: expectedBalance.toFixed(8),
+    expectedEquity: expectedEquity.toFixed(8),
+    balanceDiff: balanceDiff.toFixed(8),
+    equityDiff: equityDiff.toFixed(8),
+    ok: balanceDiff.abs().lte(tol) && equityDiff.abs().lte(tol),
   };
 }

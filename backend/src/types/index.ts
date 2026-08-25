@@ -469,6 +469,8 @@ export type DashboardEvent =
         totalPnl: string;
         totalRealizedPnl: string;
         totalUnrealizedPnl: string;
+        totalFees?: string;
+        netRealizedPnl?: string;
         dailyPnl: string;
         openPositionValue: string;
         usedMargin: string;
