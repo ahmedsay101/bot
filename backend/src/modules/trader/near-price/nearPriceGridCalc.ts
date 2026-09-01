@@ -287,7 +287,7 @@ export function findEligibleEmptyLevels<T extends {
   return sortEligibleByProximity(eligible, markPrice);
 }
 
-/** Default target: 2 nearest eligible above (LONG) + 2 nearest eligible below (SHORT). */
+/** Default target: 2 nearest levels above (LONG) + 2 nearest below (SHORT). */
 export const NEAR_PRICE_MAX_PER_SIDE = 2;
 
 export interface NearPriceTargetLevel<T> {
@@ -301,46 +301,39 @@ export interface NearPriceTargetSelection<T> {
   markPrice: string;
   above: NearPriceTargetLevel<T>[];
   below: NearPriceTargetLevel<T>[];
-  /** above + below in activation order (above nearest-first, then below nearest-first). */
+  /** above + below (above nearest-first, then below nearest-first). */
   targets: NearPriceTargetLevel<T>[];
 }
 
 /**
- * Select up to `maxPerSide` nearest EMPTY+in-zone levels ABOVE mark → LONG,
- * and up to `maxPerSide` nearest EMPTY+in-zone levels BELOW (or equal) mark → SHORT.
+ * Geometric desired grid around CURRENT mark (authoritative invariant):
+ *   - up to maxPerSide levels with price STRICTLY above mark → LONG
+ *   - up to maxPerSide levels with price STRICTLY below mark → SHORT
+ * Level exactly at mark is in neither set (deterministic).
  *
- * Does not include PENDING/ACTIVE levels (those keep their existing position until TP).
- * Distant / out-of-zone empties are omitted.
+ * Includes levels of any status (EMPTY/PENDING/ACTIVE) so callers can:
+ *   - create missing EMPTY slots
+ *   - cancel stale PENDING outside the window / wrong side
+ *   - leave ACTIVE filled positions until TP
  */
-export function selectNearestTargetLevels<T extends {
+export function resolveDesiredNearPriceGrid<T extends {
   level: number;
   levelPrice: string;
-  status: string;
-  clientOrderId?: string | null;
 }>(
   levels: T[],
   markPrice: string | Decimal,
-  spacingPercent: string | number,
-  activationMultiplier: string | number,
   maxPerSide: number = NEAR_PRICE_MAX_PER_SIDE,
 ): NearPriceTargetSelection<T> {
   const mark = new Decimal(markPrice);
   const markStr = mark.toFixed();
-  const eligible = levels.filter(
-    (l) =>
-      l.status === 'EMPTY'
-      && l.clientOrderId == null
-      && isWithinActivationZone(mark, l.levelPrice, spacingPercent, activationMultiplier),
-  );
 
-  const aboveRaw = eligible
+  const aboveRaw = [...levels]
     .filter((l) => new Decimal(l.levelPrice).gt(mark))
     .sort((a, b) => new Decimal(a.levelPrice).cmp(new Decimal(b.levelPrice)))
     .slice(0, Math.max(0, maxPerSide));
 
-  // mark >= level → SHORT (includes exact equality)
-  const belowRaw = eligible
-    .filter((l) => new Decimal(l.levelPrice).lte(mark))
+  const belowRaw = [...levels]
+    .filter((l) => new Decimal(l.levelPrice).lt(mark))
     .sort((a, b) => new Decimal(b.levelPrice).cmp(new Decimal(a.levelPrice)))
     .slice(0, Math.max(0, maxPerSide));
 
@@ -364,24 +357,87 @@ export function selectNearestTargetLevels<T extends {
 }
 
 /**
- * Geometric nearest grid levels by mark (any status) — for audit/desired-side logging.
- * Side = assignSideForLevel(mark, levelPrice). Does not filter EMPTY/activation.
+ * @deprecated Prefer resolveDesiredNearPriceGrid. Kept for tests that filter EMPTY+zone.
+ * Selects EMPTY+in-zone only (legacy activation-gated behavior).
+ */
+export function selectNearestTargetLevels<T extends {
+  level: number;
+  levelPrice: string;
+  status: string;
+  clientOrderId?: string | null;
+}>(
+  levels: T[],
+  markPrice: string | Decimal,
+  spacingPercent: string | number,
+  activationMultiplier: string | number,
+  maxPerSide: number = NEAR_PRICE_MAX_PER_SIDE,
+): NearPriceTargetSelection<T> {
+  const mark = new Decimal(markPrice);
+  const emptyInZone = levels.filter(
+    (l) =>
+      l.status === 'EMPTY'
+      && l.clientOrderId == null
+      && isWithinActivationZone(mark, l.levelPrice, spacingPercent, activationMultiplier),
+  );
+  return resolveDesiredNearPriceGrid(emptyInZone, mark, maxPerSide);
+}
+
+/**
+ * Geometric nearest grid levels by mark (any status) — audit + desired window.
+ * Strictly above / strictly below (level == mark is neither).
  */
 export function nearestGridLevelsByMark<T extends { level: number; levelPrice: string }>(
   levels: T[],
   markPrice: string | Decimal,
   maxPerSide: number = NEAR_PRICE_MAX_PER_SIDE,
 ): { above: T[]; below: T[] } {
-  const mark = new Decimal(markPrice);
-  const above = [...levels]
-    .filter((l) => new Decimal(l.levelPrice).gt(mark))
-    .sort((a, b) => new Decimal(a.levelPrice).cmp(new Decimal(b.levelPrice)))
-    .slice(0, Math.max(0, maxPerSide));
-  const below = [...levels]
-    .filter((l) => new Decimal(l.levelPrice).lte(mark))
-    .sort((a, b) => new Decimal(b.levelPrice).cmp(new Decimal(a.levelPrice)))
-    .slice(0, Math.max(0, maxPerSide));
-  return { above, below };
+  const desired = resolveDesiredNearPriceGrid(levels, markPrice, maxPerSide);
+  return {
+    above: desired.above.map((t) => t.level),
+    below: desired.below.map((t) => t.level),
+  };
+}
+
+/**
+ * Gap-safe TP: current mark has reached/passed TP, OR price crossed TP between ticks.
+ */
+export function didCrossTakeProfit(
+  direction: TradeSide,
+  previousPrice: string | Decimal,
+  currentPrice: string | Decimal,
+  tpPrice: string | Decimal,
+): boolean {
+  const prev = new Decimal(previousPrice);
+  const curr = new Decimal(currentPrice);
+  const tp = new Decimal(tpPrice);
+  if (direction === 'LONG') {
+    if (curr.gte(tp)) return true;
+    return prev.lt(tp) && curr.gte(tp);
+  }
+  if (curr.lte(tp)) return true;
+  return prev.gt(tp) && curr.lte(tp);
+}
+
+/**
+ * Gap-safe stop trigger for entry STOP orders.
+ * LONG (BUY stop): triggers when mark reaches/passes stop from below.
+ * SHORT (SELL stop): triggers when mark reaches/passes stop from above.
+ */
+export function didCrossStopTrigger(
+  side: TradeSide,
+  previousPrice: string | Decimal,
+  currentPrice: string | Decimal,
+  stopPrice: string | Decimal,
+): boolean {
+  const prev = new Decimal(previousPrice);
+  const curr = new Decimal(currentPrice);
+  const stop = new Decimal(stopPrice);
+  if (side === 'LONG') {
+    if (curr.gte(stop)) return true;
+    return prev.lt(stop) && curr.gte(stop);
+  }
+  if (curr.lte(stop)) return true;
+  return prev.gt(stop) && curr.lte(stop);
 }
 
 export function calcNearPriceTp(

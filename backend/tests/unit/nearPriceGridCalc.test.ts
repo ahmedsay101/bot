@@ -17,7 +17,10 @@ import {
   isNearPriceLevelTerminal,
   resetLevelAfterTpClose,
   selectNearestTargetLevels,
+  resolveDesiredNearPriceGrid,
   nearestGridLevelsByMark,
+  didCrossTakeProfit,
+  didCrossStopTrigger,
   NEAR_PRICE_MAX_PER_SIDE,
 } from '../../src/modules/trader/near-price/nearPriceGridCalc';
 import { isTpTriggeredByMark } from '../../src/modules/trader/grid/gridCalc';
@@ -231,7 +234,7 @@ describe('nearPriceGridCalc', () => {
   });
 });
 
-describe('near-price 2↑ LONG + 2↓ SHORT target selection', () => {
+describe('near-price geometric 2↑ LONG + 2↓ SHORT invariant', () => {
   function emptyPlans(start = '100') {
     return buildNearPriceLevelPlans({
       startPrice: start,
@@ -241,68 +244,56 @@ describe('near-price 2↑ LONG + 2↓ SHORT target selection', () => {
     });
   }
 
-  function pricesOf(sel: ReturnType<typeof selectNearestTargetLevels>) {
+  function pricesOf(sel: ReturnType<typeof resolveDesiredNearPriceGrid>) {
     return {
       long: sel.above.map((t) => parseFloat(t.level.levelPrice)),
       short: sel.below.map((t) => parseFloat(t.level.levelPrice)),
-      sides: sel.targets.map((t) => t.side),
     };
   }
 
-  it('TEST 1: two nearest eligible above mark are LONG', () => {
-    const sel = selectNearestTargetLevels(emptyPlans(), '100', 2, 2);
+  it('TEST 1: two nearest levels strictly above mark are LONG', () => {
+    const sel = resolveDesiredNearPriceGrid(emptyPlans(), '100', 2);
     const p = pricesOf(sel);
     expect(p.long).toEqual([102, 104]);
     expect(sel.above.every((t) => t.side === 'LONG')).toBe(true);
   });
 
-  it('TEST 2: nearest eligible below mark are SHORT (96 outside 4% level-ref)', () => {
-    const sel = selectNearestTargetLevels(emptyPlans(), '100', 2, 2);
+  it('TEST 2: two nearest levels strictly below mark are SHORT (includes 96)', () => {
+    const sel = resolveDesiredNearPriceGrid(emptyPlans(), '100', 2);
     const p = pricesOf(sel);
-    expect(p.short).toEqual([98]);
+    expect(p.short).toEqual([98, 96]);
     expect(sel.below.every((t) => t.side === 'SHORT')).toBe(true);
-    expect(p.short).not.toContain(96);
   });
 
-  it('TEST 3: distant levels remain out of targets', () => {
-    const sel = selectNearestTargetLevels(emptyPlans(), '100', 2, 2);
+  it('TEST 3: distant levels remain out of the 2+2 window', () => {
+    const sel = resolveDesiredNearPriceGrid(emptyPlans(), '100', 2);
     const all = [...pricesOf(sel).long, ...pricesOf(sel).short];
     expect(all).not.toContain(106);
     expect(all).not.toContain(108);
     expect(all).not.toContain(94);
-    expect(sel.targets.length).toBeLessThanOrEqual(NEAR_PRICE_MAX_PER_SIDE * 2);
+    expect(sel.targets).toHaveLength(4);
   });
 
-  it('TEST 4/5: after LONG TP, level EMPTY above→below mark becomes SHORT target', () => {
-    const plans = emptyPlans().map((p) => ({ ...p, clientOrderId: null as string | null }));
-    // Simulate 102 occupied ACTIVE LONG — not selectable
-    const with102Active = plans.map((p) =>
-      parseFloat(p.levelPrice) === 102
-        ? { ...p, status: 'ACTIVE' as const, clientOrderId: 'x' }
-        : p,
-    );
-    const before = selectNearestTargetLevels(with102Active, '103', 2, 2);
-    expect(pricesOf(before).short).not.toContain(102);
-
-    // After TP → EMPTY at mark 103
-    const afterTp = with102Active.map((p) =>
-      parseFloat(p.levelPrice) === 102
-        ? { ...p, status: 'EMPTY' as const, clientOrderId: null }
-        : p,
-    );
-    const after = selectNearestTargetLevels(afterTp, '103', 2, 2);
-    expect(assignSideForLevel('103', '102')).toBe('SHORT');
-    expect(pricesOf(after).short).toContain(102);
-    const t102 = after.below.find((t) => parseFloat(t.level.levelPrice) === 102);
-    expect(t102?.side).toBe('SHORT');
+  it('TEST F: mark exactly on a level — level is neither above nor below', () => {
+    const sel = resolveDesiredNearPriceGrid(emptyPlans(), '102', 2);
+    const p = pricesOf(sel);
+    expect(p.long).toEqual([104, 106]);
+    expect(p.short).toEqual([98, 96]);
+    expect(p.long).not.toContain(102);
+    expect(p.short).not.toContain(102);
   });
 
-  it('TEST 6: after SHORT TP, mark below level → LONG', () => {
-    const plans = emptyPlans().map((p) => ({ ...p, clientOrderId: null as string | null }));
-    const afterTp = plans; // 102 empty
-    const after = selectNearestTargetLevels(afterTp, '101', 2, 2);
-    expect(assignSideForLevel('101', '102')).toBe('LONG');
-    expect(pricesOf(after).long).toContain(102);
+  it('TEST 4/5: after LONG TP, level below mark is SHORT in desired window', () => {
+    const plans = emptyPlans();
+    const desired = resolveDesiredNearPriceGrid(plans, '103', 2);
+    expect(pricesOf(desired).short).toContain(102);
+    expect(desired.below.find((t) => parseFloat(t.level.levelPrice) === 102)?.side).toBe('SHORT');
+  });
+
+  it('TEST 6: after SHORT TP, level above mark is LONG in desired window', () => {
+    const desired = resolveDesiredNearPriceGrid(emptyPlans(), '101', 2);
+    expect(pricesOf(desired).long).toContain(102);
+    expect(desired.above.find((t) => parseFloat(t.level.levelPrice) === 102)?.side).toBe('LONG');
   });
 
   it('TEST 7: same level alternates LONG → SHORT → LONG by current mark', () => {
@@ -312,102 +303,91 @@ describe('near-price 2↑ LONG + 2↓ SHORT target selection', () => {
     expect(assignSideForLevel('101', level)).toBe('LONG');
   });
 
-  it('TEST 8: occupied ACTIVE level is not retargeted (no flip while open)', () => {
+  it('TEST 8: desired window includes ACTIVE levels (caller leaves filled alone)', () => {
     const plans = emptyPlans().map((p) =>
       parseFloat(p.levelPrice) === 102
-        ? { ...p, status: 'ACTIVE' as const, clientOrderId: 'live', direction: 'LONG' }
-        : { ...p, clientOrderId: null as string | null },
+        ? { ...p, status: 'ACTIVE' as const }
+        : p,
     );
-    const sel = selectNearestTargetLevels(plans, '103', 2, 2);
-    // 102 still ACTIVE LONG — not in create targets
-    expect(sel.targets.some((t) => parseFloat(t.level.levelPrice) === 102)).toBe(false);
-    // geometric nearest below still includes 102 for audit
-    const geo = nearestGridLevelsByMark(plans, '103', 2);
-    expect(geo.below.map((l) => parseFloat(l.levelPrice))).toContain(102);
+    const desired = resolveDesiredNearPriceGrid(plans, '103', 2);
+    expect(pricesOf(desired).short).toContain(102);
+    // EMPTY-only legacy helper still excludes ACTIVE
+    const emptyOnly = selectNearestTargetLevels(plans as any, '103', 2, 2);
+    expect(emptyOnly.targets.some((t) => parseFloat(t.level.levelPrice) === 102)).toBe(false);
   });
 
-  it('TEST 9: repeated selection does not duplicate PENDING levels', () => {
-    const plans = emptyPlans().map((p) => {
-      const px = parseFloat(p.levelPrice);
-      if (px === 102 || px === 104) {
-        return { ...p, status: 'PENDING' as const, clientOrderId: `oid-${px}` };
-      }
-      return { ...p, clientOrderId: null as string | null };
-    });
-    const a = selectNearestTargetLevels(plans, '100', 2, 2);
-    const b = selectNearestTargetLevels(plans, '100', 2, 2);
-    expect(a.above).toHaveLength(0);
-    expect(b.above).toHaveLength(0);
-    expect(a.below.map((t) => t.level.levelPrice)).toEqual(b.below.map((t) => t.level.levelPrice));
+  it('TEST 9: desired window is idempotent across repeated calls', () => {
+    const plans = emptyPlans();
+    const a = resolveDesiredNearPriceGrid(plans, '100', 2);
+    const b = resolveDesiredNearPriceGrid(plans, '100', 2);
+    expect(pricesOf(a)).toEqual(pricesOf(b));
   });
 
-  it('TEST 10: TP gap — LONG mark jumps past TP', () => {
+  it('TEST 10: TP gap — LONG/SHORT mark jumps past TP', () => {
+    expect(didCrossTakeProfit('LONG', '101', '105', '102')).toBe(true);
+    expect(didCrossTakeProfit('SHORT', '99', '97', '98')).toBe(true);
+    expect(didCrossTakeProfit('LONG', '100', '101', '102')).toBe(false);
     expect(isTpTriggeredByMark('LONG', '105', '102')).toBe(true);
-    expect(isTpTriggeredByMark('SHORT', '97', '98')).toBe(true);
-    expect(isTpTriggeredByMark('LONG', '101', '102')).toBe(false);
   });
 
-  it('TEST 11: several eligible — only nearest 2 per side selected', () => {
-    // Wider activation so more empties qualify; still capped at 2/side
-    const plans = emptyPlans().map((p) => ({ ...p, clientOrderId: null as string | null }));
-    const sel = selectNearestTargetLevels(plans, '100', 2, 10); // 20% zone
-    expect(sel.above.length).toBe(2);
-    expect(sel.below.length).toBe(2);
-    expect(pricesOf(sel).long).toEqual([102, 104]);
-    expect(pricesOf(sel).short).toEqual([98, 96]);
+  it('TEST 10b: stop trigger gap for LONG/SHORT entry', () => {
+    expect(didCrossStopTrigger('LONG', '101', '103', '102')).toBe(true);
+    expect(didCrossStopTrigger('SHORT', '99', '97', '98')).toBe(true);
+    expect(didCrossStopTrigger('LONG', '100', '101', '102')).toBe(false);
   });
 
-  it('TEST 12: upward trend — targets move with CURRENT mark', () => {
-    const plans = emptyPlans().map((p) => ({ ...p, clientOrderId: null as string | null }));
-    const at100 = pricesOf(selectNearestTargetLevels(plans, '100', 2, 2));
-    const at110 = pricesOf(selectNearestTargetLevels(plans, '110', 2, 2));
+  it('TEST 11: capped at exactly 2 per side even when many levels exist', () => {
+    const sel = resolveDesiredNearPriceGrid(emptyPlans(), '100', 2);
+    expect(sel.above).toHaveLength(2);
+    expect(sel.below).toHaveLength(2);
+  });
+
+  it('TEST 12: upward jump — desired window follows CURRENT mark', () => {
+    const plans = emptyPlans();
+    const at100 = pricesOf(resolveDesiredNearPriceGrid(plans, '100', 2));
+    const at110 = pricesOf(resolveDesiredNearPriceGrid(plans, '110', 2));
     expect(at100.long).toEqual([102, 104]);
-    expect(at110.long[0]).toBeGreaterThan(110);
-    // exact level at mark → SHORT (lte); otherwise strictly below
-    expect(at110.short[0]).toBeLessThanOrEqual(110);
+    expect(at110.long.every((x) => x > 110)).toBe(true);
+    expect(at110.short.every((x) => x < 110)).toBe(true);
     expect(at110.long).not.toEqual(at100.long);
   });
 
-  it('TEST 13: downward trend — targets move with CURRENT mark', () => {
-    const plans = emptyPlans().map((p) => ({ ...p, clientOrderId: null as string | null }));
-    const at90 = pricesOf(selectNearestTargetLevels(plans, '90', 2, 2));
+  it('TEST 13: downward jump — desired window follows CURRENT mark', () => {
+    const at90 = pricesOf(resolveDesiredNearPriceGrid(emptyPlans(), '90', 2));
     expect(at90.long.every((x) => x > 90)).toBe(true);
-    expect(at90.short.every((x) => x <= 90)).toBe(true);
+    expect(at90.short.every((x) => x < 90)).toBe(true);
   });
 
-  it('TEST 14: after TP reset + reassignment cycle LONG→SHORT→LONG', () => {
+  it('TEST 14: LONG→TP→SHORT→TP→LONG cycle via mark relationship', () => {
     const levelPrice = '102';
-    let status: 'EMPTY' | 'ACTIVE' = 'EMPTY';
-    let side = assignSideForLevel('100', levelPrice);
-    expect(side).toBe('LONG');
-    status = 'ACTIVE';
-
+    expect(assignSideForLevel('100', levelPrice)).toBe('LONG');
     const longTp = calcNearPriceTp(levelPrice, 'LONG', 2, info);
-    expect(isTpTriggeredByMark('LONG', '105', longTp)).toBe(true);
-    status = 'EMPTY';
-    side = assignSideForLevel('105', levelPrice);
-    expect(side).toBe('SHORT');
-    status = 'ACTIVE';
-
+    expect(didCrossTakeProfit('LONG', '103', '105', longTp)).toBe(true);
+    expect(assignSideForLevel('105', levelPrice)).toBe('SHORT');
     const shortTp = calcNearPriceTp(levelPrice, 'SHORT', 2, info);
-    expect(isTpTriggeredByMark('SHORT', '99', shortTp)).toBe(true);
-    status = 'EMPTY';
-    side = assignSideForLevel('101', levelPrice);
-    expect(side).toBe('LONG');
-    expect(status).toBe('EMPTY');
+    expect(didCrossTakeProfit('SHORT', '101', '99', shortTp)).toBe(true);
+    expect(assignSideForLevel('101', levelPrice)).toBe('LONG');
   });
 
-  it('geometric nearest (any status) at mark 103: above 104/106, below 102/98', () => {
+  it('TEST C: multi-level upward jump ends with correct 2+2 around final mark', () => {
     const plans = emptyPlans();
-    const geo = nearestGridLevelsByMark(plans, '103', 2);
-    expect(geo.above.map((l) => parseFloat(l.levelPrice))).toEqual([104, 106]);
-    expect(geo.below.map((l) => parseFloat(l.levelPrice))).toEqual([102, 98]);
+    // jump 99 → 107
+    const final = pricesOf(resolveDesiredNearPriceGrid(plans, '107', 2));
+    expect(final.long).toEqual([108, 110]);
+    expect(final.short).toEqual([106, 104]);
   });
 
-  it('selection uses CURRENT mark not start (mark=110)', () => {
-    const plans = emptyPlans('100').map((p) => ({ ...p, clientOrderId: null as string | null }));
-    const geo = nearestGridLevelsByMark(plans, '110', 2);
-    expect(parseFloat(geo.above[0]!.levelPrice)).toBeGreaterThan(110);
-    expect(parseFloat(geo.below[0]!.levelPrice)).toBeLessThanOrEqual(110);
+  it('TEST D: multi-level downward jump ends with correct 2+2 around final mark', () => {
+    const plans = emptyPlans();
+    const final = pricesOf(resolveDesiredNearPriceGrid(plans, '93', 2));
+    expect(final.long.every((x) => x > 93)).toBe(true);
+    expect(final.short.every((x) => x < 93)).toBe(true);
+    expect(final.long).toHaveLength(2);
+    expect(final.short).toHaveLength(2);
+  });
+
+  it('legacy activation-gated selector still excludes 96 at mark 100', () => {
+    const sel = selectNearestTargetLevels(emptyPlans(), '100', 2, 2);
+    expect(sel.below.map((t) => parseFloat(t.level.levelPrice))).toEqual([98]);
   });
 });

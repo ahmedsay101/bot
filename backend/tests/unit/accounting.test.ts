@@ -176,7 +176,21 @@ describe('accounting reconciliation identities', () => {
     expect(recon.ok).toBe(true);
   });
 
-  it('equity does not double-count realized already in balance', () => {
-    expect(calcEquity('2009', '-20').toFixed(0)).toBe('1989');
+  it('equity preserved when unrealized loss is realized on destroy (no equity jump)', () => {
+    // Before destroy: balance 2900, unrealized -200 → equity 2700
+    // After proper settle: balance 2700, unrealized 0 → equity 2700
+    const beforeBalance = new Decimal('2900');
+    const unrealized = new Decimal('-200');
+    const equityBefore = calcEquity(beforeBalance, unrealized);
+
+    const settled = applyRealizedTrade(beforeBalance, '0', '0', unrealized, '0');
+    const equityAfter = calcEquity(settled.balance, '0');
+
+    expect(equityBefore.toFixed(0)).toBe('2700');
+    expect(equityAfter.toFixed(0)).toBe('2700');
+    // Bug mode: wipe unrealized without booking → equity jumps to 2900
+    const buggyEquity = calcEquity(beforeBalance, '0');
+    expect(buggyEquity.toFixed(0)).toBe('2900');
+    expect(equityAfter.eq(buggyEquity)).toBe(false);
   });
 });

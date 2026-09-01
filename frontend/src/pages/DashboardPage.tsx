@@ -250,7 +250,7 @@ function GridLadder({ grid, markPrice }: { grid: GridTraderView; markPrice: stri
         </Typography>
         <Typography variant="caption" color="text.secondary">
           {isNearPrice
-            ? `near-price · available ${(grid as any).levelsAvailable ?? (grid as any).levelsEmpty ?? 0} · active ${grid.levelsActive ?? 0}`
+            ? `near-price · req ↑${((grid as any).requiredLongLevels ?? []).length}L ↓${((grid as any).requiredShortLevels ?? []).length}S · available ${(grid as any).levelsAvailable ?? (grid as any).levelsEmpty ?? 0} · active ${grid.levelsActive ?? 0}`
             : `SHORT above · LONG below · ${longActive}/${grid.levelsPerSide}L · ${shortActive}/${grid.levelsPerSide}S`}
         </Typography>
       </Box>
@@ -342,7 +342,7 @@ function GridLadder({ grid, markPrice }: { grid: GridTraderView; markPrice: stri
           const statusText = dead
             ? `${statusLabel(l.status)} · Realized ${pnl(l.realizedPnl ?? '0')}`
             : isEmpty
-              ? `${statusLabel('EMPTY', { lastSide, lastReason })}${distPct != null ? ` · dist ${distPct}%` : ''}${(l as any).activationEligible ? ' · IN ZONE' : ''}${positionsCompleted > 0 ? ` · ×${positionsCompleted}` : ''}`
+              ? `${statusLabel('EMPTY', { lastSide, lastReason })}${distPct != null ? ` · dist ${distPct}%` : ''}${(l as any).inDesiredWindow ? ` · NEED ${(l as any).desiredSide}` : ''}${positionsCompleted > 0 ? ` · ×${positionsCompleted}` : ''}`
               : crossedPending
                 ? `PENDING · CROSSED${l.reasonNotActivated === 'INSUFFICIENT_CAPITAL' ? ' · WAITING (insufficient capital)' : l.reasonNotActivated === 'ACTIVE_POSITION_LIMIT' ? ' · WAITING (max 1 active)' : l.reasonNotActivated != null ? ` · ${l.reasonNotActivated}` : ''}`
                 : `${statusLabel(l.status)}${prevHint}`;
