@@ -194,3 +194,77 @@ describe('accounting reconciliation identities', () => {
     expect(equityAfter.eq(buggyEquity)).toBe(false);
   });
 });
+
+describe('multi-trader accounting reconciliation (#9)', () => {
+  // Spec example: A +10 realized, B +20 realized, C -5 unrealized, D +3 unrealized.
+  // Combined net PnL must be +28 and every displayed aggregate must reconcile.
+  interface T { id: string; initial: string; realizedNet: string; unrealized: string; fees: string; }
+  const traders: T[] = [
+    { id: 'A', initial: '500', realizedNet: '10', unrealized: '0', fees: '0' },
+    { id: 'B', initial: '500', realizedNet: '20', unrealized: '0', fees: '0' },
+    { id: 'C', initial: '500', realizedNet: '0', unrealized: '-5', fees: '0' },
+    { id: 'D', initial: '500', realizedNet: '0', unrealized: '3', fees: '0' },
+  ];
+
+  it('each trader reconciles individually (capital = initial + realizedNet)', () => {
+    for (const t of traders) {
+      const capital = new Decimal(t.initial).plus(t.realizedNet);
+      const recon = reconcileTraderAccounting({
+        initialCapital: t.initial,
+        realizedNetPnl: t.realizedNet,
+        unrealizedPnl: t.unrealized,
+        totalFees: t.fees,
+        actualCurrentCapital: capital,
+        actualEquity: capital.plus(t.unrealized),
+      });
+      expect(recon.ok).toBe(true);
+    }
+  });
+
+  it('combined net PnL = +28 and global balance/equity/realized/unrealized reconcile', () => {
+    const sum = (f: (t: T) => string) =>
+      traders.reduce((acc, t) => acc.plus(new Decimal(f(t))), new Decimal(0));
+
+    const initial = sum((t) => t.initial);         // 2000
+    const realized = sum((t) => t.realizedNet);    // 30
+    const unrealized = sum((t) => t.unrealized);   // -2
+    const fees = sum((t) => t.fees);               // 0
+
+    // Aggregated wallet = initial + realized; equity = balance + unrealized.
+    const balance = initial.plus(realized);        // 2030
+    const equity = balance.plus(unrealized);       // 2028
+    const netPnl = realized.plus(unrealized);      // 28
+
+    expect(netPnl.toFixed(0)).toBe('28');
+    expect(balance.toFixed(0)).toBe('2030');
+    expect(equity.toFixed(0)).toBe('2028');
+
+    const recon = reconcileGlobalAccounting({
+      initialBalance: initial,
+      realizedNetPnl: realized,
+      totalFees: fees,
+      unrealizedPnl: unrealized,
+      actualBalance: balance,
+      actualEquity: equity,
+    });
+    expect(recon.ok).toBe(true);
+  });
+
+  it('closed positions must not keep contributing unrealized PnL to the aggregate', () => {
+    // Trader C closes its -5 (realizes it); its unrealized must drop to 0 and NOT be
+    // double-counted in equity.
+    const cClosed = applyRealizedTrade('500', '0', '0', '-5', '0');
+    expect(cClosed.balance.toFixed(0)).toBe('495');
+    // Recompute aggregate with C realized and unrealized cleared.
+    const balance = new Decimal('500').plus('10')   // A
+      .plus(new Decimal('500').plus('20'))          // B
+      .plus(cClosed.balance)                        // C realized -5 → 495
+      .plus('500');                                 // D
+    const unrealized = new Decimal('3');            // only D remains open
+    const equity = balance.plus(unrealized);
+    // Net vs the pre-close state must be unchanged (economic identity): still +28.
+    const netPnl = balance.minus('2000').plus(unrealized);
+    expect(netPnl.toFixed(0)).toBe('28');
+    expect(equity.toFixed(0)).toBe('2028');
+  });
+});

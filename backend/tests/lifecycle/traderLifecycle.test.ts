@@ -161,7 +161,7 @@ describe('Trader V2 reversal lifecycle', () => {
     expect(s.currentPosition!.number).toBe(1);
     expect(parseFloat(s.currentPosition!.entryPrice)).toBeCloseTo(100, 0);
     expect(parseFloat(s.currentPosition!.tpPrice)).toBeCloseTo(90, 0);
-    expect(parseFloat(s.currentPosition!.slPrice)).toBeCloseTo(110, 0);
+    expect(parseFloat(s.currentPosition!.slPrice!)).toBeCloseTo(110, 0);
     expect(s.stats.positionsOpened).toBe(1);
     expect(s.stats.shortPositions).toBe(1);
     expect(trader.hasOpenPosition()).toBe(true);
@@ -204,7 +204,7 @@ describe('Trader V2 reversal lifecycle', () => {
 
   it('SL opens OPPOSITE direction and resets to Step 1', async () => {
     const trader = await bootTrader('t-sl', provider, db, ledger);
-    const sl = trader.toSummary().currentPosition!.slPrice;
+    const sl = trader.toSummary().currentPosition!.slPrice!;
 
     provider.onPriceUpdate('BTCUSDT', sl);
     trader.onPriceUpdate(sl);
@@ -248,7 +248,7 @@ describe('Trader V2 reversal lifecycle', () => {
 
     it('SHORT SL opens SHORT again and resets to Step 1', async () => {
       const trader = await bootTrader('t-sw-short-sl', provider, db, ledger, switchCfg);
-      const sl = trader.toSummary().currentPosition!.slPrice;
+      const sl = trader.toSummary().currentPosition!.slPrice!;
 
       provider.onPriceUpdate('BTCUSDT', sl);
       trader.onPriceUpdate(sl);
@@ -283,7 +283,7 @@ describe('Trader V2 reversal lifecycle', () => {
     it('LONG SL opens LONG again', async () => {
       const cfg: TraderConfig = { ...switchCfg, startingSide: 'LONG' };
       const trader = await bootTrader('t-sw-long-sl', provider, db, ledger, cfg);
-      const sl = trader.toSummary().currentPosition!.slPrice;
+      const sl = trader.toSummary().currentPosition!.slPrice!;
 
       provider.onPriceUpdate('BTCUSDT', sl);
       trader.onPriceUpdate(sl);
@@ -298,7 +298,7 @@ describe('Trader V2 reversal lifecycle', () => {
 
     it('duplicate SL price ticks do not open a second concurrent position', async () => {
       const trader = await bootTrader('t-sw-dup', provider, db, ledger, switchCfg);
-      const sl = trader.toSummary().currentPosition!.slPrice;
+      const sl = trader.toSummary().currentPosition!.slPrice!;
 
       provider.onPriceUpdate('BTCUSDT', sl);
       trader.onPriceUpdate(sl);
@@ -356,7 +356,7 @@ describe('Trader V2 reversal lifecycle', () => {
     expect(trader.toSummary().capital.currentStep).toBe(2);
 
     // Hit SL on SHORT #2 → LONG #3 at step 1 (reset, not step-by-step)
-    const sl = trader.toSummary().currentPosition!.slPrice;
+    const sl = trader.toSummary().currentPosition!.slPrice!;
     provider.onPriceUpdate('BTCUSDT', sl);
     trader.onPriceUpdate(sl);
     await wait(500);
@@ -391,7 +391,7 @@ describe('Trader V2 reversal lifecycle', () => {
     expect(trader.toSummary().capital.currentStep).toBe(4);
     expect(parseFloat(trader.toSummary().capital.currentStepAllocation)).toBeCloseTo(160, 0); // 200*4/5
 
-    const sl = trader.toSummary().currentPosition!.slPrice;
+    const sl = trader.toSummary().currentPosition!.slPrice!;
     const sideBefore = trader.toSummary().currentPosition!.side;
     provider.onPriceUpdate('BTCUSDT', sl);
     trader.onPriceUpdate(sl);
@@ -437,7 +437,7 @@ describe('Trader V2 reversal lifecycle', () => {
       currentPositionNumber: snap.currentPosition!.number,
       entryPrice: snap.currentPosition!.entryPrice,
       tpPrice: snap.currentPosition!.tpPrice,
-      slPrice: snap.currentPosition!.slPrice,
+      slPrice: snap.currentPosition!.slPrice!,
       quantity: snap.currentPosition!.quantity,
       traderAllocatedAmount: snap.capital.traderAllocatedAmount,
       capitalSteps: snap.capital.capitalSteps,

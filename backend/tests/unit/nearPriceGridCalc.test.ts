@@ -11,7 +11,7 @@ import {
   assignSideForLevel,
   buildNearPriceLevelPlans,
   findEligibleEmptyLevels,
-  calcNearPriceTp,
+  adjacentGridLevelPrice,
   calcStopLimitPrices,
   activationDistancePercent,
   isNearPriceLevelTerminal,
@@ -20,6 +20,7 @@ import {
   resolveDesiredNearPriceGrid,
   nearestGridLevelsByMark,
   didCrossTakeProfit,
+  hasReachedTakeProfit,
   didCrossStopTrigger,
   NEAR_PRICE_MAX_PER_SIDE,
 } from '../../src/modules/trader/near-price/nearPriceGridCalc';
@@ -131,9 +132,66 @@ describe('nearPriceGridCalc', () => {
     expect([98, 102]).toContain(nearest);
   });
 
-  it('TP from entry ± spacing', () => {
-    expect(calcNearPriceTp('102', 'LONG', 2, info)).toBe('104.04');
-    expect(calcNearPriceTp('98', 'SHORT', 2, info)).toBe('96.04');
+  it('adjacentGridLevelPrice: LONG TP = level N+1 price, SHORT TP = level N-1 price', () => {
+    const plans = buildNearPriceLevelPlans({
+      startPrice: '100', boundaryPercent: 40, spacingPercent: 2, symbolInfo: info,
+    });
+    const fb = { startPrice: '100', spacingPercent: 2, symbolInfo: info };
+    const at = (price: number) => plans.find((p) => Math.abs(parseFloat(p.levelPrice) - price) < 1e-9)!;
+    // Interior: LONG @102 → next level up 104; SHORT @96 → next level down 94.
+    expect(adjacentGridLevelPrice(plans, at(102).level, 'LONG', fb)).toBe(at(104).levelPrice);
+    expect(adjacentGridLevelPrice(plans, at(96).level, 'SHORT', fb)).toBe(at(94).levelPrice);
+    // Returned value is an ACTUAL grid level price, not a recomputed number.
+    const tp = adjacentGridLevelPrice(plans, at(102).level, 'LONG', fb);
+    expect(plans.some((p) => p.levelPrice === tp)).toBe(true);
+  });
+
+  it('adjacentGridLevelPrice: neighbour is the adjacent LEVEL across the start gap (100 is not a level)', () => {
+    const plans = buildNearPriceLevelPlans({
+      startPrice: '100', boundaryPercent: 40, spacingPercent: 2, symbolInfo: info,
+    });
+    const fb = { startPrice: '100', spacingPercent: 2, symbolInfo: info };
+    const at = (price: number) => plans.find((p) => Math.abs(parseFloat(p.levelPrice) - price) < 1e-9)!;
+    // 100 is the start (not tradeable), so the level above 98 is 102 and below 102 is 98.
+    expect(adjacentGridLevelPrice(plans, at(98).level, 'LONG', fb)).toBe(at(102).levelPrice);
+    expect(adjacentGridLevelPrice(plans, at(102).level, 'SHORT', fb)).toBe(at(98).levelPrice);
+  });
+
+  it('INVARIANT: every LONG TP = the next level up, every SHORT TP = the next level down (all levels)', () => {
+    const plans = buildNearPriceLevelPlans({
+      startPrice: '100', boundaryPercent: 40, spacingPercent: 2, symbolInfo: info,
+    });
+    const fb = { startPrice: '100', spacingPercent: 2, symbolInfo: info };
+    const byIndex = new Map(plans.map((p) => [p.level, p]));
+    const byPrice = new Set(plans.map((p) => p.levelPrice));
+    for (const lvl of plans) {
+      const up = byIndex.get(lvl.level + 1);
+      const down = byIndex.get(lvl.level - 1);
+      const longTp = adjacentGridLevelPrice(plans, lvl.level, 'LONG', fb);
+      const shortTp = adjacentGridLevelPrice(plans, lvl.level, 'SHORT', fb);
+      if (up != null) {
+        expect(longTp).toBe(up.levelPrice);
+        expect(byPrice.has(longTp)).toBe(true);
+      }
+      if (down != null) {
+        expect(shortTp).toBe(down.levelPrice);
+        expect(byPrice.has(shortTp)).toBe(true);
+      }
+    }
+  });
+
+  it('adjacentGridLevelPrice: top LONG / bottom SHORT fall back to one arithmetic grid step', () => {
+    const plans = buildNearPriceLevelPlans({
+      startPrice: '100', boundaryPercent: 40, spacingPercent: 2, symbolInfo: info,
+    });
+    const fb = { startPrice: '100', spacingPercent: 2, symbolInfo: info };
+    const top = [...plans].sort((a, b) => parseFloat(b.levelPrice) - parseFloat(a.levelPrice))[0];
+    const bottom = [...plans].sort((a, b) => parseFloat(a.levelPrice) - parseFloat(b.levelPrice))[0];
+    // gridStep = 100 × 2% = 2
+    expect(parseFloat(adjacentGridLevelPrice(plans, top.level, 'LONG', fb)))
+      .toBeCloseTo(parseFloat(top.levelPrice) + 2, 6);
+    expect(parseFloat(adjacentGridLevelPrice(plans, bottom.level, 'SHORT', fb)))
+      .toBeCloseTo(parseFloat(bottom.levelPrice) - 2, 6);
   });
 
   it('STOP_LIMIT prices: BUY stop=level limit above; SELL stop=level limit below', () => {
@@ -361,10 +419,10 @@ describe('near-price geometric 2↑ LONG + 2↓ SHORT invariant', () => {
   it('TEST 14: LONG→TP→SHORT→TP→LONG cycle via mark relationship', () => {
     const levelPrice = '102';
     expect(assignSideForLevel('100', levelPrice)).toBe('LONG');
-    const longTp = calcNearPriceTp(levelPrice, 'LONG', 2, info);
+    const longTp = '104'; // adjacent level up from 102
     expect(didCrossTakeProfit('LONG', '103', '105', longTp)).toBe(true);
     expect(assignSideForLevel('105', levelPrice)).toBe('SHORT');
-    const shortTp = calcNearPriceTp(levelPrice, 'SHORT', 2, info);
+    const shortTp = '100'; // adjacent level down from 102
     expect(didCrossTakeProfit('SHORT', '101', '99', shortTp)).toBe(true);
     expect(assignSideForLevel('101', levelPrice)).toBe('LONG');
   });
@@ -389,5 +447,48 @@ describe('near-price geometric 2↑ LONG + 2↓ SHORT invariant', () => {
   it('legacy activation-gated selector still excludes 96 at mark 100', () => {
     const sel = selectNearestTargetLevels(emptyPlans(), '100', 2, 2);
     expect(sel.below.map((t) => parseFloat(t.level.levelPrice))).toEqual([98]);
+  });
+
+  // ---------------------------------------------------------------------------
+  // TP LATCH (hasReachedTakeProfit) — the fix for stale ACTIVE positions
+  // ---------------------------------------------------------------------------
+  describe('hasReachedTakeProfit — TP latch', () => {
+    it('LONG: hit when HIGH water mark reached TP, even after price retraced below', () => {
+      const tp = '102'; // adjacent grid level (TP source of truth)
+      // Price spiked to 103 (>= tp) then fell back to 95. High water = 103.
+      expect(hasReachedTakeProfit('LONG', tp, /*high*/ '103', /*low*/ '95')).toBe(true);
+    });
+
+    it('LONG: NOT hit when high water never reached TP', () => {
+      const tp = '102';
+      expect(hasReachedTakeProfit('LONG', tp, /*high*/ '101.9', /*low*/ '90')).toBe(false);
+    });
+
+    it('SHORT: hit when LOW water mark reached TP, even after price retraced above', () => {
+      const tp = '98'; // adjacent grid level down
+      // Price dipped to 97 (<= tp) then bounced to 105. Low water = 97.
+      expect(hasReachedTakeProfit('SHORT', tp, /*high*/ '105', /*low*/ '97')).toBe(true);
+    });
+
+    it('SHORT: NOT hit when low water never reached TP', () => {
+      const tp = '98';
+      expect(hasReachedTakeProfit('SHORT', tp, /*high*/ '110', /*low*/ '98.1')).toBe(false);
+    });
+
+    it('LONG: exactly touching TP counts as hit', () => {
+      const tp = '102';
+      expect(hasReachedTakeProfit('LONG', tp, tp, tp)).toBe(true);
+    });
+
+    it('SCREENSHOT REPRO: multi-level up-then-down — all breached LONG TPs are hit', () => {
+      // TP is the ADJACENT grid level: LONG #8 → #9 level, LONG #9 → #10 level.
+      // Price rose past #10 (peak 0.0325) then fell to 0.026051; both must be hit.
+      const l8Tp = '0.030200'; // level #9 (adjacent up from #8)
+      const l9Tp = '0.031870'; // level #10 (adjacent up from #9)
+      const highWater = '0.0325'; // observed peak (just past #10)
+      const nowLow = '0.026051'; // current retraced mark
+      expect(hasReachedTakeProfit('LONG', l8Tp, highWater, nowLow)).toBe(true);
+      expect(hasReachedTakeProfit('LONG', l9Tp, highWater, nowLow)).toBe(true);
+    });
   });
 });

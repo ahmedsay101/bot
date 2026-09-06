@@ -30,7 +30,7 @@ import {
   calcUpperBound,
   calcLowerBound,
   didCrossOutsideBoundary,
-  calcNearPriceTp,
+  adjacentGridLevelPrice,
   calcStopLimitPrices,
   sizeNearPriceLevel,
   levelsPerSideFromConfig,
@@ -41,12 +41,14 @@ import {
   totalGridLevels,
   resetLevelAfterTpClose,
   resolveDesiredNearPriceGrid,
-  didCrossTakeProfit,
+  hasReachedTakeProfit,
+  auditNearPriceInvariant,
   NEAR_PRICE_MAX_PER_SIDE,
+  type InvariantReport,
+  type NearPriceLevelSnapshot,
   type NearPriceLevelPlan,
   type NearPriceLevelStatus,
 } from './nearPriceGridCalc';
-import { isTpTriggeredByMark } from '../grid/gridCalc';
 import {
   calcPositionUnrealizedPnl,
 } from '../../calc/strategy';
@@ -82,6 +84,13 @@ interface ActivePosition {
   tpClientOrderId: string | null;
   filled: boolean;
   closing: boolean;
+  /**
+   * Highest / lowest mark price observed since this position's order became live.
+   * Used as a TP latch so a TP that was momentarily touched (during a spike or a
+   * coarse 1s sample) still closes the position even after price retraces.
+   */
+  highMark: string;
+  lowMark: string;
 }
 
 interface LevelState {
@@ -151,6 +160,8 @@ export class NearPriceDirectionalTrader extends EventEmitter implements IManaged
   private symbolInfo: SymbolInfo | null = null;
   private markPrice = '0';
   private previousMarkPrice: string | null = null;
+  /** Serializes the async tail of onPriceUpdate (reconcile + activation). */
+  private tickChain: Promise<void> = Promise.resolve();
   private startPrice: string | null = null;
   private upperBound: string | null = null;
   private lowerBound: string | null = null;
@@ -425,7 +436,28 @@ export class NearPriceDirectionalTrader extends EventEmitter implements IManaged
         tpClientOrderId: null,
         filled: true,
         closing: false,
+        highMark: this.markPrice !== '' ? this.markPrice : p.entryPrice,
+        lowMark: this.markPrice !== '' ? this.markPrice : p.entryPrice,
       });
+    }
+
+    // Re-establish TP protection for restored open positions. Without this the
+    // exchange/sim order-fill close path is dead (tpClientOrderId was null) and
+    // only the mark latch would ever close them.
+    if (this.status === 'ACTIVE') {
+      for (const active of [...this.activePositions.values()]) {
+        if (!active.filled || active.closing) continue;
+        const level = this.levels.get(active.key);
+        if (level == null || level.direction == null) continue;
+        let tp = level.tpPrice;
+        if ((tp == null || tp === '') && this.symbolInfo != null) {
+          // Restored open position without a stored TP → re-derive from the grid.
+          tp = this.getAdjacentGridLevelPrice(level.plan.level, level.direction);
+          level.tpPrice = tp;
+        }
+        if (tp == null || tp === '') continue;
+        await this.placeTp(active, tp);
+      }
     }
 
     if (this.status === 'ACTIVE') {
@@ -444,6 +476,9 @@ export class NearPriceDirectionalTrader extends EventEmitter implements IManaged
     const previous = this.previousMarkPrice ?? this.markPrice;
     this.previousMarkPrice = this.markPrice;
     this.markPrice = price;
+    // Update the TP latch for every live position BEFORE anything else, so a spike
+    // through a TP is captured even if the entry fill has not been processed yet.
+    this.updateWaterMarks(price);
     this.recomputeUnrealized();
     this.emitSnapshot();
     if (this.status !== 'ACTIVE' || this.exiting) return;
@@ -451,18 +486,40 @@ export class NearPriceDirectionalTrader extends EventEmitter implements IManaged
       void this.beginExit('MAX_LIFETIME');
       return;
     }
-    void this.reconcileProtectiveByMark(previous, price).then(async () => {
-      if (this.exiting || this.isDestroyed || this.status !== 'ACTIVE') return;
-      if (
-        this.lowerBound != null
-        && this.upperBound != null
-        && didCrossOutsideBoundary(previous, price, this.lowerBound, this.upperBound)
-      ) {
-        await this.beginExit('GRID_BOUNDARY_PASSED');
-        return;
-      }
-      await this.tryActivateEligibleLevels();
-    });
+    // Serialize the async tail so overlapping ticks cannot run reconcile/activation
+    // concurrently (which could double-close, re-create, or race the grid state).
+    this.tickChain = this.tickChain
+      .then(async () => {
+        if (this.exiting || this.isDestroyed || this.status !== 'ACTIVE') return;
+        await this.reconcileProtectiveByMark(price);
+        if (this.exiting || this.isDestroyed || this.status !== 'ACTIVE') return;
+        if (
+          this.lowerBound != null
+          && this.upperBound != null
+          && didCrossOutsideBoundary(previous, price, this.lowerBound, this.upperBound)
+        ) {
+          await this.beginExit('GRID_BOUNDARY_PASSED');
+          return;
+        }
+        await this.tryActivateEligibleLevels();
+      })
+      .catch((err) => {
+        log.error('[LIFECYCLE] NEAR_PRICE_TICK_FAILED', {
+          traderId: this.id,
+          symbol: this.symbol,
+          error: String(err),
+        });
+      });
+  }
+
+  /** Advance each live position's high/low water marks with the latest mark. */
+  private updateWaterMarks(price: string): void {
+    const p = new Decimal(price);
+    for (const active of this.activePositions.values()) {
+      if (active.closing) continue;
+      if (p.gt(active.highMark)) active.highMark = price;
+      if (p.lt(active.lowMark)) active.lowMark = price;
+    }
   }
 
   async onOrderUpdate(update: OrderUpdate): Promise<void> {
@@ -857,12 +914,20 @@ export class NearPriceDirectionalTrader extends EventEmitter implements IManaged
       existing: existingSummary,
     });
 
-    // Cancel stale PENDING (unfilled) that are outside the window or wrong side
+    // Cancel stale PENDING (unfilled) that are outside the window or wrong side.
+    const mark = new Decimal(this.markPrice);
     for (const snap of allSnapshots) {
       if (this.exiting || this.isDestroyed) break;
       if (snap.status !== 'PENDING') continue;
       const active = this.activePositions.get(snap.key);
       if (active != null && active.filled) continue; // filled → wait for TP
+      // If the entry's stop has already been reached by the current mark, the order
+      // is a breakout that is triggering/filling right now. NEVER cancel it — the
+      // user's lifecycle requires "a LONG activates when its level is reached".
+      // Cancelling here is what left the grid missing the position it just crossed.
+      const levelPx = new Decimal(snap.levelPrice);
+      const reached = snap.direction === 'LONG' ? mark.gte(levelPx) : mark.lte(levelPx);
+      if (reached) continue;
       const wantSide = desiredByLevel.get(snap.level);
       const stale = wantSide == null || (snap.direction != null && snap.direction !== wantSide);
       if (!stale) continue;
@@ -878,6 +943,20 @@ export class NearPriceDirectionalTrader extends EventEmitter implements IManaged
       if (level.clientOrderId != null) continue;
       if (this.activePositions.has(levelKey(level.plan.level))) continue;
       await this.activateLevel(level, t.side);
+    }
+
+    // Observability: surface any residual invariant breakage after reconciling.
+    // (requireCovered=false: capital limits legitimately leave some slots empty.)
+    const audit = this.auditInvariant(false);
+    if (!audit.ok) {
+      log.warn('[LIFECYCLE] GRID_INVARIANT_VIOLATION', {
+        traderId: this.id,
+        symbol: this.symbol,
+        markPrice: this.markPrice,
+        expectedLong: audit.expectedLong,
+        expectedShort: audit.expectedShort,
+        violations: audit.violations,
+      });
     }
   }
 
@@ -1040,6 +1119,11 @@ export class NearPriceDirectionalTrader extends EventEmitter implements IManaged
         tpClientOrderId: null,
         filled: false,
         closing: false,
+        // Seed the TP latch with the current mark. Water marks accumulate from the
+        // moment the order is live (even before the async fill), so an excursion
+        // through the TP that happens during the same tick(s) is never lost.
+        highMark: this.markPrice,
+        lowMark: this.markPrice,
       });
       await this.persistLevel(level);
 
@@ -1118,7 +1202,9 @@ export class NearPriceDirectionalTrader extends EventEmitter implements IManaged
       .div(Math.max(1, this.traderConfig.leverage))
       .toFixed(8);
 
-    const tp = calcNearPriceTp(entry, level.direction, this.spacingPercent, this.symbolInfo!);
+    // TP is the ADJACENT grid level price (canonical source of truth), never a
+    // percentage of the fill. LONG@N → level N+1; SHORT@N → level N-1.
+    const tp = this.getAdjacentGridLevelPrice(level.plan.level, level.direction);
     level.status = 'ACTIVE';
     level.entryPrice = entry;
     level.filledQuantity = qty;
@@ -1164,6 +1250,55 @@ export class NearPriceDirectionalTrader extends EventEmitter implements IManaged
     await this.requestGridReconcile();
   }
 
+  /**
+   * CANONICAL TP source of truth: the price of the adjacent grid level.
+   * LONG@N → level N+1 price; SHORT@N → level N-1 price. Used by entry-fill,
+   * restore, the Binance TP order and internal mark-based TP detection alike.
+   */
+  private getAdjacentGridLevelPrice(levelIndex: number, side: TradeSide): string {
+    const levelsArr = [...this.levels.values()].map((l) => ({
+      level: l.plan.level,
+      levelPrice: l.plan.levelPrice,
+    }));
+    const current = this.levels.get(levelKey(levelIndex));
+    return adjacentGridLevelPrice(levelsArr, levelIndex, side, {
+      startPrice: this.startPrice ?? current?.plan.levelPrice ?? '0',
+      spacingPercent: this.spacingPercent,
+      symbolInfo: this.symbolInfo!,
+    });
+  }
+
+  /**
+   * Snapshot the grid and audit the core invariant. Exposed for tests and
+   * observability ("at this price, why does this level have/not have a position?").
+   */
+  auditInvariant(requireCovered = false): InvariantReport {
+    const mark = this.markPrice !== '' ? new Decimal(this.markPrice) : null;
+    const snapshot: NearPriceLevelSnapshot[] = [...this.levels.values()].map((l) => {
+      const active = this.activePositions.get(levelKey(l.plan.level));
+      const px = new Decimal(l.plan.levelPrice);
+      const activating = l.status === 'PENDING' && mark != null && l.direction != null
+        ? (l.direction === 'LONG' ? mark.gte(px) : mark.lte(px))
+        : false;
+      return {
+        level: l.plan.level,
+        levelPrice: l.plan.levelPrice,
+        status: l.status,
+        direction: l.direction,
+        tpPrice: l.tpPrice,
+        filled: active?.filled === true && !active.closing,
+        activating,
+      };
+    });
+    return auditNearPriceInvariant(snapshot, this.markPrice, {
+      maxPerSide: NEAR_PRICE_MAX_PER_SIDE,
+      startPrice: this.startPrice ?? undefined,
+      spacingPercent: this.spacingPercent,
+      symbolInfo: this.symbolInfo ?? undefined,
+      requireCovered,
+    });
+  }
+
   private async placeTp(active: ActivePosition, tpPrice: string): Promise<void> {
     if (this.symbolInfo == null || this.exiting || this.isDestroyed) return;
     if (this.finalizedLevelKeys.has(active.key) || active.closing) return;
@@ -1171,9 +1306,11 @@ export class NearPriceDirectionalTrader extends EventEmitter implements IManaged
     const tpClientOrderId = `np-${shortId}-${active.direction[0]}${active.level}-tp-${uuidv4().slice(0, 6)}`;
     const exitSide = active.direction === 'LONG' ? 'SELL' as const : 'BUY' as const;
 
-    if (isTpTriggeredByMark(active.direction, this.markPrice, tpPrice)
-      || (this.previousMarkPrice != null
-        && didCrossTakeProfit(active.direction, this.previousMarkPrice, this.markPrice, tpPrice))) {
+    // Latch-based immediate close: if the TP has been touched at any point since the
+    // order became live (even during the spike that filled the entry), close now.
+    if (new Decimal(this.markPrice).gt(active.highMark)) active.highMark = this.markPrice;
+    if (new Decimal(this.markPrice).lt(active.lowMark)) active.lowMark = this.markPrice;
+    if (hasReachedTakeProfit(active.direction, tpPrice, active.highMark, active.lowMark)) {
       await this.handleProtectiveFill(active.key, {
         clientOrderId: `mark-tp-immediate-${active.key}`,
         exchangeOrderId: `mark-tp-immediate-${active.key}`,
@@ -1244,7 +1381,7 @@ export class NearPriceDirectionalTrader extends EventEmitter implements IManaged
     }
   }
 
-  private async reconcileProtectiveByMark(previousPrice: string, currentPrice: string): Promise<void> {
+  private async reconcileProtectiveByMark(currentPrice: string): Promise<void> {
     if (this.exiting || this.isDestroyed || this.status !== 'ACTIVE') return;
     for (const active of [...this.activePositions.values()]) {
       if (!active.filled || active.closing) continue;
@@ -1259,8 +1396,11 @@ export class NearPriceDirectionalTrader extends EventEmitter implements IManaged
       }
       const tp = level.tpPrice;
       if (tp == null || tp === '') continue;
-      // Gap-safe: current past TP OR crossed between previous→current
-      if (!didCrossTakeProfit(active.direction, previousPrice, currentPrice, tp)) continue;
+      // Keep the latch fresh for this position, then use it as the authoritative
+      // trigger: close if TP was EVER reached (survives retrace + coarse sampling).
+      if (new Decimal(currentPrice).gt(active.highMark)) active.highMark = currentPrice;
+      if (new Decimal(currentPrice).lt(active.lowMark)) active.lowMark = currentPrice;
+      if (!hasReachedTakeProfit(active.direction, tp, active.highMark, active.lowMark)) continue;
       if (active.tpClientOrderId != null) {
         try {
           await this.executionProvider.cancelOrder({
