@@ -171,6 +171,8 @@ export interface TraderConfig {
   trendStrongRegimeEnabled?: boolean;
   /** Max symbols from 24h tickers to trend-scan (default 50). */
   topGainersLimit?: number;
+  /** Minimum 24h % change required to create a trader (e.g. '50' = +50%). */
+  min24hChangePercent?: string;
   refreshInterval: number;
   retryLimit: number;
   feeRate: string;

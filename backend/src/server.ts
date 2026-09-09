@@ -133,6 +133,7 @@ async function bootstrap(): Promise<void> {
     trendDevelopingStrongEnabled: config.trading.trendDevelopingStrongEnabled,
     trendStrongRegimeEnabled: config.trading.trendStrongRegimeEnabled,
     topGainersLimit: config.trading.topGainersLimit,
+    min24hChangePercent: config.trading.min24hChangePercent,
     refreshInterval: config.trading.refreshInterval,
     retryLimit: config.trading.retryLimit,
     feeRate: config.trading.feeRate,

@@ -4,7 +4,20 @@ export type CandidateSkipReason =
   | 'PENDING_CREATE'
   | 'INVALID'
   | 'DUPLICATE_IN_LIST'
-  | 'RECENT_CREATE_FAIL';
+  | 'RECENT_CREATE_FAIL'
+  | 'BELOW_MIN_24H_CHANGE';
+
+/** True when Binance 24h priceChangePercent is at least the configured minimum. */
+export function meetsMin24hChange(
+  priceChangePercent: string | number | null | undefined,
+  minPercent: string | number,
+): boolean {
+  if (priceChangePercent == null || priceChangePercent === '') return false;
+  const change = Number(priceChangePercent);
+  const min = Number(minPercent);
+  if (!Number.isFinite(change) || !Number.isFinite(min)) return false;
+  return change >= min;
+}
 
 export type CandidateDecision =
   | { symbol: string; action: 'select' }
@@ -25,6 +38,8 @@ export function selectReplacementSymbols(params: {
   /** Additional symbols to skip (e.g. being destroyed). */
   skipSymbols?: ReadonlySet<string>;
   isValidSymbol?: (symbol: string) => boolean;
+  priceChangeBySymbol?: ReadonlyMap<string, string | number>;
+  min24hChangePercent?: string | number;
 }): string[] {
   return explainTopGainerSelection(params).selected;
 }
@@ -37,6 +52,8 @@ export function explainTopGainerSelection(params: {
   blockedSymbols?: ReadonlySet<string>;
   skipSymbols?: ReadonlySet<string>;
   isValidSymbol?: (symbol: string) => boolean;
+  priceChangeBySymbol?: ReadonlyMap<string, string | number>;
+  min24hChangePercent?: string | number;
 }): { selected: string[]; decisions: CandidateDecision[]; slotsNeeded: number } {
   const desired = Math.max(0, params.maxTraders);
   const occupied = params.occupiedSymbols.size;
@@ -78,6 +95,13 @@ export function explainTopGainerSelection(params: {
     if (!isValid(symbol)) {
       decisions.push({ symbol, action: 'skip', reason: 'INVALID' });
       continue;
+    }
+    if (params.min24hChangePercent != null) {
+      const change = params.priceChangeBySymbol?.get(symbol);
+      if (!meetsMin24hChange(change, params.min24hChangePercent)) {
+        decisions.push({ symbol, action: 'skip', reason: 'BELOW_MIN_24H_CHANGE' });
+        continue;
+      }
     }
     decisions.push({ symbol, action: 'select' });
     selected.push(symbol);

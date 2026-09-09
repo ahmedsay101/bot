@@ -1,4 +1,8 @@
-import { explainTopGainerSelection, selectReplacementSymbols } from '../../src/modules/trader-manager/poolSelection';
+import {
+  explainTopGainerSelection,
+  meetsMin24hChange,
+  selectReplacementSymbols,
+} from '../../src/modules/trader-manager/poolSelection';
 
 describe('poolSelection — maxTraders is slot count not rank cutoff', () => {
   const isValid = (s: string) => s.endsWith('USDT') && !s.includes('UP');
@@ -160,5 +164,36 @@ describe('poolSelection — maxTraders is slot count not rank cutoff', () => {
       blockedSymbols: new Set(['ETHUSDT']),
       isValidSymbol: isValid,
     })).toEqual(['BTCUSDT', 'SOLUSDT', 'XRPUSDT', 'DOGEUSDT']);
+  });
+
+  it('meetsMin24hChange is inclusive of the exact minimum', () => {
+    expect(meetsMin24hChange('50', '50')).toBe(true);
+    expect(meetsMin24hChange(50, 50)).toBe(true);
+    expect(meetsMin24hChange('49.99', '50')).toBe(false);
+    expect(meetsMin24hChange('12.3', '50')).toBe(false);
+    expect(meetsMin24hChange(undefined, '50')).toBe(false);
+    expect(meetsMin24hChange('abc', '50')).toBe(false);
+  });
+
+  it('skips symbols whose 24h change is below the minimum', () => {
+    const { selected, decisions } = explainTopGainerSelection({
+      rankedSymbols: ['HOTUSDT', 'WARMUSDT', 'COLDUSDT', 'OKUSDT'],
+      maxTraders: 2,
+      occupiedSymbols: new Set(),
+      isValidSymbol: isValid,
+      min24hChangePercent: '50',
+      priceChangeBySymbol: new Map([
+        ['HOTUSDT', '80'],
+        ['WARMUSDT', '49.9'],
+        ['COLDUSDT', '10'],
+        ['OKUSDT', '50'],
+      ]),
+    });
+    expect(selected).toEqual(['HOTUSDT', 'OKUSDT']);
+    expect(decisions.find((d) => d.symbol === 'WARMUSDT')).toEqual({
+      symbol: 'WARMUSDT',
+      action: 'skip',
+      reason: 'BELOW_MIN_24H_CHANGE',
+    });
   });
 });

@@ -84,6 +84,7 @@ interface AppConfig {
     trendDevelopingStrongEnabled: boolean;
     trendStrongRegimeEnabled: boolean;
     topGainersLimit: number;
+    min24hChangePercent: string;
     refreshInterval: number;
     retryLimit: number;
     feeRate: string;
@@ -164,6 +165,7 @@ const schema = Joi.object({
   TREND_DEVELOPING_STRONG_ENABLED: Joi.boolean().default(true),
   TREND_STRONG_REGIME_ENABLED: Joi.boolean().default(true),
   TOP_GAINERS_LIMIT: Joi.number().integer().min(1).max(200).default(50),
+  MIN_24H_CHANGE_PERCENT: Joi.string().default('50'),
   REFRESH_INTERVAL: Joi.number().integer().min(5000).default(60000),
   RETRY_LIMIT: Joi.number().integer().min(1).max(20).default(5),
   FEE_RATE: Joi.string().default('0.0005'),
@@ -262,6 +264,7 @@ function loadConfig(): AppConfig {
       trendDevelopingStrongEnabled: env.TREND_DEVELOPING_STRONG_ENABLED as boolean,
       trendStrongRegimeEnabled: env.TREND_STRONG_REGIME_ENABLED as boolean,
       topGainersLimit: env.TOP_GAINERS_LIMIT as number,
+      min24hChangePercent: env.MIN_24H_CHANGE_PERCENT as string,
       refreshInterval: env.REFRESH_INTERVAL as number,
       retryLimit: env.RETRY_LIMIT as number,
       feeRate: (env.TAKER_FEE_RATE as string) || (env.FEE_RATE as string),

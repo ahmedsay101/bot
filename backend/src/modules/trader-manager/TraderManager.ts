@@ -21,7 +21,7 @@ import type {
 import { calcTotalPnl } from '../calc/allocation';
 import { createContextLogger } from '../logger';
 import { withRetry } from '../utils/retry';
-import { explainTopGainerSelection } from './poolSelection';
+import { explainTopGainerSelection, meetsMin24hChange } from './poolSelection';
 import type { PrismaClient } from '@prisma/client';
 
 const log = createContextLogger('TraderManager');
@@ -590,6 +590,10 @@ export class TraderManager extends EventEmitter {
       );
       const limit = Math.max(1, this.traderConfig.topGainersLimit ?? 50);
       this.topGainers = tickers.slice(0, limit);
+      const priceChangeBySymbol = new Map(
+        tickers.map((t) => [t.symbol, t.priceChangePercent] as const),
+      );
+      const min24hChangePercent = this.traderConfig.min24hChangePercent ?? '50';
       this.trendCandidates = [];
       await this.broadcastSummary(true);
 
@@ -604,6 +608,7 @@ export class TraderManager extends EventEmitter {
         maxTraders: this.traderConfig.maxTraders,
         activeTraders: occupied.size,
         availableSlots,
+        min24hChangePercent,
         topGainers: this.topGainers.slice(0, 15).map((t, i) => `${i + 1}. ${t.symbol} ${t.priceChangePercent}%`),
         pendingCreates: [...this.pendingCreates],
         durationMs: Date.now() - scanStarted,
@@ -628,6 +633,8 @@ export class TraderManager extends EventEmitter {
           : undefined,
         skipSymbols: this.pendingCreates,
         isValidSymbol: (s) => this.isStructurallyValidSymbol(s),
+        priceChangeBySymbol,
+        min24hChangePercent,
       });
 
       for (const d of preview.decisions) {
@@ -661,6 +668,7 @@ export class TraderManager extends EventEmitter {
         if (this.symbolToTrader.has(symbol)) continue;
         if (this.pendingCreates.has(symbol)) continue;
         if (!this.isStructurallyValidSymbol(symbol)) continue;
+        if (!meetsMin24hChange(priceChangeBySymbol.get(symbol), min24hChangePercent)) continue;
         const failAt = this.recentCreateFailures.get(symbol);
         if (failAt != null && Date.now() - failAt < CREATE_FAIL_COOLDOWN_MS) continue;
 
@@ -738,6 +746,16 @@ export class TraderManager extends EventEmitter {
     }
     if (!this.isStructurallyValidSymbol(symbol)) {
       log.warn(`Symbol structurally invalid — refusing ${symbol}`);
+      return false;
+    }
+    const min24hChangePercent = this.traderConfig.min24hChangePercent ?? '50';
+    const change24h = this.topGainers.find((t) => t.symbol === symbol)?.priceChangePercent;
+    if (!meetsMin24hChange(change24h, min24hChangePercent)) {
+      log.warn(`[LIFECYCLE] REFUSE_CREATE_BELOW_MIN_24H_CHANGE`, {
+        symbol,
+        priceChangePercent: change24h ?? null,
+        min24hChangePercent,
+      });
       return false;
     }
 
